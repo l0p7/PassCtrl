@@ -38,7 +38,10 @@ engineering conventions the codebase must follow.
    fields such as endpoint, rule name, request identifiers, and decision outcomes.
 2. **Mode-aware verbosity.** Development mode increases verbosity, surfacing detailed context about
    rule evaluation, variable extraction, and caching events. Production mode defaults to info
-   level with optional debug toggles for targeted troubleshooting.
+   level with optional debug toggles for targeted troubleshooting. When the log level drops to
+   `debug`, the pipeline emits inbound request snapshots and post-decision summaries (admission,
+   cache, backend, response) so operators can correlate Traefik requests with runtime decisions
+   without enabling trace-level logging elsewhere.
 3. **Traceability.** Every decision point (admission, forward policy evaluation, rule outcome,
    response policy selection, caching decision) should log structured breadcrumbs so
    operators can reconstruct what happened during a request.
