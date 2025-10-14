@@ -1,0 +1,59 @@
+rules:
+  lookup-session:
+    description: "Queries the session service for user metadata and entitlement flags."
+    auth:
+      - type: header
+        name: x-session-token
+        forwardAs:
+          type: bearer
+          token: "{{ .auth.input.value }}"
+    backendApi:
+      url: "https://session.internal/v1/lookup"
+      method: GET
+      headers:
+        allow: ["x-session-token"]
+        strip: []
+        custom:
+          authorization: "Bearer {{ .auth.input.value }}"
+      acceptedStatuses: [200]
+    conditions:
+      pass:
+        - lookup(backend.body, "active") == true
+      fail:
+        - lookup(backend.body, "active") != true
+    variables:
+      rule:
+        user_id:
+          from: "{{ lookup(backend.body, \"userId\") }}"
+        tenant_id:
+          from: "{{ lookup(backend.body, \"tenant\") }}"
+        entitlement:
+          from: "{{ lookup(backend.body, \"entitlement\") }}"
+    cache:
+      passTTL: "2m"
+      failTTL: "30s"
+
+  require-entitlement:
+    description: "Allows requests only when the session advertises an allow entitlement."
+    conditions:
+      pass:
+        - lookup(previousRule.outputs, "entitlement") == "allow"
+      fail:
+        - lookup(previousRule.outputs, "entitlement") == "deny"
+    responses:
+      fail:
+        status: 403
+        body: |
+          {
+            "error": "entitlement missing",
+            "tenant": "{{ lookup(previousRule.outputs, \"tenant_id\") }}"
+          }
+    variables:
+      global:
+        user_id:
+          from: "{{ lookup(previousRule.outputs, \"user_id\") }}"
+      rule:
+        tenant_id:
+          from: "{{ lookup(previousRule.outputs, \"tenant_id\") }}"
+    cache:
+      resultTTL: "0s"

@@ -1,0 +1,19 @@
+services:
+  passctrl:
+    build: ..
+    image: passctrl:local
+    container_name: passctrl
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - TZ=UTC
+      - PUID=1000
+      - PGID=1000
+      - PASSCTRL_SERVER__RULES__RULESFOLDER=/rules
+      - PASSCTRL_SERVER__TEMPLATES__TEMPLATESFOLDER=/templates
+    volumes:
+      - ../config:/config:ro
+      - ../rules:/rules:ro
+      - ../templates:/templates:ro
+

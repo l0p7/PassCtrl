@@ -1,0 +1,80 @@
+endpoints:
+  cached-api:
+    description: "Relies on Redis-backed caches to reuse profile lookups."
+    authentication:
+      required: true
+      allow: ["bearer"]
+      challenge: "Bearer realm=\"External\""
+    forwardRequestPolicy:
+      headers:
+        allow: ["authorization", "x-request-id"]
+        strip: []
+        custom:
+          x-user-id: "{{ .rule.outputs.user_id }}"
+      query:
+        allow: ["trace"]
+        strip: []
+        custom: {}
+    rules:
+      - name: fetch-profile
+      - name: check-tier
+    responsePolicy:
+      pass:
+        status: 200
+        bodyFile: "pass.json.tmpl"
+      fail:
+        status: 403
+        body: |
+          {
+            "error": "tier restriction",
+            "reason": "{{ .rule.reason }}"
+          }
+    cache:
+      resultTTL: "120s"
+
+rules:
+  fetch-profile:
+    description: "Calls the profile service and caches pass/fail decisions separately."
+    backendApi:
+      url: "https://profile.internal/v2/profile"
+      method: GET
+      headers:
+        allow: []
+        strip: []
+        custom:
+          authorization: "Bearer {{ .auth.input.token }}"
+      acceptedStatuses: [200, 404]
+    conditions:
+      pass:
+        - lookup(backend.body, "active") == true
+      fail:
+        - lookup(backend.body, "active") == false
+        - backend.status == 404
+    variables:
+      rule:
+        user_id:
+          from: "{{ lookup(backend.body, \"id\") }}"
+        plan:
+          from: "{{ lookup(backend.body, \"plan\") }}"
+    cache:
+      followCacheControl: true
+      passTTL: "5m"
+      failTTL: "45s"
+
+  check-tier:
+    description: "Requires a paid subscription level before allowing access."
+    conditions:
+      pass:
+        - lookup(previousRule.outputs, "plan") in ["plus", "enterprise"]
+      fail:
+        - lookup(previousRule.outputs, "plan") == "free"
+    responses:
+      fail:
+        status: 403
+        body: |
+          {
+            "error": "subscription required",
+            "plan": "{{ lookup(previousRule.outputs, \"plan\") }}"
+          }
+    cache:
+      resultTTL: "0s"

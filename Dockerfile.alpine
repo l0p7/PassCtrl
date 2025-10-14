@@ -1,0 +1,49 @@
+# Multi-stage build for PassCtrl (Alpine variant)
+
+# Build stage (musl)
+FROM golang:1.25-alpine AS builder
+
+WORKDIR /src
+
+# Install minimal build deps if needed (git usually present, but ensure)
+RUN apk add --no-cache git
+
+# Cache modules
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go mod download
+
+# Copy source and build
+COPY . .
+ENV CGO_ENABLED=0
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg/mod \
+    go build -o /out/passctrl ./cmd
+
+
+# Runtime stage (Alpine)
+FROM alpine:3.20
+
+ENV TZ=UTC \
+    PUID=1000 \
+    PGID=1000 \
+    PASSCTRL_SERVER__LISTEN__ADDRESS=0.0.0.0 \
+    PASSCTRL_SERVER__LISTEN__PORT=8080
+
+RUN apk add --no-cache ca-certificates tzdata su-exec shadow \
+    && mkdir -p /app /config /rules /templates
+
+WORKDIR /app
+
+# Copy binary and entrypoint
+COPY --from=builder /out/passctrl /usr/local/bin/passctrl
+COPY docker/entrypoint.alpine.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+EXPOSE 8080/tcp
+VOLUME ["/config", "/rules", "/templates"]
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["passctrl"]
+

@@ -1,0 +1,21 @@
+# Server bootstrap for the rules folder bundle. Endpoint and rule definitions
+# are sourced from the rules/ tree so the loader can watch for changes.
+server:
+  listen:
+    address: "0.0.0.0"
+    port: 8080
+  logging:
+    level: info
+    format: json
+    correlationHeader: "X-Trace-ID"
+  rules:
+    rulesFolder: "./examples/suites/rules-folder-bundle/rules"
+    rulesFile: ""
+  templates:
+    templatesFolder: "./examples/suites/rules-folder-bundle/templates"
+    templatesAllowEnv: false
+  cache:
+    backend: memory
+    ttlSeconds: 120
+    keySalt: "rules-folder-demo"
+    epoch: 1

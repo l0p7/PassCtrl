@@ -1,0 +1,79 @@
+# Basic authentication gateway showcasing a single endpoint with inline rules.
+# Feed this file to the CLI with `--config` to load the endpoint and rule definitions.
+server:
+  listen:
+    address: "0.0.0.0"
+    port: 8080
+  logging:
+    level: info
+    format: json
+  rules:
+    # Disable external rule sources so the inline definitions below are authoritative.
+    rulesFolder: ""
+    rulesFile: ""
+  templates:
+    templatesFolder: "./templates"
+    templatesAllowEnv: false
+
+endpoints:
+  basic-gateway:
+    description: "Protects the /auth endpoint with HTTP Basic credentials."
+    authentication:
+      required: true
+      allow: ["basic"]
+      challenge: "Basic realm=\"Internal\""
+      basic:
+        realm: "Internal"
+        charset: "UTF-8"
+    forwardRequestPolicy:
+      # Allow the admission snapshot to forward `X-Request-ID` downstream while keeping
+      # other headers stripped by default.
+      headers:
+        allow: ["x-request-id"]
+        strip: []
+        custom: {}
+      query:
+        allow: []
+        strip: []
+        custom: {}
+    rules:
+      - name: require-basic-login
+    responsePolicy:
+      fail:
+        status: 401
+        body: |
+          {
+            "error": "authentication required",
+            "endpoint": "{{ .endpoint }}"
+          }
+      error:
+        status: 500
+        body: |
+          {
+            "error": "upstream unavailable"
+          }
+
+rules:
+  require-basic-login:
+    description: "Accepts known Basic credentials and denies everything else."
+    auth:
+      - type: basic
+        forwardAs:
+          type: basic
+          user: "{{ .auth.input.user }}"
+          password: "{{ .auth.input.password }}"
+    responses:
+      pass:
+        status: 200
+        body: |
+          {
+            "message": "authenticated"
+          }
+      fail:
+        status: 401
+        body: |
+          {
+            "message": "invalid credentials"
+          }
+    cache:
+      resultTTL: "0s"

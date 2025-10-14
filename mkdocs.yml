@@ -1,0 +1,9 @@
+site_name: PassCtrl
+site_description: Documentation for the PassCtrl forward-auth server.
+docs_dir: docs
+nav:
+  - Overview: index.md
+  - Configuration: configuration.md
+  - Runtime Agents: agents.md
+theme:
+  name: readthedocs

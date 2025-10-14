@@ -1,0 +1,105 @@
+# Bearer token introspection example that calls an upstream API before allowing traffic.
+server:
+  listen:
+    address: "0.0.0.0"
+    port: 8080
+  logging:
+    level: debug
+    format: json
+  rules:
+    rulesFolder: ""
+    rulesFile: ""
+  cache:
+    backend: memory
+    ttlSeconds: 60
+    keySalt: "demo"
+
+endpoints:
+  introspection:
+    description: "Validates bearer tokens via the identity API before granting access."
+    authentication:
+      required: true
+      allow: ["bearer"]
+      challenge: "Bearer realm=\"Identity\""
+    forwardProxyPolicy:
+      trustedProxyIPs: ["10.0.0.0/8", "192.168.0.0/16"]
+      developmentMode: false
+    forwardRequestPolicy:
+      forwardProxyHeaders: true
+      headers:
+        allow: ["x-request-id", "x-forwarded-for", "x-forwarded-proto"]
+        strip: ["authorization"]
+        custom:
+          authorization: "Bearer {{ .rule.outputs.identity_token }}"
+      query:
+        allow: ["trace_id"]
+        strip: []
+        custom: {}
+    rules:
+      - name: introspect-bearer-token
+      - name: require-active-subscription
+    responsePolicy:
+      pass:
+        status: 200
+      fail:
+        status: 403
+        body: |
+          {
+            "error": "access denied",
+            "reason": "{{ .rule.reason }}"
+          }
+      error:
+        status: 502
+        body: |
+          {
+            "error": "identity service unavailable"
+          }
+    cache:
+      resultTTL: "30s"
+
+rules:
+  introspect-bearer-token:
+    description: "Calls the identity service to validate the inbound bearer token."
+    backendApi:
+      url: "https://identity.internal/api/v1/introspect"
+      method: POST
+      forwardProxyHeaders: true
+      headers:
+        allow: []
+        strip: []
+        custom:
+          authorization: "Bearer {{ .auth.input.token }}"
+          content-type: "application/json"
+      body: |
+        {
+          "token": "{{ .auth.input.token }}"
+        }
+      acceptedStatuses: [200]
+    conditions:
+      pass:
+        - request.authenticated && lookup(response.body, "active") == true
+      fail:
+        - lookup(response.body, "active") == false
+    variables:
+      rule:
+        identity_token:
+          from: "{{ lookup(response.body, \"token\") }}"
+    cache:
+      resultTTL: "30s"
+
+  require-active-subscription:
+    description: "Ensures the identity API flagged the account as active."
+    conditions:
+      pass:
+        - lookup(previousRule.outputs, "identity_token") != ""
+      fail:
+        - lookup(response.body, "plan") == "expired"
+    responses:
+      fail:
+        status: 403
+        body: |
+          {
+            "error": "subscription expired"
+          }
+    cache:
+      resultTTL: "0s"

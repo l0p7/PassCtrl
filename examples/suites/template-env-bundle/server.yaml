@@ -1,0 +1,78 @@
+# Inline configuration demonstrating environment-aware templates and headers.
+server:
+  listen:
+    address: "0.0.0.0"
+    port: 8080
+  logging:
+    level: info
+    format: json
+    correlationHeader: "X-Request-ID"
+  rules:
+    rulesFolder: ""
+    rulesFile: ""
+  templates:
+    templatesFolder: "./examples/suites/template-env-bundle/templates"
+    templatesAllowEnv: true
+    templatesAllowedEnv:
+      - "SUPPORT_EMAIL"
+      - "UPSTREAM_BASE_URL"
+  cache:
+    backend: memory
+    ttlSeconds: 60
+    keySalt: "template-env-demo"
+    epoch: 1
+
+endpoints:
+  env-aware-gateway:
+    description: "Renders environment-derived deny messages and forwards curated headers."
+    authentication:
+      required: true
+      allow: ["basic"]
+      challenge: "Basic realm=\"Env Demo\""
+      basic:
+        realm: "Env Demo"
+        charset: "UTF-8"
+    forwardRequestPolicy:
+      headers:
+        allow: ["x-request-id"]
+        strip: []
+        custom:
+          x-upstream-base: "{{ env \"UPSTREAM_BASE_URL\" }}"
+      query:
+        allow: []
+        strip: []
+        custom: {}
+    rules:
+      - name: require-authenticated-admission
+    responsePolicy:
+      pass:
+        status: 204
+      fail:
+        status: 403
+        bodyFile: "deny.json.tmpl"
+      error:
+        status: 502
+        body: |
+          {
+            "error": "unexpected failure",
+            "support": "{{ env \"SUPPORT_EMAIL\" }}"
+          }
+    cache:
+      resultTTL: "0s"
+
+rules:
+  require-authenticated-admission:
+    description: "Passes only when the admission agent marked the request as authenticated."
+    conditions:
+      pass:
+        - admission.authenticated == true
+      fail:
+        - admission.authenticated == false
+    responses:
+      fail:
+        status: 403
+        body: |
+          {
+            "error": "authentication required",
+            "contact": "{{ env \"SUPPORT_EMAIL\" }}"
+          }
