@@ -133,6 +133,130 @@ func (p *Pipeline) RequestWithEndpointHint(r *http.Request, endpoint string) *ht
 	return r.WithContext(ctx)
 }
 
+func (p *Pipeline) logDebugRequestSnapshot(r *http.Request, logger *slog.Logger, state *pipeline.State) {
+	if r == nil || logger == nil || state == nil {
+		return
+	}
+	ctx := r.Context()
+	if !logger.Enabled(ctx, slog.LevelDebug) {
+		return
+	}
+
+	attrs := []slog.Attr{
+		slog.String("method", state.Raw.Method),
+		slog.String("path", state.Raw.Path),
+	}
+	if state.Raw.Host != "" {
+		attrs = append(attrs, slog.String("host", state.Raw.Host))
+	}
+	if remote := strings.TrimSpace(r.RemoteAddr); remote != "" {
+		attrs = append(attrs, slog.String("remote_addr", remote))
+	}
+	if forwardedFor := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); forwardedFor != "" {
+		attrs = append(attrs, slog.String("forwarded_for", forwardedFor))
+	}
+	if forwarded := strings.TrimSpace(r.Header.Get("Forwarded")); forwarded != "" {
+		attrs = append(attrs, slog.String("forwarded", forwarded))
+	}
+	attrs = append(attrs,
+		slog.Int("header_count", len(state.Raw.Headers)),
+		slog.Int("query_count", len(state.Raw.Query)),
+	)
+	if _, ok := state.Raw.Headers["authorization"]; ok {
+		attrs = append(attrs, slog.Bool("authorization_present", true))
+	}
+	if _, ok := state.Raw.Headers["cookie"]; ok {
+		attrs = append(attrs, slog.Bool("cookie_present", true))
+	}
+
+	logger.LogAttrs(ctx, slog.LevelDebug, "auth request snapshot", attrs...)
+}
+
+func (p *Pipeline) logDebugDecisionSnapshot(ctx context.Context, logger *slog.Logger, state *pipeline.State) {
+	if logger == nil || state == nil {
+		return
+	}
+	if !logger.Enabled(ctx, slog.LevelDebug) {
+		return
+	}
+
+	attrs := []slog.Attr{
+		slog.String("admission_decision", state.Admission.Decision),
+		slog.Bool("admission_authenticated", state.Admission.Authenticated),
+		slog.Bool("admission_trusted_proxy", state.Admission.TrustedProxy),
+		slog.Bool("admission_proxy_stripped", state.Admission.ProxyStripped),
+		slog.Int("forward_header_count", len(state.Forward.Headers)),
+		slog.Int("forward_query_count", len(state.Forward.Query)),
+		slog.String("rule_outcome", state.Rule.Outcome),
+		slog.Bool("rule_executed", state.Rule.Executed),
+		slog.Bool("rule_from_cache", state.Rule.FromCache),
+		slog.String("cache_key", state.Cache.Key),
+		slog.Bool("cache_hit", state.Cache.Hit),
+		slog.Bool("cache_stored", state.Cache.Stored),
+		slog.Bool("backend_requested", state.Backend.Requested),
+		slog.Bool("backend_accepted", state.Backend.Accepted),
+		slog.Int("backend_page_count", len(state.Backend.Pages)),
+		slog.Int("response_status", state.Response.Status),
+	}
+	if state.Admission.Reason != "" {
+		attrs = append(attrs, slog.String("admission_reason", state.Admission.Reason))
+	}
+	if state.Admission.ClientIP != "" {
+		attrs = append(attrs, slog.String("admission_client_ip", state.Admission.ClientIP))
+	}
+	if state.Admission.ProxyNote != "" {
+		attrs = append(attrs, slog.String("admission_proxy_note", state.Admission.ProxyNote))
+	}
+	if state.Admission.ForwardedFor != "" {
+		attrs = append(attrs, slog.String("admission_forwarded_for", state.Admission.ForwardedFor))
+	}
+	if state.Admission.Forwarded != "" {
+		attrs = append(attrs, slog.String("admission_forwarded", state.Admission.Forwarded))
+	}
+	if state.Rule.Reason != "" {
+		attrs = append(attrs, slog.String("rule_reason", state.Rule.Reason))
+	}
+	if len(state.Rule.History) > 0 {
+		attrs = append(attrs, slog.Any("rule_history", summarizeRuleHistory(state.Rule.History)))
+	}
+	if state.Cache.Decision != "" {
+		attrs = append(attrs, slog.String("cache_decision", state.Cache.Decision))
+	}
+	if !state.Cache.StoredAt.IsZero() {
+		attrs = append(attrs, slog.Time("cache_stored_at", state.Cache.StoredAt))
+	}
+	if !state.Cache.ExpiresAt.IsZero() {
+		attrs = append(attrs, slog.Time("cache_expires_at", state.Cache.ExpiresAt))
+	}
+	if state.Backend.Status != 0 {
+		attrs = append(attrs, slog.Int("backend_status", state.Backend.Status))
+	}
+	if state.Backend.Error != "" {
+		attrs = append(attrs, slog.String("backend_error", state.Backend.Error))
+	}
+	if state.Response.Message != "" {
+		attrs = append(attrs, slog.String("response_message", state.Response.Message))
+	}
+
+	logger.LogAttrs(ctx, slog.LevelDebug, "auth decision snapshot", attrs...)
+}
+
+func summarizeRuleHistory(entries []pipeline.RuleHistoryEntry) []map[string]any {
+	if len(entries) == 0 {
+		return nil
+	}
+	summary := make([]map[string]any, 0, len(entries))
+	for _, entry := range entries {
+		summary = append(summary, map[string]any{
+			"name":        entry.Name,
+			"outcome":     entry.Outcome,
+			"reason":      entry.Reason,
+			"duration_ms": float64(entry.Duration) / float64(time.Millisecond),
+		})
+	}
+	return summary
+}
+
 // EndpointExists reports whether an endpoint with the provided name is
 // configured in the active pipeline snapshot.
 func (p *Pipeline) EndpointExists(name string) bool {
@@ -225,6 +349,8 @@ func (p *Pipeline) ServeAuth(w http.ResponseWriter, r *http.Request) {
 		slog.String("correlation_id", correlationID),
 	)
 
+	p.logDebugRequestSnapshot(r, reqLogger, state)
+
 	lookupStart := time.Now()
 	entry, ok, err := p.cache.Lookup(r.Context(), cacheKey)
 	if p.metrics != nil {
@@ -312,6 +438,9 @@ func (p *Pipeline) ServeAuth(w http.ResponseWriter, r *http.Request) {
 
 	duration := time.Since(start)
 	statusText := http.StatusText(state.Response.Status)
+
+	p.logDebugDecisionSnapshot(r.Context(), reqLogger, state)
+
 	reqLogger.Info("pipeline completed",
 		slog.String("status", statusText),
 		slog.Int("http_status", state.Response.Status),
