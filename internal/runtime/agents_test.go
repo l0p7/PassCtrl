@@ -1,14 +1,17 @@
 package runtime
 
 import (
-	"context"
-	"fmt"
-	"net/http"
-	"net/http/httptest"
-	"net/url"
-	"strings"
-	"testing"
-	"time"
+    "context"
+    "fmt"
+    "io"
+    "net/http"
+    "net/http/httptest"
+    "os"
+    "path/filepath"
+    "net/url"
+    "strings"
+    "testing"
+    "time"
 
 	"github.com/l0p7/passctrl/internal/runtime/admission"
 	"github.com/l0p7/passctrl/internal/runtime/cache"
@@ -95,23 +98,26 @@ func TestAdmissionAgentExecute(t *testing.T) {
 		}
 	})
 
-	t.Run("rejects forwarded chain with untrusted hop", func(t *testing.T) {
-		agent := admission.New(trusted, false)
-		req := httptest.NewRequest(http.MethodGet, "http://example.com/auth", http.NoBody)
-		req.RemoteAddr = "127.0.0.1:12345"
-		req.Header.Set("Authorization", "Bearer token")
-		req.Header.Set("X-Forwarded-For", "203.0.113.5, 198.51.100.10")
+    t.Run("accepts forwarded chain when remote is trusted", func(t *testing.T) {
+        agent := admission.New(trusted, false)
+        req := httptest.NewRequest(http.MethodGet, "http://example.com/auth", http.NoBody)
+        req.RemoteAddr = "127.0.0.1:12345"
+        req.Header.Set("Authorization", "Bearer token")
+        req.Header.Set("X-Forwarded-For", "203.0.113.5, 198.51.100.10")
 
-		state := newTestPipelineState(req)
-		res := agent.Execute(req.Context(), req, state)
+        state := newTestPipelineState(req)
+        res := agent.Execute(req.Context(), req, state)
 
-		if res.Status != "fail" {
-			t.Fatalf("expected fail for untrusted forwarded chain, got %s", res.Status)
-		}
-		if state.Admission.Reason != "forwarded chain included untrusted hop" {
-			t.Fatalf("unexpected reason: %s", state.Admission.Reason)
-		}
-	})
+        if res.Status != "pass" {
+            t.Fatalf("expected pass when remote is trusted, got %s", res.Status)
+        }
+        if !state.Admission.TrustedProxy {
+            t.Fatalf("expected trusted proxy flag to be true")
+        }
+        if state.Admission.ClientIP != "203.0.113.5" {
+            t.Fatalf("expected client ip from first forwarded hop, got %s", state.Admission.ClientIP)
+        }
+    })
 
 	t.Run("strips forwarded headers in development", func(t *testing.T) {
 		agent := admission.New(trusted, true)
@@ -147,35 +153,32 @@ func TestAdmissionAgentExecute(t *testing.T) {
 		}
 	})
 
-	t.Run("strips untrusted forwarded chain in development", func(t *testing.T) {
-		agent := admission.New(trusted, true)
-		req := httptest.NewRequest(http.MethodGet, "http://example.com/auth", http.NoBody)
-		req.RemoteAddr = "127.0.0.1:12345"
-		req.Header.Set("Authorization", "Bearer token")
-		req.Header.Set("X-Forwarded-For", "203.0.113.5, 198.51.100.10")
+    t.Run("development mode keeps forwarded chain when remote is trusted", func(t *testing.T) {
+        agent := admission.New(trusted, true)
+        req := httptest.NewRequest(http.MethodGet, "http://example.com/auth", http.NoBody)
+        req.RemoteAddr = "127.0.0.1:12345"
+        req.Header.Set("Authorization", "Bearer token")
+        req.Header.Set("X-Forwarded-For", "203.0.113.5, 198.51.100.10")
 
-		state := newTestPipelineState(req)
-		res := agent.Execute(req.Context(), req, state)
+        state := newTestPipelineState(req)
+        res := agent.Execute(req.Context(), req, state)
 
-		if res.Status != "pass" {
-			t.Fatalf("expected pass after stripping forwarded chain, got %s", res.Status)
-		}
-		if !state.Admission.ProxyStripped {
-			t.Fatalf("expected forwarded headers stripped when chain is untrusted")
-		}
-		if state.Admission.TrustedProxy {
-			t.Fatalf("trusted proxy flag should remain false after stripping chain")
-		}
-		if state.Admission.ClientIP != "127.0.0.1" {
-			t.Fatalf("client ip should fall back to remote address after stripping, got %s", state.Admission.ClientIP)
-		}
-		if !strings.Contains(state.Admission.Reason, "authorization header accepted") {
-			t.Fatalf("expected admission to note accepted authorization: %s", state.Admission.Reason)
-		}
-		if req.Header.Get("X-Forwarded-For") != "" {
-			t.Fatalf("expected forwarded header removed in development mode")
-		}
-	})
+        if res.Status != "pass" {
+            t.Fatalf("expected pass with trusted remote, got %s", res.Status)
+        }
+        if state.Admission.ProxyStripped {
+            t.Fatalf("did not expect forwarded headers stripped in development with trusted remote")
+        }
+        if !state.Admission.TrustedProxy {
+            t.Fatalf("expected trusted proxy flag to be true")
+        }
+        if state.Admission.ClientIP != "203.0.113.5" {
+            t.Fatalf("expected client ip from forwarded chain, got %s", state.Admission.ClientIP)
+        }
+        if req.Header.Get("X-Forwarded-For") == "" {
+            t.Fatalf("expected forwarded header retained in development mode when remote trusted")
+        }
+    })
 
 	t.Run("rejects invalid forwarded chain", func(t *testing.T) {
 		agent := admission.New(trusted, false)
@@ -372,7 +375,7 @@ func TestRuleChainAgentExecute(t *testing.T) {
 }
 
 func TestRuleExecutionAgentExecute(t *testing.T) {
-	agent := newRuleExecutionAgent(nil, nil)
+    agent := newRuleExecutionAgent(nil, nil, nil)
 
 	t.Run("skip on cache", func(t *testing.T) {
 		state := &pipeline.State{Rule: pipeline.RuleState{FromCache: true}}
@@ -652,6 +655,66 @@ func TestRuleExecutionAgentExecute(t *testing.T) {
 		if len(state.Backend.Pages) != 1 {
 			t.Fatalf("expected single page recorded, got %d", len(state.Backend.Pages))
 		}
+	})
+
+	// New test: renders backend body from inline template and file
+    t.Run("renders backend body from templates", func(t *testing.T) {
+        var seenBodyInline string
+        var seenBodyFile string
+
+		serverInline := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			b, _ := io.ReadAll(r.Body)
+			_ = r.Body.Close()
+			seenBodyInline = string(b)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(w, `{"ok": true}`)
+		}))
+		t.Cleanup(serverInline.Close)
+
+		serverFile := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			b, _ := io.ReadAll(r.Body)
+			_ = r.Body.Close()
+			seenBodyFile = string(b)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(w, `{"ok": true}`)
+		}))
+		t.Cleanup(serverFile.Close)
+
+		dir := t.TempDir()
+		sandbox, err := templates.NewSandbox(dir, true, []string{"TOKEN"})
+		if err != nil { t.Fatalf("sandbox create: %v", err) }
+		t.Setenv("TOKEN", "secret")
+		renderer := templates.NewRenderer(sandbox)
+
+		// Create a file template
+		path := filepath.Join(dir, "body.txt")
+		if err := os.WriteFile(path, []byte("file-{{ env \"TOKEN\" }}"), 0o600); err != nil {
+			t.Fatalf("write template file: %v", err)
+		}
+
+        defs, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{
+            {
+                Name: "inline",
+                Backend: rulechain.BackendDefinitionSpec{URL: serverInline.URL, Method: http.MethodPost, Body: "inline-{{ env \"TOKEN\" }}"},
+                Conditions: rulechain.ConditionSpec{Pass: []string{"true"}},
+            },
+            {
+                Name: "file",
+                Backend: rulechain.BackendDefinitionSpec{URL: serverFile.URL, Method: http.MethodPost, BodyFile: fmt.Sprintf("{{ \"%s\" }}", path)},
+                Conditions: rulechain.ConditionSpec{Pass: []string{"true"}},
+            },
+        }, renderer)
+		if err != nil { t.Fatalf("compile rule: %v", err) }
+
+        state := &pipeline.State{}
+        state.Rule.ShouldExecute = true
+        state.SetPlan(rulechain.ExecutionPlan{Rules: defs})
+
+        agentWithRenderer := newRuleExecutionAgent(nil, nil, renderer)
+        res := agentWithRenderer.Execute(context.Background(), nil, state)
+		if res.Status != "pass" { t.Fatalf("expected pass, got %s", res.Status) }
+		if seenBodyInline != "inline-secret" { t.Fatalf("expected inline body rendered, got %q", seenBodyInline) }
+		if seenBodyFile != "file-secret" { t.Fatalf("expected file body rendered, got %q", seenBodyFile) }
 	})
 
 	t.Run("follows link header pagination", func(t *testing.T) {

@@ -197,42 +197,57 @@ func CompileDefinitions(specs []DefinitionSpec, renderer *templates.Renderer) ([
 }
 
 func compileDefinition(env *expr.Environment, spec DefinitionSpec, renderer *templates.Renderer) (Definition, error) {
-	programs, err := compileConditionPrograms(env, spec.Conditions)
-	if err != nil {
-		return Definition{}, err
-	}
-	backend := buildBackendDefinition(spec.Backend)
+    programs, err := compileConditionPrograms(env, spec.Conditions)
+    if err != nil {
+        return Definition{}, err
+    }
+    backend := buildBackendDefinition(spec.Backend)
 	name := strings.TrimSpace(spec.Name)
 	if name == "" {
 		name = "rule"
 	}
-	def := Definition{
-		Name:         strings.TrimSpace(spec.Name),
-		Description:  strings.TrimSpace(spec.Description),
-		Conditions:   programs,
-		Backend:      backend,
-		PassMessage:  strings.TrimSpace(spec.PassMessage),
-		FailMessage:  strings.TrimSpace(spec.FailMessage),
-		ErrorMessage: strings.TrimSpace(spec.ErrorMessage),
-	}
-	if renderer != nil {
-		if tmpl, err := renderer.CompileInline(fmt.Sprintf("%s:pass", name), spec.PassMessage); err != nil {
-			return Definition{}, fmt.Errorf("pass message template: %w", err)
-		} else {
-			def.PassTemplate = tmpl
-		}
-		if tmpl, err := renderer.CompileInline(fmt.Sprintf("%s:fail", name), spec.FailMessage); err != nil {
-			return Definition{}, fmt.Errorf("fail message template: %w", err)
-		} else {
-			def.FailTemplate = tmpl
-		}
-		if tmpl, err := renderer.CompileInline(fmt.Sprintf("%s:error", name), spec.ErrorMessage); err != nil {
-			return Definition{}, fmt.Errorf("error message template: %w", err)
-		} else {
-			def.ErrorTemplate = tmpl
-		}
-	}
-	return def, nil
+    def := Definition{
+        Name:         strings.TrimSpace(spec.Name),
+        Description:  strings.TrimSpace(spec.Description),
+        Conditions:   programs,
+        Backend:      backend,
+        PassMessage:  strings.TrimSpace(spec.PassMessage),
+        FailMessage:  strings.TrimSpace(spec.FailMessage),
+        ErrorMessage: strings.TrimSpace(spec.ErrorMessage),
+    }
+    if renderer != nil {
+        if tmpl, err := renderer.CompileInline(fmt.Sprintf("%s:pass", name), spec.PassMessage); err != nil {
+            return Definition{}, fmt.Errorf("pass message template: %w", err)
+        } else {
+            def.PassTemplate = tmpl
+        }
+        if tmpl, err := renderer.CompileInline(fmt.Sprintf("%s:fail", name), spec.FailMessage); err != nil {
+            return Definition{}, fmt.Errorf("fail message template: %w", err)
+        } else {
+            def.FailTemplate = tmpl
+        }
+        if tmpl, err := renderer.CompileInline(fmt.Sprintf("%s:error", name), spec.ErrorMessage); err != nil {
+            return Definition{}, fmt.Errorf("error message template: %w", err)
+        } else {
+            def.ErrorTemplate = tmpl
+        }
+        // Compile backend request body templates
+        if strings.TrimSpace(spec.Backend.Body) != "" {
+            if tmpl, err := renderer.CompileInline(fmt.Sprintf("%s:backend:body", name), spec.Backend.Body); err == nil {
+                def.Backend.BodyTemplate = tmpl
+            } else {
+                return Definition{}, fmt.Errorf("backend body template: %w", err)
+            }
+        } else if strings.TrimSpace(spec.Backend.BodyFile) != "" {
+            name := fmt.Sprintf("%s:backend:bodyFile", name)
+            tmpl, err := renderer.CompileInline(name, spec.Backend.BodyFile)
+            if err != nil {
+                return Definition{}, fmt.Errorf("backend body file template compile: %w", err)
+            }
+            def.Backend.BodyTemplate = tmpl
+        }
+    }
+    return def, nil
 }
 
 func compileConditionPrograms(env *expr.Environment, spec ConditionSpec) (ConditionPrograms, error) {

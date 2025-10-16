@@ -21,7 +21,7 @@ func TestRuleExecutionAgentBackendDefaultFailWhenNotAccepted(t *testing.T) {
 
 	def := compileBackendOnlyRule(t, server.URL, []int{http.StatusOK})
 
-	agent := newRuleExecutionAgent(server.Client(), nil)
+    agent := newRuleExecutionAgent(server.Client(), nil, nil)
 	state := pipeline.NewState(httptest.NewRequest(http.MethodGet, "http://unit.test/request", nil), "endpoint", "cache-key", "")
 
 	outcome, reason := agent.evaluateRule(context.Background(), def, state)
@@ -46,7 +46,7 @@ func TestRuleExecutionAgentBackendDefaultPassWhenAccepted(t *testing.T) {
 
 	def := compileBackendOnlyRule(t, server.URL, []int{http.StatusOK})
 
-	agent := newRuleExecutionAgent(server.Client(), nil)
+    agent := newRuleExecutionAgent(server.Client(), nil, nil)
 	state := pipeline.NewState(httptest.NewRequest(http.MethodGet, "http://unit.test/request", nil), "endpoint", "cache-key", "")
 
 	outcome, reason := agent.evaluateRule(context.Background(), def, state)

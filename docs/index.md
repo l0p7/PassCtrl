@@ -80,9 +80,10 @@ export PASSCTRL_SERVER__TEMPLATES__TEMPLATESALLOWEDENV=CLIENT_ID
 ## Observability
 PassCtrl uses `log/slog` for structured logging. Configure log level and format via the `server.logging` block. The correlation header
 is attached automatically to every log once set in the configuration, and the `/auth` response mirrors the identifier in both the HTTP
-headers and JSON payload so downstream systems can trace decisions end-to-end. Enabling `server.logging.level: debug` also emits an
+headers and a minimal response body so downstream systems can trace decisions end-to-end. Enabling `server.logging.level: debug` also emits an
 inbound request snapshot (method, path, proxy metadata) and a post-decision summary covering admission results, cache participation,
-backend usage, and rendered response details, making Traefik and other forward-auth integrations easier to troubleshoot.
+and backend usage. For detailed runtime metadata, prefer the `/explain` endpoint and logs rather than `/auth` responses, which purposely
+avoid exposing internal state.
 
 ## Development Quality Gates
 - Run unit tests with `go test ./...` to exercise runtime agents and configuration loaders.

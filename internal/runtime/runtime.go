@@ -1,19 +1,20 @@
 package runtime
 
 import (
-	"context"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/hex"
-	"encoding/json"
-	"errors"
-	"fmt"
-	"log/slog"
-	"net/http"
-	"net/netip"
-	"sort"
-	"strings"
+    "context"
+    "crypto/rand"
+    "crypto/sha256"
+    "encoding/base64"
+    "encoding/hex"
+    "encoding/json"
+    "errors"
+    "fmt"
+    "io"
+    "log/slog"
+    "net/http"
+    "net/netip"
+    "sort"
+    "strings"
 	"sync"
 	"time"
 
@@ -398,43 +399,35 @@ func (p *Pipeline) ServeAuth(w http.ResponseWriter, r *http.Request) {
 	if p.correlationHeader != "" {
 		w.Header().Set(p.correlationHeader, correlationID)
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(state.Response.Status)
+    // Render a near-empty response body. Only intentionally constructed messages
+    // (typically from configured rule/endpoint templates) are echoed. Otherwise
+    // the body remains empty. Detailed diagnostics are available via /explain and logs.
+    body := strings.TrimSpace(state.Response.Message)
+    if body == "" {
+        body = strings.TrimSpace(state.Rule.Reason)
+        // Filter out auto-generated reasons to avoid leaking internals.
+        lower := strings.ToLower(body)
+        if strings.Contains(lower, "condition matched") ||
+            strings.Contains(lower, "conditions satisfied") ||
+            strings.Contains(lower, "required pass condition") ||
+            strings.Contains(lower, "evaluated without explicit outcome") ||
+            strings.Contains(lower, "backend request failed") ||
+            strings.Contains(lower, "evaluation failed") {
+            body = ""
+        }
+    }
 
-	payload := struct {
-		Outcome       string                  `json:"outcome"`
-		Message       string                  `json:"message"`
-		FromCache     bool                    `json:"fromCache"`
-		Agents        []pipeline.Result       `json:"agents"`
-		Endpoint      string                  `json:"endpoint"`
-		CorrelationID string                  `json:"correlationId"`
-		Server        pipeline.ServerState    `json:"server"`
-		Raw           pipeline.RawState       `json:"rawState"`
-		Admission     pipeline.AdmissionState `json:"admission"`
-		Forward       pipeline.ForwardState   `json:"forwardRequest"`
-		Rule          pipeline.RuleState      `json:"rule"`
-		Cache         pipeline.CacheState     `json:"cache"`
-		Backend       pipeline.BackendState   `json:"backend"`
-	}{
-		Outcome:       state.Rule.Outcome,
-		Message:       state.Response.Message,
-		FromCache:     state.Cache.Hit,
-		Agents:        results,
-		Endpoint:      state.Endpoint,
-		CorrelationID: state.CorrelationID,
-		Server:        state.Server,
-		Raw:           state.Raw,
-		Admission:     state.Admission,
-		Forward:       state.Forward,
-		Rule:          state.Rule,
-		Cache:         state.Cache,
-		Backend:       state.Backend,
-	}
-
-	if err := json.NewEncoder(w).Encode(payload); err != nil {
-		reqLogger.Error("auth response encode failed", slog.Any("error", err))
-		return
-	}
+    // Set headers and status before writing body (if any).
+    if body != "" {
+        w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+    }
+    w.WriteHeader(state.Response.Status)
+    if body != "" {
+        if _, err := io.WriteString(w, body); err != nil {
+            reqLogger.Error("auth response write failed", slog.Any("error", err))
+            return
+        }
+    }
 
 	duration := time.Since(start)
 	statusText := http.StatusText(state.Response.Status)
@@ -631,18 +624,18 @@ func (p *Pipeline) configureEndpoints(endpoints map[string]config.EndpointConfig
 
 func (p *Pipeline) installFallbackEndpoint() {
 	trusted := defaultTrustedNetworks()
-	agents := []pipeline.Agent{
-		&serverAgent{},
-		admission.New(trusted, false),
-		forwardpolicy.New(forwardpolicy.DefaultConfig()),
-		rulechain.NewAgent(rulechain.DefaultDefinitions(p.templateRenderer)),
-		newRuleExecutionAgent(nil, p.logger.With(slog.String("agent", "rule_execution"), slog.String("endpoint", "default"))),
-		responsepolicy.New(),
-		resultcaching.New(resultcaching.Config{
-			Cache:   p.cache,
-			TTL:     p.cacheTTL,
-			Logger:  p.logger.With(slog.String("agent", "result_caching"), slog.String("endpoint", "default")),
-			Metrics: p.metrics,
+    agents := []pipeline.Agent{
+        &serverAgent{},
+        admission.New(trusted, false),
+        forwardpolicy.New(forwardpolicy.DefaultConfig()),
+        rulechain.NewAgent(rulechain.DefaultDefinitions(p.templateRenderer)),
+        newRuleExecutionAgent(nil, p.logger.With(slog.String("agent", "rule_execution"), slog.String("endpoint", "default")), p.templateRenderer),
+        responsepolicy.NewWithConfig(responsepolicy.Config{Endpoint: "default", Renderer: p.templateRenderer}),
+        resultcaching.New(resultcaching.Config{
+            Cache:   p.cache,
+            TTL:     p.cacheTTL,
+            Logger:  p.logger.With(slog.String("agent", "result_caching"), slog.String("endpoint", "default")),
+            Metrics: p.metrics,
 		}),
 	}
 	runtime := &endpointRuntime{
@@ -715,18 +708,51 @@ func (p *Pipeline) buildEndpointRuntime(name string, cfg config.EndpointConfig, 
 	}
 
 	trusted := append(defaultTrustedNetworks(), admission.ParseCIDRs(cfg.ForwardProxyPolicy.TrustedProxyIPs)...)
-	agents := []pipeline.Agent{
-		&serverAgent{},
-		admission.New(trusted, cfg.ForwardProxyPolicy.DevelopmentMode),
-		forwardpolicy.New(forwardPolicyFromConfig(cfg.ForwardRequestPolicy)),
-		rulechain.NewAgent(ruleDefs),
-		newRuleExecutionAgent(nil, p.logger.With(slog.String("agent", "rule_execution"), slog.String("endpoint", trimmed))),
-		responsepolicy.New(),
-		resultcaching.New(resultcaching.Config{
-			Cache:   p.cache,
-			TTL:     ttl,
-			Logger:  p.logger.With(slog.String("agent", "result_caching"), slog.String("endpoint", trimmed)),
-			Metrics: p.metrics,
+    agents := []pipeline.Agent{
+        &serverAgent{},
+        admission.New(trusted, cfg.ForwardProxyPolicy.DevelopmentMode),
+        forwardpolicy.New(forwardPolicyFromConfig(cfg.ForwardRequestPolicy)),
+        rulechain.NewAgent(ruleDefs),
+        newRuleExecutionAgent(nil, p.logger.With(slog.String("agent", "rule_execution"), slog.String("endpoint", trimmed)), p.templateRenderer),
+        responsepolicy.NewWithConfig(responsepolicy.Config{
+            Endpoint: trimmed,
+            Renderer: p.templateRenderer,
+            Pass: responsepolicy.CategoryConfig{
+                Status:   cfg.ResponsePolicy.Pass.Status,
+                Body:     cfg.ResponsePolicy.Pass.Body,
+                BodyFile: cfg.ResponsePolicy.Pass.BodyFile,
+                Headers:  forwardpolicy.CategoryConfig{
+                    Allow:  append([]string{}, cfg.ResponsePolicy.Pass.Headers.Allow...),
+                    Strip:  append([]string{}, cfg.ResponsePolicy.Pass.Headers.Strip...),
+                    Custom: cloneStringMap(cfg.ResponsePolicy.Pass.Headers.Custom),
+                },
+            },
+            Fail: responsepolicy.CategoryConfig{
+                Status:   cfg.ResponsePolicy.Fail.Status,
+                Body:     cfg.ResponsePolicy.Fail.Body,
+                BodyFile: cfg.ResponsePolicy.Fail.BodyFile,
+                Headers:  forwardpolicy.CategoryConfig{
+                    Allow:  append([]string{}, cfg.ResponsePolicy.Fail.Headers.Allow...),
+                    Strip:  append([]string{}, cfg.ResponsePolicy.Fail.Headers.Strip...),
+                    Custom: cloneStringMap(cfg.ResponsePolicy.Fail.Headers.Custom),
+                },
+            },
+            Error: responsepolicy.CategoryConfig{
+                Status:   cfg.ResponsePolicy.Error.Status,
+                Body:     cfg.ResponsePolicy.Error.Body,
+                BodyFile: cfg.ResponsePolicy.Error.BodyFile,
+                Headers:  forwardpolicy.CategoryConfig{
+                    Allow:  append([]string{}, cfg.ResponsePolicy.Error.Headers.Allow...),
+                    Strip:  append([]string{}, cfg.ResponsePolicy.Error.Headers.Strip...),
+                    Custom: cloneStringMap(cfg.ResponsePolicy.Error.Headers.Custom),
+                },
+            },
+        }),
+        resultcaching.New(resultcaching.Config{
+            Cache:   p.cache,
+            TTL:     ttl,
+            Logger:  p.logger.With(slog.String("agent", "result_caching"), slog.String("endpoint", trimmed)),
+            Metrics: p.metrics,
 		}),
 	}
 

@@ -26,40 +26,34 @@ func TestAgentExecuteCachedResponse(t *testing.T) {
 }
 
 func TestAgentExecuteOutcomeMapping(t *testing.T) {
-	tests := map[string]struct {
-		outcome       string
-		reason        string
-		wantStatus    int
-		wantMessage   string
-		expectedCache bool
-	}{
-		"pass": {
-			outcome:     "pass",
-			wantStatus:  http.StatusOK,
-			wantMessage: "access granted",
-		},
-		"fail with reason": {
-			outcome:     "fail",
-			reason:      "policy rejected",
-			wantStatus:  http.StatusForbidden,
-			wantMessage: "policy rejected",
-		},
-		"fail default": {
-			outcome:     "fail",
-			wantStatus:  http.StatusForbidden,
-			wantMessage: "access denied",
-		},
-		"error default": {
-			outcome:     "error",
-			wantStatus:  http.StatusBadGateway,
-			wantMessage: "rule error",
-		},
-		"unknown": {
-			outcome:     "",
-			wantStatus:  http.StatusInternalServerError,
-			wantMessage: "undetermined rule outcome",
-		},
-	}
+    tests := map[string]struct {
+        outcome       string
+        reason        string
+        wantStatus    int
+        expectedCache bool
+    }{
+        "pass": {
+            outcome:     "pass",
+            wantStatus:  http.StatusOK,
+        },
+        "fail with reason": {
+            outcome:     "fail",
+            reason:      "policy rejected",
+            wantStatus:  http.StatusForbidden,
+        },
+        "fail default": {
+            outcome:     "fail",
+            wantStatus:  http.StatusForbidden,
+        },
+        "error default": {
+            outcome:     "error",
+            wantStatus:  http.StatusBadGateway,
+        },
+        "unknown": {
+            outcome:     "",
+            wantStatus:  http.StatusInternalServerError,
+        },
+    }
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -78,9 +72,9 @@ func TestAgentExecuteOutcomeMapping(t *testing.T) {
 				t.Fatalf("expected status %d, got %d", tc.wantStatus, state.Response.Status)
 			}
 
-			if state.Response.Message != tc.wantMessage {
-				t.Fatalf("expected message %q, got %q", tc.wantMessage, state.Response.Message)
-			}
+            if state.Response.Message != "" {
+                t.Fatalf("expected empty message by default, got %q", state.Response.Message)
+            }
 
 			if outcome := state.Response.Headers["X-PassCtrl-Outcome"]; outcome != tc.outcome {
 				t.Fatalf("expected outcome header %q, got %q", tc.outcome, outcome)
@@ -89,15 +83,6 @@ func TestAgentExecuteOutcomeMapping(t *testing.T) {
 	}
 }
 
-func TestCoalesce(t *testing.T) {
-	if got := coalesce("", "  ", "value"); got != "value" {
-		t.Fatalf("expected trimmed value, got %q", got)
-	}
-
-	if got := coalesce("", "  "); got != "" {
-		t.Fatalf("expected empty string when no values present, got %q", got)
-	}
-}
 
 func TestAgentExecuteInitializesHeaders(t *testing.T) {
 	state := &pipeline.State{}

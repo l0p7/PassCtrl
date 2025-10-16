@@ -158,6 +158,93 @@ Sample configurations covering common topologies live under
 - [`suites/template-env-bundle`](../examples/suites/template-env-bundle/README.md)
   opts into the template environment allowlist and demonstrates environment
   driven deny messaging.
+- [`suites/backend-body-templates`](../examples/suites/backend-body-templates/README.md)
+  demonstrates templated backend request bodies (inline and file-based) rendered via the sandbox.
+
+### Backend Request Body Templating
+
+Rule `backendApi` bodies support templating for both inline strings and files:
+
+- `backendApi.body` — inline Go template rendered per request against the full pipeline state
+  (`raw`, `admission`, `forward`, `backend`, `variables`, etc.).
+- `backendApi.bodyFile` — **templated path** rendered per request. The rendered value is resolved
+  within the configured template sandbox (`server.templates.templatesFolder`) and compiled as a
+  template. The resulting file contents are then rendered with the same request context.
+
+Notes:
+- Choose one of `body` or `bodyFile`; when both are present, `body` takes precedence.
+- `bodyFile` itself is a template. For example: `bodyFile: "{{ printf \"requests/%s.json.tmpl\" .endpoint }}"`.
+- The runtime does not set `Content-Type` automatically. When sending JSON, include
+  a custom header:
+
+  ```yaml
+  rules:
+    call-api:
+      backendApi:
+        url: https://api.example/process
+        method: POST
+        headers:
+          custom:
+            Content-Type: application/json
+        body: |
+          {
+            "client": "{{ .admission.clientIp }}",
+            "token": "{{ index .forward.Headers \"authorization\" }}"
+          }
+  ```
+
+- File-backed body example with a sandboxed template:
+
+  ```yaml
+  server:
+    templates:
+      templatesFolder: ./templates
+      templatesAllowEnv: true
+      templatesAllowedEnv: [API_TOKEN]
+
+  rules:
+    call-api-from-file:
+      backendApi:
+        url: https://api.example/process
+        method: POST
+        headers:
+          custom:
+            Content-Type: application/json
+        bodyFile: "{{ printf \"requests/%s.json.tmpl\" \"payload\" }}"
+  ```
+
+  `templates/requests/payload.json.tmpl`:
+
+  ```json
+  {"token":"{{ env \"API_TOKEN\" }}","path":"{{ .raw.path }}"}
+  ```
+
+Environment access inside templates follows the sandbox rules (allowlist and root
+path). See the Template Sandboxing section above for details.
+
+### Trusted Proxy Policy
+
+Forward proxy trust is configured per-endpoint under `forwardProxyPolicy`:
+
+```
+endpoints:
+  my-endpoint:
+    forwardProxyPolicy:
+      trustedProxyIPs: ["10.0.0.0/8", "192.168.0.0/16"]
+      developmentMode: false
+```
+
+- `trustedProxyIPs` is a list of CIDR ranges for peers allowed to supply `X-Forwarded-*` or RFC7239 `Forwarded` headers.
+- In production (`developmentMode: false`):
+  - If the immediate peer is not in a trusted CIDR, the request fails (untrusted proxy).
+  - If forwarding metadata is malformed or the two header families disagree, the request fails.
+  - When the peer is trusted and forwarding metadata is valid, the first hop is treated as the client IP.
+- In development (`developmentMode: true`):
+  - On invalid or untrusted forwarding metadata, the server strips all forwarding headers, annotates the decision, and continues
+    with the remote address as the client IP rather than failing the request.
+  - When the immediate peer is trusted and metadata is valid, headers are retained.
+
+This keeps local iteration productive while production environments enforce strict proxy hygiene.
 
 Mount any of these files with `--config` to explore how the runtime surfaces
 health, explain, and caching state across different rule chains.

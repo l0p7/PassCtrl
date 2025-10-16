@@ -34,3 +34,19 @@ mirror common deployment layouts:
 Each configuration embeds inline documentation comments to highlight which agent
 consumes a given setting. Copy the relevant sections into your deployment bundle
 and adjust the rule names to match your rule library.
+Examples Overview
+
+This directory collects runnable configuration examples and suites.
+
+Suites
+
+- suites/backend-body-templates — demonstrates templated backend request bodies using inline `backendApi.body` and file-based `backendApi.bodyFile` with the template sandbox.
+- suites/rules-folder-bundle — loads endpoints and rules from a folder with hot reload.
+- suites/redis-cache-cluster — enables Redis cache backend and templated responses.
+- suites/template-env-bundle — showcases response body templating with environment allowlist.
+
+Configs
+
+- configs/basic-auth-gateway.yaml — standalone basic auth gateway with templated deny bodies.
+- configs/backend-token-introspection.yaml — backend call + header/query curation + templated response.
+- configs/cached-multi-endpoint.yaml — mixed cached endpoints and response policy examples.

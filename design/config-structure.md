@@ -171,7 +171,7 @@ rules:
         strip: []                      # optional — suppress specific parameters
         custom: {}                     # optional — synthesized query parameters (values rendered via templates)
       body: ""                         # optional — templated request body (per page when paginating)
-      bodyFile: ""                     # optional — render body from template file (per page when paginating)
+      bodyFile: ""                     # optional — templated path to a body template file (rendered per request)
       acceptedStatuses: [200]          # optional — success codes (default 2xx)
       pagination:                      # optional — pagination handling strategy
         type: link-header              # optional — e.g., link-header, token
