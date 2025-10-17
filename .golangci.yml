@@ -15,8 +15,12 @@ linters:
     - misspell
     - unparam
     - prealloc
-    # - gosec
+    - gosec
     - noctx
+    - bodyclose
+    - errorlint
+    - errchkjson
+    - nolintlint
   settings:
     misspell:
       locale: US
@@ -24,4 +28,6 @@ linters:
 formatters:
   enable:
     - gofmt
+    - gofumpt
+    - gci
     - goimports

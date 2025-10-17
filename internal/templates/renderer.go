@@ -103,6 +103,7 @@ func (r *Renderer) CompileFile(path string) (*Template, error) {
 	if err != nil {
 		return nil, err
 	}
+	// #nosec G304 -- sandbox.Resolve confines resolved within the sandbox root.
 	contents, err := os.ReadFile(resolved)
 	if err != nil {
 		return nil, fmt.Errorf("templates: read %q: %w", path, err)

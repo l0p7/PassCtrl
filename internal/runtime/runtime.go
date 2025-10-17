@@ -375,10 +375,9 @@ func (p *Pipeline) ServeAuth(w http.ResponseWriter, r *http.Request) {
 		state.Rule.Outcome = entry.Decision
 	}
 
-	results := make([]pipeline.Result, 0, len(endpointRuntime.agents))
 	for _, ag := range endpointRuntime.agents {
-		res := ag.Execute(r.Context(), r, state)
-		results = append(results, res)
+		// Agents publish their observable state via the shared pipeline.State.
+		_ = ag.Execute(r.Context(), r, state)
 	}
 
 	if state.Response.Status == 0 {
@@ -633,13 +632,13 @@ func (p *Pipeline) installFallbackEndpoint() {
 		slog.String("agent", "rule_execution"),
 		slog.String("endpoint", "default"),
 	)
-	newRuleExecutionAgent(nil, ruleExecutionLogger, p.templateRenderer),
-		agents := []pipeline.Agent{
+	trusted := defaultTrustedNetworks()
+	agents := []pipeline.Agent{
 		&serverAgent{},
 		admission.New(trusted, false),
 		forwardpolicy.New(forwardpolicy.DefaultConfig()),
 		rulechain.NewAgent(rulechain.DefaultDefinitions(p.templateRenderer)),
-		newRuleExecutionAgent(nil, p.logger.With(slog.String("agent", "rule_execution"), slog.String("endpoint", "default")), p.templateRenderer),
+		newRuleExecutionAgent(nil, ruleExecutionLogger, p.templateRenderer),
 		responsepolicy.NewWithConfig(responsepolicy.Config{Endpoint: "default", Renderer: p.templateRenderer}),
 		resultcaching.New(resultcaching.Config{
 			Cache:   p.cache,

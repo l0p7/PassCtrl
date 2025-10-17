@@ -34,28 +34,32 @@ func (a *Agent) Execute(_ context.Context, r *http.Request, state *pipeline.Stat
 	state.Admission.Decision = ""
 	state.Admission.Snapshot = nil
 
-    if state.Admission.ForwardedFor != "" || state.Admission.Forwarded != "" {
-        addr, err := parseRemoteIP(r.RemoteAddr)
-        if err != nil {
-            state.Admission.Authenticated = false
-            state.Admission.Reason = "invalid remote address"
-            return a.finish(state, "fail")
-        }
+	if state.Admission.ForwardedFor != "" || state.Admission.Forwarded != "" {
+		addr, err := parseRemoteIP(r.RemoteAddr)
+		if err != nil {
+			state.Admission.Authenticated = false
+			state.Admission.Reason = "invalid remote address"
+			return a.finish(state, "fail")
+		}
 
-        chain, err := a.prepareForwardedMetadata(r, state)
-        if err != nil {
-            if !a.handleUntrustedProxy(r, state, err.Error(), "forwarded headers stripped due to invalid metadata") {
-                return a.finish(state, "fail")
-            }
-        } else if !a.isTrusted(addr) {
-            if !a.handleUntrustedProxy(r, state, "untrusted proxy rejected", "forwarded headers stripped from untrusted proxy") {
-                return a.finish(state, "fail")
-            }
-        } else if len(chain) > 0 {
-            state.Admission.TrustedProxy = true
-            state.Admission.ClientIP = chain[0].String()
-        }
-    }
+		chain, err := a.prepareForwardedMetadata(r, state)
+		if err != nil {
+			if !a.handleUntrustedProxy(r, state, err.Error(), "forwarded headers stripped due to invalid metadata") {
+				return a.finish(state, "fail")
+			}
+		} else if !a.forwardedChainTrusted(chain) {
+			if !a.handleUntrustedProxy(r, state, "forwarded chain includes untrusted proxy", "forwarded headers stripped due to untrusted proxy chain") {
+				return a.finish(state, "fail")
+			}
+		} else if !a.isTrusted(addr) {
+			if !a.handleUntrustedProxy(r, state, "untrusted proxy rejected", "forwarded headers stripped from untrusted proxy") {
+				return a.finish(state, "fail")
+			}
+		} else if len(chain) > 0 {
+			state.Admission.TrustedProxy = true
+			state.Admission.ClientIP = chain[0].String()
+		}
+	}
 
 	if token := r.Header.Get("Authorization"); token != "" {
 		state.Admission.Authenticated = true

@@ -34,11 +34,11 @@ func TestNewSandboxValidatesRoot(t *testing.T) {
 func TestSandboxResolve(t *testing.T) {
 	dir := t.TempDir()
 	nested := filepath.Join(dir, "templates")
-	if err := os.MkdirAll(nested, 0o755); err != nil {
+	if err := os.MkdirAll(nested, 0o750); err != nil {
 		t.Fatalf("mkdir nested: %v", err)
 	}
 	target := filepath.Join(nested, "example.tmpl")
-	if err := os.WriteFile(target, []byte("hi"), 0o644); err != nil {
+	if err := os.WriteFile(target, []byte("hi"), 0o600); err != nil {
 		t.Fatalf("write file: %v", err)
 	}
 

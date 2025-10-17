@@ -1,32 +1,32 @@
 package rulechain
 
 import (
-    "net/http"
-    "net/textproto"
-    "net/url"
-    "strings"
+	"net/http"
+	"net/textproto"
+	"net/url"
+	"strings"
 
-    "github.com/l0p7/passctrl/internal/runtime/forwardpolicy"
-    "github.com/l0p7/passctrl/internal/runtime/pipeline"
-    "github.com/l0p7/passctrl/internal/templates"
+	"github.com/l0p7/passctrl/internal/runtime/forwardpolicy"
+	"github.com/l0p7/passctrl/internal/runtime/pipeline"
+	"github.com/l0p7/passctrl/internal/templates"
 )
 
 // BackendDefinition captures the configuration required to contact a backend
 // API while evaluating a rule.
 type BackendDefinition struct {
-    URL                 string
-    Method              string
-    ForwardProxyHeaders bool
-    Headers             backendForwardRules
-    Query               backendForwardRules
-    Body                string
-    BodyFile            string
-    // BodyTemplate, when present, is rendered against the pipeline state and
-    // used as the request body (takes precedence over Body/BodyFile literals).
-    BodyTemplate        *templates.Template
-    Accepted            []int
-    accepted            map[int]struct{}
-    pagination          BackendPagination
+	URL                 string
+	Method              string
+	ForwardProxyHeaders bool
+	Headers             backendForwardRules
+	Query               backendForwardRules
+	Body                string
+	BodyFile            string
+	// BodyTemplate, when present, is rendered against the pipeline state and
+	// used as the request body (takes precedence over Body/BodyFile literals).
+	BodyTemplate *templates.Template
+	Accepted     []int
+	accepted     map[int]struct{}
+	pagination   BackendPagination
 }
 
 // BackendPagination details how pagination should be performed when querying a
