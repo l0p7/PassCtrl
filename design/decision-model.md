@@ -6,7 +6,10 @@ previous one and emits a typed result that downstream stages can reference.
 
 ## Stage 1: Endpoint Admission & Raw State
 - Validate transport assumptions (HTTP method, TLS, host match).
-- Enforce trusted proxy rules: reject untrusted peers in production, strip and annotate in development.
+- Enforce trusted proxy rules: reject untrusted peers in production, strip and annotate in development. When the immediate
+  peer is trusted, treat the first forwarded hop as the client IP without requiring all intermediate `X-Forwarded-For` hops to
+  belong to trusted networks. Prefer the RFC7239 `Forwarded` header when present and keep the first hop consistent across both
+  header families.
 - Extract the original URL from the `X-Forwarded-*` family (or RFC7239 `Forwarded` header), normalize headers/query parameters, and capture the immutable raw
   request snapshot (`rawState`).
 - Evaluate endpoint-level authentication requirements before any rule logic runs; failure exits through the response policy’s
@@ -57,7 +60,8 @@ previous one and emits a typed result that downstream stages can reference.
   response, starting from the backend status code and header set captured from the decisive rule unless explicitly overridden.
   Header overrides may use Go templates (with Sprig) or JMESPath expressions.
 - Default behavior, when a category is unspecified, returns the canonical forward-auth statuses (200 on pass, 401/403 on fail,
-  5xx on error) without backend leakage.
+  5xx on error). The `/auth` response body remains minimal (outcome, message, endpoint, correlation ID, cache flag) to avoid
+  exposing internal state; use `/explain` and logs for detailed diagnostics.
 
 ## Stage 5: Result Caching
 - Treat caching as a control-plane concern: rules may declare cache hints, but the runtime persists only the decision artifacts

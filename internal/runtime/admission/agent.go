@@ -47,12 +47,12 @@ func (a *Agent) Execute(_ context.Context, r *http.Request, state *pipeline.Stat
 			if !a.handleUntrustedProxy(r, state, err.Error(), "forwarded headers stripped due to invalid metadata") {
 				return a.finish(state, "fail")
 			}
-		} else if !a.isTrusted(addr) {
-			if !a.handleUntrustedProxy(r, state, "untrusted proxy rejected", "forwarded headers stripped from untrusted proxy") {
+		} else if !a.forwardedChainTrusted(chain) {
+			if !a.handleUntrustedProxy(r, state, "forwarded chain includes untrusted proxy", "forwarded headers stripped due to untrusted proxy chain") {
 				return a.finish(state, "fail")
 			}
-		} else if !a.forwardedChainTrusted(chain) {
-			if !a.handleUntrustedProxy(r, state, "forwarded chain included untrusted hop", "forwarded headers stripped after untrusted hop") {
+		} else if !a.isTrusted(addr) {
+			if !a.handleUntrustedProxy(r, state, "untrusted proxy rejected", "forwarded headers stripped from untrusted proxy") {
 				return a.finish(state, "fail")
 			}
 		} else if len(chain) > 0 {

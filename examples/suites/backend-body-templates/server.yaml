@@ -1,0 +1,56 @@
+server:
+  logging:
+    level: info
+    format: json
+    correlationHeader: X-Request-ID
+  templates:
+    templatesFolder: ./templates
+    templatesAllowEnv: true
+    templatesAllowedEnv: [API_TOKEN]
+
+endpoints:
+  templated:
+    description: Backend body templating examples
+    forwardRequestPolicy:
+      headers:
+        allow: [authorization]
+      query:
+        allow: []
+    rules:
+      - name: call-inline
+      - name: call-file
+    responsePolicy:
+      pass:
+        status: 200
+        body: "Okay"
+      fail:
+        status: 403
+
+rules:
+  call-inline:
+    description: Inline backendApi.body with templates
+    backendApi:
+      url: http://localhost:9000/echo           # replace with your echo endpoint
+      method: POST
+      headers:
+        custom:
+          Content-Type: application/json
+      body: |
+        {
+          "client": "{{ .admission.clientIp }}",
+          "auth": "{{ index .forward.Headers \"authorization\" }}"
+        }
+    conditions:
+      pass: ["true"]
+
+  call-file:
+    description: File-backed backendApi.bodyFile rendered via sandbox
+    backendApi:
+      url: http://localhost:9000/echo           # replace with your echo endpoint
+      method: POST
+      headers:
+        custom:
+          Content-Type: application/json
+      bodyFile: "{{ printf \"requests/%s.json.tmpl\" \"payload\" }}"
+    conditions:
+      pass: ["true"]

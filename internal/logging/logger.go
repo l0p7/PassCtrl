@@ -2,10 +2,9 @@ package logging
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
-
-	"log/slog"
 
 	"github.com/l0p7/passctrl/internal/config"
 )

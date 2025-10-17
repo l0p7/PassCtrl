@@ -13,17 +13,11 @@ import (
 
 	"github.com/l0p7/passctrl/internal/config"
 	"github.com/l0p7/passctrl/internal/runtime/cache"
-	"github.com/l0p7/passctrl/internal/runtime/pipeline"
 	"github.com/l0p7/passctrl/internal/server"
 )
 
-type authPayload struct {
-	Outcome       string            `json:"outcome"`
-	Message       string            `json:"message"`
-	Agents        []pipeline.Result `json:"agents"`
-	Endpoint      string            `json:"endpoint"`
-	CorrelationID string            `json:"correlationId"`
-}
+// The /auth response is intentionally near-empty by default; tests should not
+// depend on a JSON payload structure.
 
 type explainPayload struct {
 	Status             string                  `json:"status"`
@@ -87,22 +81,12 @@ func TestPipelineEndpointSelectionAndRules(t *testing.T) {
 			t.Fatalf("expected correlation header to echo request id, got %q", header)
 		}
 
-		var payload authPayload
-		if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
-			t.Fatalf("failed to decode response: %v", err)
+		// Minimal response: only the body when intentionally constructed.
+		if got := strings.TrimSpace(rec.Body.String()); got != "denied by rule" {
+			t.Fatalf("expected minimal body with constructed message, got %q", got)
 		}
-
-		if payload.Outcome != "fail" {
-			t.Fatalf("expected fail outcome, got %s", payload.Outcome)
-		}
-		if payload.Message != "denied by rule" {
-			t.Fatalf("expected message from rule, got %s", payload.Message)
-		}
-		if payload.Endpoint != "deny" {
-			t.Fatalf("expected endpoint field to reflect selection, got %s", payload.Endpoint)
-		}
-		if payload.CorrelationID != "deny-123" {
-			t.Fatalf("expected correlationId to be echoed, got %s", payload.CorrelationID)
+		if header := rec.Header().Get("X-Request-ID"); header != "deny-123" {
+			t.Fatalf("expected correlation header to echo request id, got %q", header)
 		}
 	})
 
@@ -120,15 +104,12 @@ func TestPipelineEndpointSelectionAndRules(t *testing.T) {
 			t.Fatalf("expected generated correlation header when request omitted it")
 		}
 
-		var payload authPayload
-		if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
-			t.Fatalf("failed to decode response: %v", err)
+		// Default pass has no body unless intentionally constructed.
+		if got := strings.TrimSpace(rec.Body.String()); got != "" {
+			t.Fatalf("expected empty body on pass by default, got %q", got)
 		}
-		if payload.Outcome != "pass" {
-			t.Fatalf("expected pass outcome, got %s", payload.Outcome)
-		}
-		if payload.CorrelationID == "" {
-			t.Fatalf("expected response payload to include generated correlationId")
+		if header := rec.Header().Get("X-Request-ID"); header == "" {
+			t.Fatalf("expected generated correlation header when request omitted it")
 		}
 	})
 
@@ -312,12 +293,9 @@ func TestPipelineSingleEndpointDefaults(t *testing.T) {
 		t.Fatalf("expected status 200, got %d", rec.Code)
 	}
 
-	var payload authPayload
-	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("failed to decode response: %v", err)
-	}
-	if payload.Endpoint != "solo" {
-		t.Fatalf("expected default endpoint to be applied, got %s", payload.Endpoint)
+	// Minimal body on pass by default.
+	if got := strings.TrimSpace(rec.Body.String()); got != "" {
+		t.Fatalf("expected empty body on pass by default, got %q", got)
 	}
 }
 
@@ -470,13 +448,7 @@ func TestPipelineReloadInvalidatesCache(t *testing.T) {
 		t.Fatalf("expected reload to force fresh evaluation, got %d", rec.Code)
 	}
 
-	var payload authPayload
-	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("failed to decode post-reload payload: %v", err)
-	}
-	if payload.Outcome != "fail" {
-		t.Fatalf("expected fail outcome after reload, got %s", payload.Outcome)
-	}
+	// Minimal body; just verify status code reflects fail after reload.
 
 	// Verify explain metadata now reflects the new source.
 	explainReq := httptest.NewRequest(http.MethodGet, "http://example.com/explain", http.NoBody)
@@ -491,5 +463,138 @@ func TestPipelineReloadInvalidatesCache(t *testing.T) {
 	}
 	if len(explain.RuleSources) != 1 || explain.RuleSources[0] != "updated" {
 		t.Fatalf("expected rule sources to reflect reload, got %v", explain.RuleSources)
+	}
+}
+
+func TestAuthResponseIsMinimal(t *testing.T) {
+	opts := PipelineOptions{
+		Cache: cache.NewMemory(1 * time.Minute),
+		Endpoints: map[string]config.EndpointConfig{
+			"solo": {
+				ForwardRequestPolicy: config.EndpointForwardRequestPolicyConfig{
+					Query: config.ForwardRuleCategoryConfig{Allow: []string{"allow"}},
+				},
+				Rules: []config.EndpointRuleReference{{Name: "solo-rule"}},
+			},
+		},
+		Rules: map[string]config.RuleConfig{
+			"solo-rule": {Conditions: config.RuleConditionConfig{Pass: []string{`forward.query["allow"] == "true"`}}},
+		},
+		CorrelationHeader: "X-Request-ID",
+	}
+
+	pipe := NewPipeline(nil, opts)
+	handler := server.NewPipelineHandler(pipe)
+
+	// Pass case
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/solo/auth?allow=true", http.NoBody)
+	req.Header.Set("Authorization", "token")
+	req.Header.Set("X-Request-ID", "minimal-1")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+	if got := strings.TrimSpace(rec.Body.String()); got != "" {
+		t.Fatalf("expected empty response body on pass, got %q", got)
+	}
+
+	// Fail case in a fresh pipeline to avoid cache influence
+	failOpts := PipelineOptions{
+		Cache: cache.NewMemory(1 * time.Minute),
+		Endpoints: map[string]config.EndpointConfig{
+			"solo": {
+				ForwardRequestPolicy: config.EndpointForwardRequestPolicyConfig{
+					Query: config.ForwardRuleCategoryConfig{Allow: []string{"deny"}},
+				},
+				Rules: []config.EndpointRuleReference{{Name: "solo-rule"}},
+			},
+		},
+		Rules: map[string]config.RuleConfig{
+			"solo-rule": {Conditions: config.RuleConditionConfig{Fail: []string{`forward.query["deny"] == "true"`}}},
+		},
+		CorrelationHeader: "X-Request-ID",
+	}
+	failPipe := NewPipeline(nil, failOpts)
+	failHandler := server.NewPipelineHandler(failPipe)
+	req = httptest.NewRequest(http.MethodGet, "http://example.com/solo/auth?deny=true", http.NoBody)
+	req.Header.Set("Authorization", "token")
+	req.Header.Set("X-Request-ID", "minimal-2")
+	rec = httptest.NewRecorder()
+	failHandler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected status 403 on fail, got %d", rec.Code)
+	}
+	if got := strings.TrimSpace(rec.Body.String()); got != "" {
+		t.Fatalf("expected empty response body on fail, got %q", got)
+	}
+}
+
+func TestEndpointResponsePolicyBodiesAndHeaders(t *testing.T) {
+	// Endpoint defines pass/fail bodies and custom header with templating.
+	opts := PipelineOptions{
+		Cache: cache.NewMemory(1 * time.Minute),
+		Endpoints: map[string]config.EndpointConfig{
+			"e": {
+				ResponsePolicy: config.EndpointResponsePolicyConfig{
+					Pass: config.EndpointResponseConfig{
+						Body: "Okay",
+						Headers: config.ForwardRuleCategoryConfig{
+							Custom: map[string]string{
+								"X-Custom":     "ep-{{ .endpoint }}",
+								"Content-Type": "application/json",
+							},
+						},
+					},
+					Fail: config.EndpointResponseConfig{Body: "Denied"},
+				},
+				Rules: []config.EndpointRuleReference{{Name: "r"}},
+			},
+		},
+		Rules: map[string]config.RuleConfig{
+			"r": {Conditions: config.RuleConditionConfig{Pass: []string{"true"}}},
+		},
+		CorrelationHeader: "X-Request-ID",
+	}
+	pipe := NewPipeline(nil, opts)
+	handler := server.NewPipelineHandler(pipe)
+
+	// Pass path returns configured body and header
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/e/auth", http.NoBody)
+	req.Header.Set("Authorization", "token")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+	if got := strings.TrimSpace(rec.Body.String()); got != "Okay" {
+		t.Fatalf("expected endpoint pass body, got %q", got)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Fatalf("expected response policy content type to be preserved, got %q", ct)
+	}
+	if h := rec.Header().Get("X-Custom"); h != "ep-e" {
+		t.Fatalf("expected custom header rendered with endpoint, got %q", h)
+	}
+
+	// Reload rules to force fail outcome
+	bundle := config.RuleBundle{
+		Endpoints: map[string]config.EndpointConfig{"e": {ResponsePolicy: opts.Endpoints["e"].ResponsePolicy, Rules: []config.EndpointRuleReference{{Name: "r"}}}},
+		Rules:     map[string]config.RuleConfig{"r": {Conditions: config.RuleConditionConfig{Fail: []string{"true"}}}},
+	}
+	pipe.Reload(context.Background(), bundle)
+
+	req = httptest.NewRequest(http.MethodGet, "http://example.com/e/auth", http.NoBody)
+	req.Header.Set("Authorization", "token")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected status 403, got %d", rec.Code)
+	}
+	if got := strings.TrimSpace(rec.Body.String()); got != "Denied" {
+		t.Fatalf("expected endpoint fail body, got %q", got)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "text/plain; charset=utf-8" {
+		t.Fatalf("expected default content type when none configured, got %q", ct)
 	}
 }

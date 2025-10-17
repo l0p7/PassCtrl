@@ -91,7 +91,7 @@ func TestWatchRulesFolderReloads(t *testing.T) {
 
 	dir := t.TempDir()
 	rulesDir := filepath.Join(dir, "rules")
-	if err := os.MkdirAll(rulesDir, 0o755); err != nil {
+	if err := os.MkdirAll(rulesDir, 0o750); err != nil {
 		t.Fatalf("failed to create rules folder: %v", err)
 	}
 

@@ -47,7 +47,9 @@ func NewRedis(cfg RedisConfig) (DecisionCache, error) {
 	}
 
 	if cfg.TLS.Enabled {
-		tlsConfig := &tls.Config{}
+		tlsConfig := &tls.Config{
+			MinVersion: tls.VersionTLS12,
+		}
 		if cfg.TLS.CAFile != "" {
 			caData, err := os.ReadFile(cfg.TLS.CAFile)
 			if err != nil {

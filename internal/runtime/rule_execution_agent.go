@@ -20,15 +20,16 @@ import (
 )
 
 type ruleExecutionAgent struct {
-	client *http.Client
-	logger *slog.Logger
+	client   *http.Client
+	logger   *slog.Logger
+	renderer *templates.Renderer
 }
 
-func newRuleExecutionAgent(client *http.Client, logger *slog.Logger) *ruleExecutionAgent {
+func newRuleExecutionAgent(client *http.Client, logger *slog.Logger, renderer *templates.Renderer) *ruleExecutionAgent {
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}
 	}
-	return &ruleExecutionAgent{client: client, logger: logger}
+	return &ruleExecutionAgent{client: client, logger: logger, renderer: renderer}
 }
 
 func (a *ruleExecutionAgent) Name() string { return "rule_execution" }
@@ -216,7 +217,32 @@ func (a *ruleExecutionAgent) invokeBackend(ctx context.Context, backend rulechai
 		}
 
 		var body io.Reader
-		if strings.TrimSpace(backend.Body) != "" {
+		var bodyText string
+		if backend.BodyTemplate != nil {
+			rendered, err := backend.BodyTemplate.Render(state.TemplateContext())
+			if err != nil {
+				return fmt.Errorf("backend body render: %w", err)
+			}
+
+			// If the rendered string looks like a file path and a renderer is
+			// available, treat it as a template file reference; otherwise use the
+			// rendered string as the body contents.
+			content := rendered
+			trimmedRendered := strings.TrimSpace(rendered)
+			if trimmedRendered != "" && a.renderer != nil {
+				if fileTmpl, err := a.renderer.CompileFile(trimmedRendered); err == nil {
+					output, err := fileTmpl.Render(state.TemplateContext())
+					if err != nil {
+						return fmt.Errorf("backend body file render: %w", err)
+					}
+					content = output
+				}
+			}
+
+			bodyText = content
+			body = strings.NewReader(content)
+		} else if strings.TrimSpace(backend.Body) != "" {
+			bodyText = backend.Body
 			body = strings.NewReader(backend.Body)
 		}
 
@@ -225,8 +251,9 @@ func (a *ruleExecutionAgent) invokeBackend(ctx context.Context, backend rulechai
 			return fmt.Errorf("backend request build: %w", err)
 		}
 		if body != nil {
+			snap := bodyText
 			req.GetBody = func() (io.ReadCloser, error) {
-				return io.NopCloser(strings.NewReader(backend.Body)), nil
+				return io.NopCloser(strings.NewReader(snap)), nil
 			}
 		}
 

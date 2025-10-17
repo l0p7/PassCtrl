@@ -8,6 +8,7 @@ import (
 
 	"github.com/l0p7/passctrl/internal/runtime/forwardpolicy"
 	"github.com/l0p7/passctrl/internal/runtime/pipeline"
+	"github.com/l0p7/passctrl/internal/templates"
 )
 
 // BackendDefinition captures the configuration required to contact a backend
@@ -20,9 +21,12 @@ type BackendDefinition struct {
 	Query               backendForwardRules
 	Body                string
 	BodyFile            string
-	Accepted            []int
-	accepted            map[int]struct{}
-	pagination          BackendPagination
+	// BodyTemplate, when present, is rendered against the pipeline state and
+	// used as the request body (takes precedence over Body/BodyFile literals).
+	BodyTemplate *templates.Template
+	Accepted     []int
+	accepted     map[int]struct{}
+	pagination   BackendPagination
 }
 
 // BackendPagination details how pagination should be performed when querying a

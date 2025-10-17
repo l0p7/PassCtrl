@@ -231,6 +231,21 @@ func compileDefinition(env *expr.Environment, spec DefinitionSpec, renderer *tem
 		} else {
 			def.ErrorTemplate = tmpl
 		}
+		// Compile backend request body templates
+		if strings.TrimSpace(spec.Backend.Body) != "" {
+			if tmpl, err := renderer.CompileInline(fmt.Sprintf("%s:backend:body", name), spec.Backend.Body); err == nil {
+				def.Backend.BodyTemplate = tmpl
+			} else {
+				return Definition{}, fmt.Errorf("backend body template: %w", err)
+			}
+		} else if strings.TrimSpace(spec.Backend.BodyFile) != "" {
+			name := fmt.Sprintf("%s:backend:bodyFile", name)
+			tmpl, err := renderer.CompileInline(name, spec.Backend.BodyFile)
+			if err != nil {
+				return Definition{}, fmt.Errorf("backend body file template compile: %w", err)
+			}
+			def.Backend.BodyTemplate = tmpl
+		}
 	}
 	return def, nil
 }

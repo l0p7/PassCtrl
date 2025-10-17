@@ -41,15 +41,16 @@ map configuration or implementation work to the correct component.
 - **Focus**: Execute an individual rule, including credential handling, backend
   orchestration, pagination, and condition evaluation.
 - **Highlights**: Supports credential transformation (`forwardAs`), renders backend
-  requests via templates, honors rule-level caching constraints, and now
+  requests via templates (including `backendApi.body` and `backendApi.bodyFile` scoped to the template sandbox), honors rule-level caching constraints, and now
   evaluates declarative `whenAll`/`failWhen`/`errorWhen` condition blocks passed from
   the chain agent while populating per-rule history.【F:design/system-agents.md†L73-L87】
 
 ## 6. Response Policy
 - **Focus**: Render the final `/auth` response based on the chain outcome, endpoint
   policy, and rule-provided payloads.
-- **Highlights**: Applies default forward-auth statuses, merges header directives, and
-  links responses to chain history in logs.【F:design/system-agents.md†L87-L95】
+- **Highlights**: Applies default forward-auth statuses, merges header directives, and links responses to chain history in logs.
+  The `/auth` body is intentionally near-empty; only explicitly constructed bodies (via rules/templates) are emitted. Use `/explain`
+  and debug logs for rich diagnostics.【F:design/system-agents.md†L87-L95】
 
 ## 7. Result Caching
 - **Focus**: Memoise rule and endpoint outcomes while guarding against stale or

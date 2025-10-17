@@ -33,11 +33,11 @@ func TestRendererInlineEnvAllowlist(t *testing.T) {
 func TestRendererCompileFileHonoursSandbox(t *testing.T) {
 	dir := t.TempDir()
 	allowedDir := filepath.Join(dir, "templates")
-	if err := os.MkdirAll(allowedDir, 0o755); err != nil {
+	if err := os.MkdirAll(allowedDir, 0o750); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
 	file := filepath.Join(allowedDir, "body.txt")
-	if err := os.WriteFile(file, []byte("hello {{ .name }}"), 0o644); err != nil {
+	if err := os.WriteFile(file, []byte("hello {{ .name }}"), 0o600); err != nil {
 		t.Fatalf("write template: %v", err)
 	}
 	sandbox, err := NewSandbox(allowedDir, false, nil)
