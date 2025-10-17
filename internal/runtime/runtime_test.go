@@ -16,7 +16,7 @@ import (
     "github.com/l0p7/passctrl/internal/server"
 )
 
-// /auth response is intentionally near-empty by default; tests should not
+// The /auth response is intentionally near-empty by default; tests should not
 // depend on a JSON payload structure.
 
 type explainPayload struct {

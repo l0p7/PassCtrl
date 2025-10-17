@@ -227,17 +227,17 @@ func (a *ruleExecutionAgent) invokeBackend(ctx context.Context, backend rulechai
         // If the rendered string looks like a file path and a renderer is
         // available, treat it as a template file reference; otherwise use the
         // rendered string as the body contents.
-        content := rendered
-        trimmed := strings.TrimSpace(rendered)
-        if trimmed != "" && a.renderer != nil {
-            if fileTmpl, err := a.renderer.CompileFile(trimmed); err == nil {
-                output, err := fileTmpl.Render(state.TemplateContext())
-                if err != nil {
-                    return fmt.Errorf("backend body file render: %w", err)
-                }
-                content = output
-            }
-        }
+		content := rendered
+		trimmedRendered := strings.TrimSpace(rendered)
+		if trimmedRendered != "" && a.renderer != nil {
+			if fileTmpl, err := a.renderer.CompileFile(trimmedRendered); err == nil {
+				output, err := fileTmpl.Render(state.TemplateContext())
+				if err != nil {
+					return fmt.Errorf("backend body file render: %w", err)
+				}
+				content = output
+			}
+		}
 
         bodyText = content
         body = strings.NewReader(content)
