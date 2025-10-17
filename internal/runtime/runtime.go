@@ -424,7 +424,9 @@ func (p *Pipeline) ServeAuth(w http.ResponseWriter, r *http.Request) {
 
 	// Set headers and status before writing body (if any).
 	if body != "" {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		if w.Header().Get("Content-Type") == "" {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		}
 	}
 	w.WriteHeader(state.Response.Status)
 	if body != "" {

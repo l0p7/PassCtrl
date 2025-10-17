@@ -537,7 +537,15 @@ func TestEndpointResponsePolicyBodiesAndHeaders(t *testing.T) {
 		Endpoints: map[string]config.EndpointConfig{
 			"e": {
 				ResponsePolicy: config.EndpointResponsePolicyConfig{
-					Pass: config.EndpointResponseConfig{Body: "Okay", Headers: config.ForwardRuleCategoryConfig{Custom: map[string]string{"X-Custom": "ep-{{ .endpoint }}"}}},
+					Pass: config.EndpointResponseConfig{
+						Body: "Okay",
+						Headers: config.ForwardRuleCategoryConfig{
+							Custom: map[string]string{
+								"X-Custom":     "ep-{{ .endpoint }}",
+								"Content-Type": "application/json",
+							},
+						},
+					},
 					Fail: config.EndpointResponseConfig{Body: "Denied"},
 				},
 				Rules: []config.EndpointRuleReference{{Name: "r"}},
@@ -562,6 +570,9 @@ func TestEndpointResponsePolicyBodiesAndHeaders(t *testing.T) {
 	if got := strings.TrimSpace(rec.Body.String()); got != "Okay" {
 		t.Fatalf("expected endpoint pass body, got %q", got)
 	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Fatalf("expected response policy content type to be preserved, got %q", ct)
+	}
 	if h := rec.Header().Get("X-Custom"); h != "ep-e" {
 		t.Fatalf("expected custom header rendered with endpoint, got %q", h)
 	}
@@ -582,5 +593,8 @@ func TestEndpointResponsePolicyBodiesAndHeaders(t *testing.T) {
 	}
 	if got := strings.TrimSpace(rec.Body.String()); got != "Denied" {
 		t.Fatalf("expected endpoint fail body, got %q", got)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "text/plain; charset=utf-8" {
+		t.Fatalf("expected default content type when none configured, got %q", ct)
 	}
 }
