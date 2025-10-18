@@ -154,3 +154,14 @@ func TestNextLinkFromHeader(t *testing.T) {
 		t.Fatalf("expected no link for junk header values, got %q", got)
 	}
 }
+
+func TestBackendDefinitionIsConfigured(t *testing.T) {
+	var backend BackendDefinition
+	if backend.IsConfigured() {
+		t.Fatalf("expected zero backend to be reported as not configured")
+	}
+	backend.URL = "https://api.example.com"
+	if !backend.IsConfigured() {
+		t.Fatalf("expected backend with URL to be configured")
+	}
+}

@@ -68,3 +68,17 @@ func TestCompileValue(t *testing.T) {
 		t.Fatalf("expected EvalBool to fail for non-boolean program")
 	}
 }
+
+func TestProgramSource(t *testing.T) {
+	env, err := NewEnvironment()
+	if err != nil {
+		t.Fatalf("new environment: %v", err)
+	}
+	program, err := env.Compile(`  true `)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	if got := program.Source(); got != "true" {
+		t.Fatalf("expected trimmed source, got %q", got)
+	}
+}

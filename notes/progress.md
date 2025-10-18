@@ -19,6 +19,10 @@
 ## Testing
 - Established baseline unit tests covering configuration defaults, loader precedence (files and environment), logging validation, and server lifecycle behavior.
 - Added comprehensive runtime agent coverage validating pipeline state transitions and caching behavior.
+- Landed an opt-in CLI integration harness (`cmd/integration_test.go`) gated by `PASSCTRL_INTEGRATION` that launches the binary,
+  polls `/auth` with a bearer token, and captures stdout/stderr for debugging when the subprocess fails.
+- Backfilled critical unit coverage across the pipeline lifecycle (`Close`, fallback endpoint wiring), cache invalidation paths,
+  rulechain defaults, and renderer metadata helpers to eliminate the remaining uncovered execution paths.
 
 ## Configuration Updates
 - Nested template environment controls inside the `server.templates` block, updated defaults, and ensured loader + tests respect the new hierarchy.

@@ -1,2 +1,7 @@
+# Go Related Ignores
 /.gocache/
 /.gomodcache/
+/.golangci-lint/
+
+coverage.out
+lint.txt

@@ -186,3 +186,18 @@ func TestCompileProgramsSkipsEmptyExpressions(t *testing.T) {
 		t.Fatalf("expected expression to be trimmed, got %q", src)
 	}
 }
+
+func TestDefaultDefinitions(t *testing.T) {
+	defs := DefaultDefinitions(nil)
+	if len(defs) == 0 {
+		t.Fatalf("expected default definitions to be returned")
+	}
+	for _, def := range defs {
+		if def.Name == "" {
+			t.Fatalf("default definition should have a name")
+		}
+		if def.Backend.IsConfigured() {
+			t.Fatalf("default definitions should not configure a backend")
+		}
+	}
+}

@@ -12,6 +12,8 @@ artifacts authoritative, and align code changes with the runtime agents defined 
 - **Plan deliberately**: break work into verifiable steps. Prefer local reasoning and diff inspection over blind editing.
 - **Validate and document**: run focused tests or linters when possible, summarize results, and update design docs when behavior
   shifts.
+- **Run lint/format checks** when touching Go code. The repo relies on `golangci-lint` (see below) and will reject PRs with
+  outstanding lint or formatting issues. Prefer to run it locally before finalizing a change set.
 
 ## Implementation Heuristics
 - Preserve the separation of concerns outlined in `design/system-agents.md`; avoid leaking responsibilities across packages.
@@ -44,6 +46,12 @@ artifacts authoritative, and align code changes with the runtime agents defined 
 - Surface new operational insights or caveats in `design/technical-requirements.md` if they influence deployment posture.
 - Keep `/docs` and `/examples` aligned with the runtime. Any change that affects user workflows or agent flows should update the
   public-facing guides and runnable samples alongside design artifacts.
+- Run `golangci-lint` with repository-local caches to avoid permission issues in restricted environments. Example:
+  ```bash
+  mkdir -p .gocache .gomodcache .golangci-lint
+  GOCACHE=$(pwd)/.gocache GOMODCACHE=$(pwd)/.gomodcache GOLANGCI_LINT_CACHE=$(pwd)/.golangci-lint golangci-lint run ./...
+  ```
+  This command executes the enabled formatters (`gofmt`, `gofumpt`, `goimports`, `gci`) and linters in one pass.
 
 ## Quick References
 - Runtime agent contracts: `design/system-agents.md`

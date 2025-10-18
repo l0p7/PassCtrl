@@ -11,7 +11,7 @@
 - Maintain change logs or ADR-style notes as features land to keep future contributors oriented.
 - Keep `AGENTS.md` and `DEPENDENCIES.md` aligned with implementation changes so the documented library guidance stays authoritative.
 - Document the new cache reload invalidation hooks and package layout across design and MkDocs references when the broader caching docs are refreshed.
+- Expand the CLI integration harness to assert `/health`/`/explain` flows, metrics availability, and hot-reload behavior once the opt-in gate (`PASSCTRL_INTEGRATION`) lands in CI.
 
 ## Governance & Dependency Strategy
 - Re-evaluate adopting maintained libraries for routing (`github.com/go-chi/chi/v5`) and resilient HTTP (`github.com/hashicorp/go-retryablehttp`) after the routing facade stabilizes; defer `chi` until middleware or complex path handling is required. Metrics instrumentation now uses `github.com/prometheus/client_golang`.
-

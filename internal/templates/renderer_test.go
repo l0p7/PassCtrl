@@ -76,3 +76,23 @@ func TestRendererStripsSprigFileHelpers(t *testing.T) {
 		t.Fatalf("expected readFile usage to fail")
 	}
 }
+
+func TestRendererSandboxAccessorAndTemplateName(t *testing.T) {
+	dir := t.TempDir()
+	sandbox, err := NewSandbox(dir, false, nil)
+	if err != nil {
+		t.Fatalf("sandbox create: %v", err)
+	}
+	renderer := NewRenderer(sandbox)
+	if renderer.Sandbox() != sandbox {
+		t.Fatalf("expected sandbox accessor to return underlying sandbox")
+	}
+
+	tmpl, err := renderer.CompileInline("example", "static")
+	if err != nil {
+		t.Fatalf("compile inline: %v", err)
+	}
+	if tmpl.Name() != "example" {
+		t.Fatalf("expected template name to be preserved, got %q", tmpl.Name())
+	}
+}
