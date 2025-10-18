@@ -94,6 +94,18 @@ avoid exposing internal state.
   Go 1.25 toolchain locally (for example with `go toolchain install go1.25.0`) and rebuild `golangci-lint` with that toolchain
   (`go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest`) before running the suite.
 
+## Integration Testing
+PassCtrl ships an opt-in CLI integration test under `cmd/integration_test.go`. The test boots the server via `go run` with a
+temporary configuration, waits for `/auth` readiness, and performs a smoke request. To avoid long-running processes during regular
+unit test runs, the suite is skipped by default. Enable it with:
+
+```bash
+PASSCTRL_INTEGRATION=1 go test ./cmd -run TestIntegrationServerStartup -count=1
+```
+
+The harness automatically allocates a free loopback port and captures server stdout/stderr when the test fails so you can inspect
+startup issues without scrolling through standard test output.
+
 ## HTTP Surface
 Initial routes exposed by the runtime:
 - `/<endpoint>/auth` – forward-auth decision endpoint. Callers route requests to a configured endpoint

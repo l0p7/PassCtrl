@@ -77,6 +77,33 @@ func TestMemoryCacheExpiry(t *testing.T) {
 	}
 }
 
+func TestMemoryCacheInvalidateOnReload(t *testing.T) {
+	cache := NewMemory(1 * time.Minute)
+	ctx := context.Background()
+
+	entry := Entry{Decision: "pass", Response: Response{Status: 200}}
+	entry.StoredAt = time.Now().UTC()
+	entry.ExpiresAt = entry.StoredAt.Add(1 * time.Minute)
+	if err := cache.Store(ctx, "namespace:key", entry); err != nil {
+		t.Fatalf("store: %v", err)
+	}
+
+	invalidator, ok := cache.(ReloadInvalidator)
+	if !ok {
+		t.Fatalf("expected memory cache to implement ReloadInvalidator")
+	}
+	if err := invalidator.InvalidateOnReload(ctx, ReloadScope{Prefix: "namespace:"}); err != nil {
+		t.Fatalf("invalidate on reload: %v", err)
+	}
+	_, ok, err := cache.Lookup(ctx, "namespace:key")
+	if err != nil {
+		t.Fatalf("lookup after invalidate: %v", err)
+	}
+	if ok {
+		t.Fatalf("expected entry to be removed after invalidate")
+	}
+}
+
 func TestRedisCacheStoreLookup(t *testing.T) {
 	server, err := miniredis.Run()
 	if err != nil {
@@ -117,6 +144,21 @@ func TestRedisCacheStoreLookup(t *testing.T) {
 	}
 	if ok {
 		t.Fatalf("expected redis entry to expire")
+	}
+
+	if size, err := cache.Size(ctx); err != nil {
+		t.Fatalf("size: %v", err)
+	} else if size != 0 {
+		t.Fatalf("expected size to reflect expired entries being gone, got %d", size)
+	}
+
+	if rcache, ok := cache.(*redisCache); ok {
+		if err := rcache.DeletePrefix(ctx, "redis:"); err != nil {
+			t.Fatalf("delete prefix: %v", err)
+		}
+		if err := rcache.InvalidateOnReload(ctx, ReloadScope{Prefix: "redis:"}); err != nil {
+			t.Fatalf("invalidate on reload: %v", err)
+		}
 	}
 
 	if err := cache.Close(ctx); err != nil {

@@ -1,2 +1,4 @@
+# Go Related Ignores
+coverage.out
 /.gocache/
 /.gomodcache/
