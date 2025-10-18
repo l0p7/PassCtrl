@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/google/cel-go/cel"
-	"github.com/google/cel-go/checker/decls"
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
 	"github.com/google/cel-go/common/types/traits"
@@ -19,14 +18,12 @@ type Environment struct {
 // NewEnvironment declares the CEL variables exposed to rule conditions.
 func NewEnvironment() (*Environment, error) {
 	env, err := cel.NewEnv(
-		cel.Declarations(
-			decls.NewVar("raw", decls.NewMapType(decls.String, decls.Dyn)),
-			decls.NewVar("admission", decls.NewMapType(decls.String, decls.Dyn)),
-			decls.NewVar("forward", decls.NewMapType(decls.String, decls.Dyn)),
-			decls.NewVar("backend", decls.NewMapType(decls.String, decls.Dyn)),
-			decls.NewVar("vars", decls.NewMapType(decls.String, decls.Dyn)),
-			decls.NewVar("now", decls.Dyn),
-		),
+		cel.Variable("raw", cel.MapType(cel.StringType, cel.DynType)),
+		cel.Variable("admission", cel.MapType(cel.StringType, cel.DynType)),
+		cel.Variable("forward", cel.MapType(cel.StringType, cel.DynType)),
+		cel.Variable("backend", cel.MapType(cel.StringType, cel.DynType)),
+		cel.Variable("vars", cel.MapType(cel.StringType, cel.DynType)),
+		cel.Variable("now", cel.DynType),
 		cel.Function("lookup",
 			cel.Overload("lookup_map_string",
 				[]*cel.Type{cel.MapType(cel.StringType, cel.DynType), cel.StringType},

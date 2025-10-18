@@ -7,34 +7,20 @@ import (
 	"testing"
 	"time"
 
-	"github.com/l0p7/passctrl/internal/runtime/cache"
+	cachemocks "github.com/l0p7/passctrl/internal/mocks/cache"
 	"github.com/l0p7/passctrl/internal/runtime/pipeline"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
-type stubDecisionCache struct {
-	closed bool
-}
-
-func (s *stubDecisionCache) Lookup(context.Context, string) (cache.Entry, bool, error) {
-	return cache.Entry{}, false, nil
-}
-func (s *stubDecisionCache) Store(context.Context, string, cache.Entry) error { return nil }
-func (s *stubDecisionCache) DeletePrefix(context.Context, string) error       { return nil }
-func (s *stubDecisionCache) Size(context.Context) (int64, error)              { return 0, nil }
-func (s *stubDecisionCache) Close(context.Context) error {
-	s.closed = true
-	return nil
-}
-
 func TestPipelineCloseInvokesCache(t *testing.T) {
-	stub := &stubDecisionCache{}
-	pipe := NewPipeline(nil, PipelineOptions{Cache: stub})
-	if err := pipe.Close(context.Background()); err != nil {
-		t.Fatalf("close: %v", err)
-	}
-	if !stub.closed {
-		t.Fatalf("expected cache Close to be invoked")
-	}
+	cacheMock := cachemocks.NewMockDecisionCache(t)
+	cacheMock.EXPECT().
+		Close(mock.Anything).
+		Return(nil)
+
+	pipe := NewPipeline(nil, PipelineOptions{Cache: cacheMock})
+	require.NoError(t, pipe.Close(context.Background()))
 }
 
 func TestPipelineFallbackEndpoint(t *testing.T) {

@@ -5,3 +5,6 @@
 
 coverage.out
 lint.txt
+
+# Beads Ignores
+.beads/*.db

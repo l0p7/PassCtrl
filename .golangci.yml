@@ -21,6 +21,7 @@ linters:
     - errorlint
     - errchkjson
     - nolintlint
+    - testifylint
   settings:
     misspell:
       locale: US

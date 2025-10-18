@@ -24,6 +24,13 @@ This document captures the libraries that underpin PassCtrl, the rationale for c
 | Decision cache client | `github.com/valkey-io/valkey-go` | Provides Redis/Valkey connectivity for the distributed decision cache backend. | Valkey-first driver with RESP3 support; TLS enabled via optional CA bundle and identical fallback semantics to the memory backend. |
 | Cache testing server | `github.com/alicebob/miniredis/v2` | Lightweight in-memory Redis implementation for exercising cache integrations in tests. | Used only in unit tests; mirrors Redis protocol without external services. |
 
+## Testing Tooling
+| Concern | Library | Purpose | Notes |
+| --- | --- | --- | --- |
+| HTTP integration flows | `github.com/gavv/httpexpect/v2` | Drives end-to-end assertions against the runtime HTTP surface with expressive request builders and response checks. | Adopted for the CLI integration harness; continue using it anywhere HTTP behavior is observed so request/response invariants stay explicit. |
+| Test scaffolding | `github.com/stretchr/testify` | Provides `require`, `assert`, `mock`, `suite` helpers for table-driven tests. | Restrict imports to test files; mix `require`/`assert` as the scenario demands, keep `httpexpect` for HTTP paths, and generate doubles with the matching `testify/mock` APIs. |
+| Mock generation | `github.com/vektra/mockery/v3` (CLI) | Code-generates `testify/mock` implementations from interfaces. | Invoke `mockery --config .mockery.yml`; mocks emit to package-specific `mocks/` folders (e.g., `internal/mocks/`, `cmd/mocks/`) with expecter support and must be checked in. |
+
 ## Libraries Under Evaluation
 - **HTTP routing and middleware:** `github.com/go-chi/chi/v5` — composable router if the standard library mux no longer satisfies observability or middleware needs. Current assessment (see [`design/refactoring-roadmap.md`](design/refactoring-roadmap.md)) defers adoption until routing expands beyond the static `/auth`/`/healthz`/`/explain` surface.
 - **Resilient outbound HTTP:** `github.com/hashicorp/go-retryablehttp` — retry/backoff semantics for backend orchestration without maintaining custom retry loops.
