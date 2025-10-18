@@ -2,6 +2,7 @@ package admission
 
 import (
 	"context"
+	"errors"
 	"net/http/httptest"
 	"net/netip"
 	"strings"
@@ -107,7 +108,7 @@ func TestPrepareForwardedMetadataMismatch(t *testing.T) {
 	state.Admission.Forwarded = req.Header.Get("Forwarded")
 	state.Admission.ForwardedFor = req.Header.Get("X-Forwarded-For")
 
-	if _, err := agent.prepareForwardedMetadata(req, state); err == nil || err != errForwardedMetadata {
+	if _, err := agent.prepareForwardedMetadata(req, state); err == nil || !errors.Is(err, errForwardedMetadata) {
 		t.Fatalf("expected errForwardedMetadata mismatch, got %v", err)
 	}
 }
@@ -127,7 +128,7 @@ func TestParseRFC7239Forwarded(t *testing.T) {
 }
 
 func TestParseRFC7239ForwardedMissingFor(t *testing.T) {
-	if _, _, err := parseRFC7239Forwarded("proto=https"); err != errForwardedDirectiveEmpty {
+	if _, _, err := parseRFC7239Forwarded("proto=https"); !errors.Is(err, errForwardedDirectiveEmpty) {
 		t.Fatalf("expected errForwardedDirectiveEmpty, got %v", err)
 	}
 }

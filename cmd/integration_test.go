@@ -38,11 +38,11 @@ func startServerProcess(t *testing.T, configPath string, env map[string]string) 
 	cacheRoot := filepath.Join(os.TempDir(), "passctrl-integration")
 	cacheDir := filepath.Join(cacheRoot, "gocache")
 	moduleCache := filepath.Join(cacheRoot, "gomodcache")
-	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+	if err := os.MkdirAll(cacheDir, 0o750); err != nil {
 		cancel()
 		t.Fatalf("failed to create gocache dir: %v", err)
 	}
-	if err := os.MkdirAll(moduleCache, 0o755); err != nil {
+	if err := os.MkdirAll(moduleCache, 0o750); err != nil {
 		cancel()
 		t.Fatalf("failed to create gomodcache dir: %v", err)
 	}
@@ -112,7 +112,7 @@ func waitForEndpoint(t *testing.T, url string, timeout time.Duration, headers ma
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		req, err := http.NewRequest(http.MethodGet, url, nil)
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
 		if err != nil {
 			t.Fatalf("failed to build probe request: %v", err)
 		}
@@ -121,8 +121,11 @@ func waitForEndpoint(t *testing.T, url string, timeout time.Duration, headers ma
 		}
 		resp, err := http.DefaultClient.Do(req) // #nosec G107 - test helper for local server
 		if err == nil {
-			resp.Body.Close()
-			if resp.StatusCode < 500 {
+			status := resp.StatusCode
+			if cerr := resp.Body.Close(); cerr != nil {
+				t.Fatalf("failed to close readiness probe body: %v", cerr)
+			}
+			if status < 500 {
 				return
 			}
 		}
@@ -133,7 +136,7 @@ func waitForEndpoint(t *testing.T, url string, timeout time.Duration, headers ma
 
 func writeIntegrationConfig(t *testing.T, dir string, port int) string {
 	t.Helper()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatalf("failed to ensure rules folder: %v", err)
 	}
 	cfg := map[string]any{
@@ -194,11 +197,16 @@ func writeIntegrationConfig(t *testing.T, dir string, port int) string {
 
 func allocatePort(t *testing.T) int {
 	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+	var lc net.ListenConfig
+	l, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("failed to allocate port: %v", err)
 	}
-	defer l.Close()
+	t.Cleanup(func() {
+		if cerr := l.Close(); cerr != nil {
+			t.Fatalf("failed to close listener: %v", cerr)
+		}
+	})
 	addr, ok := l.Addr().(*net.TCPAddr)
 	if !ok {
 		t.Fatalf("unexpected addr type %T", l.Addr())
@@ -243,7 +251,7 @@ func TestIntegrationServerStartup(t *testing.T) {
 		"Authorization": "Bearer integration",
 	})
 
-	req, err := http.NewRequest(http.MethodGet, "http://127.0.0.1:"+strconv.Itoa(port)+"/auth", nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://127.0.0.1:"+strconv.Itoa(port)+"/auth", nil)
 	if err != nil {
 		t.Fatalf("failed to build auth request: %v", err)
 	}
@@ -254,7 +262,9 @@ func TestIntegrationServerStartup(t *testing.T) {
 		t.Fatalf("failed to call auth endpoint: %v", err)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	if cerr := resp.Body.Close(); cerr != nil {
+		t.Fatalf("failed to close auth response body: %v", cerr)
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		stdout, stderr := process.logs()

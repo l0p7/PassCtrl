@@ -7,8 +7,7 @@ import (
 	"testing"
 	"time"
 
-	miniredis "github.com/alicebob/miniredis/v2"
-
+	"github.com/alicebob/miniredis/v2"
 	"github.com/l0p7/passctrl/internal/config"
 	"github.com/l0p7/passctrl/internal/runtime/cache"
 )
@@ -22,9 +21,11 @@ func TestBuildDecisionCacheDefaultsToMemory(t *testing.T) {
 	if cache == nil {
 		t.Fatalf("expected cache to be constructed")
 	}
-	if err := cache.Close(context.Background()); err != nil {
-		t.Fatalf("close: %v", err)
-	}
+	t.Cleanup(func() {
+		if err := cache.Close(context.Background()); err != nil {
+			t.Fatalf("close: %v", err)
+		}
+	})
 }
 
 func TestBuildDecisionCacheRedis(t *testing.T) {
@@ -43,7 +44,11 @@ func TestBuildDecisionCacheRedis(t *testing.T) {
 	}
 
 	cache := buildDecisionCache(newTestLogger(), cfg)
-	defer cache.Close(context.Background())
+	t.Cleanup(func() {
+		if err := cache.Close(context.Background()); err != nil {
+			t.Fatalf("close: %v", err)
+		}
+	})
 
 	ctx := context.Background()
 	entry := cacheEntry()
