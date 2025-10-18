@@ -22,7 +22,7 @@ type stubPipeline struct {
 func (s *stubPipeline) ServeAuth(w http.ResponseWriter, r *http.Request) {
 	s.serveAuthCalls++
 	s.receivedHintHeaders = append(s.receivedHintHeaders, r.Header.Get("X-Endpoint-Hint"))
-	w.WriteHeader(http.StatusAccepted)
+	w.WriteHeader(http.StatusOK)
 }
 
 func (s *stubPipeline) ServeHealth(w http.ResponseWriter, r *http.Request) {
@@ -119,7 +119,7 @@ func TestPipelineHandlerDispatchesRoutes(t *testing.T) {
 		{
 			name:          "root auth",
 			path:          "/auth",
-			wantStatus:    http.StatusAccepted,
+			wantStatus:    http.StatusOK,
 			wantAuthCalls: 1,
 		},
 		{
@@ -131,7 +131,7 @@ func TestPipelineHandlerDispatchesRoutes(t *testing.T) {
 		{
 			name:          "scoped auth uses hint",
 			path:          "/tenant/auth",
-			wantStatus:    http.StatusAccepted,
+			wantStatus:    http.StatusOK,
 			wantAuthCalls: 1,
 			wantHints:     []string{"tenant"},
 		},

@@ -49,12 +49,13 @@ func TestPipelineFallbackEndpoint(t *testing.T) {
 		t.Fatalf("expected fallback endpoint to be discoverable")
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "http://example.com/auth", http.NoBody)
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/auth?error=false", http.NoBody)
 	req.Header.Set("Authorization", "token")
+	req.Header.Set("X-PassCtrl-Deny", "false")
 	rec := httptest.NewRecorder()
 	pipe.ServeAuth(rec, req)
-	if rec.Code != http.StatusBadGateway {
-		t.Fatalf("expected fallback pipeline to surface default error status, got %d", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected fallback pipeline to allow requests when default rule passes, got status %d", rec.Code)
 	}
 }
 

@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -108,18 +108,18 @@ func (p *integrationProcess) logs() (string, string) {
 	return p.stdout.String(), p.stderr.String()
 }
 
-func waitForEndpoint(t *testing.T, url string, timeout time.Duration, headers map[string]string) {
+func waitForEndpoint(t *testing.T, client *http.Client, target string, timeout time.Duration, headers map[string]string) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, target, nil)
 		if err != nil {
 			t.Fatalf("failed to build probe request: %v", err)
 		}
 		for k, v := range headers {
 			req.Header.Set(k, v)
 		}
-		resp, err := http.DefaultClient.Do(req) // #nosec G107 - test helper for local server
+		resp, err := client.Do(req) // #nosec G107 - test helper for local server
 		if err == nil {
 			status := resp.StatusCode
 			if cerr := resp.Body.Close(); cerr != nil {
@@ -202,16 +202,24 @@ func allocatePort(t *testing.T) int {
 	if err != nil {
 		t.Fatalf("failed to allocate port: %v", err)
 	}
-	t.Cleanup(func() {
-		if cerr := l.Close(); cerr != nil {
-			t.Fatalf("failed to close listener: %v", cerr)
-		}
-	})
 	addr, ok := l.Addr().(*net.TCPAddr)
 	if !ok {
 		t.Fatalf("unexpected addr type %T", l.Addr())
 	}
-	return addr.Port
+	port := addr.Port
+	if cerr := l.Close(); cerr != nil {
+		t.Fatalf("failed to close listener: %v", cerr)
+	}
+	return port
+}
+
+func integrationURL(port int, path string) string {
+	u := url.URL{
+		Scheme: "http",
+		Host:   net.JoinHostPort("127.0.0.1", strconv.Itoa(port)),
+		Path:   path,
+	}
+	return u.String()
 }
 
 func TestIntegrationServerStartup(t *testing.T) {
@@ -247,17 +255,19 @@ func TestIntegrationServerStartup(t *testing.T) {
 	})
 	defer process.stop(t)
 
-	waitForEndpoint(t, "http://127.0.0.1:"+strconv.Itoa(port)+"/auth", 45*time.Second, map[string]string{
+	client := &http.Client{Timeout: 5 * time.Second}
+	target := integrationURL(port, "/auth")
+	waitForEndpoint(t, client, target, 45*time.Second, map[string]string{
 		"Authorization": "Bearer integration",
 	})
 
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://127.0.0.1:"+strconv.Itoa(port)+"/auth", nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, target, nil)
 	if err != nil {
 		t.Fatalf("failed to build auth request: %v", err)
 	}
 	req.Header.Set("Authorization", "Bearer integration")
 
-	resp, err := http.DefaultClient.Do(req) // #nosec G107 - integration test
+	resp, err := client.Do(req) // #nosec G107 - integration test
 	if err != nil {
 		t.Fatalf("failed to call auth endpoint: %v", err)
 	}
@@ -273,5 +283,5 @@ func TestIntegrationServerStartup(t *testing.T) {
 	if got := resp.Header.Get("X-Test"); got != "integration" {
 		t.Fatalf("expected integration header, got %q", got)
 	}
-	t.Logf("integration server responded from %s", fmt.Sprintf("http://127.0.0.1:%d/auth", port))
+	t.Logf("integration server responded from %s", target)
 }
