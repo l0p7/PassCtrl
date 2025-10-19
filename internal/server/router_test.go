@@ -3,8 +3,9 @@ package server
 import (
 	"net/http"
 	"net/http/httptest"
-	"reflect"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 type stubPipeline struct {
@@ -83,10 +84,9 @@ func TestParseEndpointRoute(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			endpoint, route, ok := parseEndpointRoute(tc.path)
-			if endpoint != tc.endpoint || route != tc.route || ok != tc.ok {
-				t.Fatalf("parseEndpointRoute(%q) = (%q, %q, %t), want (%q, %q, %t)",
-					tc.path, endpoint, route, ok, tc.endpoint, tc.route, tc.ok)
-			}
+			require.Equalf(t, tc.endpoint, endpoint, "endpoint mismatch for path %q", tc.path)
+			require.Equalf(t, tc.route, route, "route mismatch for path %q", tc.path)
+			require.Equalf(t, tc.ok, ok, "ok mismatch for path %q", tc.path)
 		})
 	}
 }
@@ -98,9 +98,7 @@ func TestNewPipelineHandlerNilPipeline(t *testing.T) {
 
 	handler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("expected status 503 when pipeline unavailable, got %d", rec.Code)
-	}
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
 }
 
 func TestPipelineHandlerDispatchesRoutes(t *testing.T) {
@@ -164,31 +162,16 @@ func TestPipelineHandlerDispatchesRoutes(t *testing.T) {
 
 			handler.ServeHTTP(rec, req)
 
-			if rec.Code != tc.wantStatus {
-				t.Fatalf("expected status %d, got %d", tc.wantStatus, rec.Code)
-			}
-
-			if stub.serveAuthCalls != tc.wantAuthCalls {
-				t.Fatalf("expected %d auth calls, got %d", tc.wantAuthCalls, stub.serveAuthCalls)
-			}
-			if stub.serveHealthCalls != tc.wantHealthCalls {
-				t.Fatalf("expected %d health calls, got %d", tc.wantHealthCalls, stub.serveHealthCalls)
-			}
-			if stub.serveExplainCalls != tc.wantExplainCalls {
-				t.Fatalf("expected %d explain calls, got %d", tc.wantExplainCalls, stub.serveExplainCalls)
-			}
+			require.Equal(t, tc.wantStatus, rec.Code)
+			require.Equal(t, tc.wantAuthCalls, stub.serveAuthCalls)
+			require.Equal(t, tc.wantHealthCalls, stub.serveHealthCalls)
+			require.Equal(t, tc.wantExplainCalls, stub.serveExplainCalls)
 			if len(tc.wantHints) == 0 {
-				if len(stub.hints) != 0 {
-					t.Fatalf("expected no endpoint hints, got %v", stub.hints)
-				}
+				require.Empty(t, stub.hints, "expected no endpoint hints")
 			} else {
-				if !reflect.DeepEqual(stub.hints, tc.wantHints) {
-					t.Fatalf("expected hints %v, got %v", tc.wantHints, stub.hints)
-				}
+				require.Equal(t, tc.wantHints, stub.hints)
 				for i, hint := range tc.wantHints {
-					if stub.receivedHintHeaders[i] != hint {
-						t.Fatalf("expected request to carry hint header %q, got %q", hint, stub.receivedHintHeaders[i])
-					}
+					require.Equalf(t, hint, stub.receivedHintHeaders[i], "request should carry hint header")
 				}
 			}
 		})
@@ -204,18 +187,10 @@ func TestPipelineHandlerMissingEndpoint(t *testing.T) {
 
 	handler.ServeHTTP(rec, req)
 
-	if !stub.writeErrorCalled {
-		t.Fatalf("expected WriteError to be invoked for unknown endpoint")
-	}
-	if stub.writeErrorStatus != http.StatusNotFound {
-		t.Fatalf("expected WriteError to use 404, got %d", stub.writeErrorStatus)
-	}
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("expected recorder to capture 404, got %d", rec.Code)
-	}
-	if stub.serveHealthCalls != 0 {
-		t.Fatalf("expected ServeHealth not to be called on missing endpoint")
-	}
+	require.True(t, stub.writeErrorCalled, "expected WriteError to be invoked for unknown endpoint")
+	require.Equal(t, http.StatusNotFound, stub.writeErrorStatus)
+	require.Equal(t, http.StatusNotFound, rec.Code)
+	require.Zero(t, stub.serveHealthCalls, "ServeHealth should not be called on missing endpoint")
 }
 
 func TestPipelineHandlerNotFound(t *testing.T) {
@@ -227,10 +202,6 @@ func TestPipelineHandlerNotFound(t *testing.T) {
 
 	handler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("expected 404 for unsupported route, got %d", rec.Code)
-	}
-	if stub.serveAuthCalls+stub.serveHealthCalls+stub.serveExplainCalls != 0 {
-		t.Fatalf("expected no pipeline calls for unsupported route")
-	}
+	require.Equal(t, http.StatusNotFound, rec.Code)
+	require.Zero(t, stub.serveAuthCalls+stub.serveHealthCalls+stub.serveExplainCalls, "expected no pipeline calls for unsupported route")
 }

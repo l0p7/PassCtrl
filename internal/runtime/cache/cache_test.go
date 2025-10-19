@@ -6,6 +6,7 @@ import (
 	"time"
 
 	miniredis "github.com/alicebob/miniredis/v2"
+	"github.com/stretchr/testify/require"
 )
 
 func TestMemoryCacheStoreLookup(t *testing.T) {
@@ -19,43 +20,24 @@ func TestMemoryCacheStoreLookup(t *testing.T) {
 	}
 	entry.ExpiresAt = entry.StoredAt.Add(500 * time.Millisecond)
 
-	if err := cache.Store(ctx, "token", entry); err != nil {
-		t.Fatalf("store: %v", err)
-	}
+	require.NoError(t, cache.Store(ctx, "token", entry))
 
 	got, ok, err := cache.Lookup(ctx, "token")
-	if err != nil {
-		t.Fatalf("lookup: %v", err)
-	}
-	if !ok {
-		t.Fatalf("expected cache hit")
-	}
-	if got.Decision != "pass" || got.Response.Status != 200 {
-		t.Fatalf("unexpected entry: %#v", got)
-	}
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, "pass", got.Decision)
+	require.Equal(t, 200, got.Response.Status)
 
 	size, err := cache.Size(ctx)
-	if err != nil {
-		t.Fatalf("size: %v", err)
-	}
-	if size != 1 {
-		t.Fatalf("expected size 1, got %d", size)
-	}
+	require.NoError(t, err)
+	require.Equal(t, int64(1), size)
 
-	if err := cache.DeletePrefix(ctx, "tok"); err != nil {
-		t.Fatalf("delete prefix: %v", err)
-	}
+	require.NoError(t, cache.DeletePrefix(ctx, "tok"))
 	_, ok, err = cache.Lookup(ctx, "token")
-	if err != nil {
-		t.Fatalf("lookup after delete: %v", err)
-	}
-	if ok {
-		t.Fatalf("expected delete to remove key")
-	}
+	require.NoError(t, err)
+	require.False(t, ok)
 
-	if err := cache.Close(ctx); err != nil {
-		t.Fatalf("close: %v", err)
-	}
+	require.NoError(t, cache.Close(ctx))
 }
 
 func TestMemoryCacheExpiry(t *testing.T) {
@@ -64,17 +46,12 @@ func TestMemoryCacheExpiry(t *testing.T) {
 
 	entry := Entry{Decision: "fail", Response: Response{Status: 403}, StoredAt: time.Now().UTC()}
 	entry.ExpiresAt = entry.StoredAt.Add(10 * time.Millisecond)
-	if err := cache.Store(ctx, "key", entry); err != nil {
-		t.Fatalf("store: %v", err)
-	}
+	require.NoError(t, cache.Store(ctx, "key", entry))
+
 	time.Sleep(20 * time.Millisecond)
 	_, ok, err := cache.Lookup(ctx, "key")
-	if err != nil {
-		t.Fatalf("lookup: %v", err)
-	}
-	if ok {
-		t.Fatalf("expected entry to expire")
-	}
+	require.NoError(t, err)
+	require.False(t, ok)
 }
 
 func TestMemoryCacheInvalidateOnReload(t *testing.T) {
@@ -84,37 +61,24 @@ func TestMemoryCacheInvalidateOnReload(t *testing.T) {
 	entry := Entry{Decision: "pass", Response: Response{Status: 200}}
 	entry.StoredAt = time.Now().UTC()
 	entry.ExpiresAt = entry.StoredAt.Add(1 * time.Minute)
-	if err := cache.Store(ctx, "namespace:key", entry); err != nil {
-		t.Fatalf("store: %v", err)
-	}
+	require.NoError(t, cache.Store(ctx, "namespace:key", entry))
 
 	invalidator, ok := cache.(ReloadInvalidator)
-	if !ok {
-		t.Fatalf("expected memory cache to implement ReloadInvalidator")
-	}
-	if err := invalidator.InvalidateOnReload(ctx, ReloadScope{Prefix: "namespace:"}); err != nil {
-		t.Fatalf("invalidate on reload: %v", err)
-	}
+	require.True(t, ok, "expected memory cache to implement ReloadInvalidator")
+	require.NoError(t, invalidator.InvalidateOnReload(ctx, ReloadScope{Prefix: "namespace:"}))
+
 	_, ok, err := cache.Lookup(ctx, "namespace:key")
-	if err != nil {
-		t.Fatalf("lookup after invalidate: %v", err)
-	}
-	if ok {
-		t.Fatalf("expected entry to be removed after invalidate")
-	}
+	require.NoError(t, err)
+	require.False(t, ok)
 }
 
 func TestRedisCacheStoreLookup(t *testing.T) {
 	server, err := miniredis.Run()
-	if err != nil {
-		t.Fatalf("miniredis: %v", err)
-	}
+	require.NoError(t, err)
 	defer server.Close()
 
 	cache, err := NewRedis(RedisConfig{Address: server.Addr()})
-	if err != nil {
-		t.Fatalf("new redis: %v", err)
-	}
+	require.NoError(t, err)
 	ctx := context.Background()
 	entry := Entry{
 		Decision: "pass",
@@ -123,45 +87,26 @@ func TestRedisCacheStoreLookup(t *testing.T) {
 	}
 	entry.ExpiresAt = entry.StoredAt.Add(500 * time.Millisecond)
 
-	if err := cache.Store(ctx, "redis:key", entry); err != nil {
-		t.Fatalf("store: %v", err)
-	}
+	require.NoError(t, cache.Store(ctx, "redis:key", entry))
 	got, ok, err := cache.Lookup(ctx, "redis:key")
-	if err != nil {
-		t.Fatalf("lookup: %v", err)
-	}
-	if !ok {
-		t.Fatalf("expected redis cache hit")
-	}
-	if got.Decision != entry.Decision || got.Response.Headers["x-cache"] != "redis" {
-		t.Fatalf("unexpected entry: %#v", got)
-	}
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, entry.Decision, got.Decision)
+	require.Equal(t, "redis", got.Response.Headers["x-cache"])
 
 	server.FastForward(time.Second)
 	_, ok, err = cache.Lookup(ctx, "redis:key")
-	if err != nil {
-		t.Fatalf("lookup after ttl: %v", err)
-	}
-	if ok {
-		t.Fatalf("expected redis entry to expire")
-	}
+	require.NoError(t, err)
+	require.False(t, ok)
 
-	if size, err := cache.Size(ctx); err != nil {
-		t.Fatalf("size: %v", err)
-	} else if size != 0 {
-		t.Fatalf("expected size to reflect expired entries being gone, got %d", size)
-	}
+	size, err := cache.Size(ctx)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), size)
 
 	if rcache, ok := cache.(*redisCache); ok {
-		if err := rcache.DeletePrefix(ctx, "redis:"); err != nil {
-			t.Fatalf("delete prefix: %v", err)
-		}
-		if err := rcache.InvalidateOnReload(ctx, ReloadScope{Prefix: "redis:"}); err != nil {
-			t.Fatalf("invalidate on reload: %v", err)
-		}
+		require.NoError(t, rcache.DeletePrefix(ctx, "redis:"))
+		require.NoError(t, rcache.InvalidateOnReload(ctx, ReloadScope{Prefix: "redis:"}))
 	}
 
-	if err := cache.Close(ctx); err != nil {
-		t.Fatalf("close: %v", err)
-	}
+	require.NoError(t, cache.Close(ctx))
 }

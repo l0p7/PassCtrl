@@ -25,24 +25,17 @@ func TestPipelineCloseInvokesCache(t *testing.T) {
 
 func TestPipelineFallbackEndpoint(t *testing.T) {
 	pipe := NewPipeline(nil, PipelineOptions{})
-	if !pipe.usingFallback {
-		t.Fatalf("expected fallback endpoint to be installed when no endpoints configured")
-	}
-	if pipe.defaultEndpoint == nil || pipe.defaultEndpoint.name != "default" {
-		t.Fatalf("expected default endpoint to be set, got %#v", pipe.defaultEndpoint)
-	}
-	if !pipe.EndpointExists("default") {
-		t.Fatalf("expected fallback endpoint to be discoverable")
-	}
+	require.True(t, pipe.usingFallback, "expected fallback endpoint to be installed when no endpoints configured")
+	require.NotNil(t, pipe.defaultEndpoint)
+	require.Equal(t, "default", pipe.defaultEndpoint.name)
+	require.True(t, pipe.EndpointExists("default"), "expected fallback endpoint to be discoverable")
 
 	req := httptest.NewRequest(http.MethodGet, "http://example.com/auth?error=false", http.NoBody)
 	req.Header.Set("Authorization", "token")
 	req.Header.Set("X-PassCtrl-Deny", "false")
 	rec := httptest.NewRecorder()
 	pipe.ServeAuth(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected fallback pipeline to allow requests when default rule passes, got status %d", rec.Code)
-	}
+	require.Equal(t, http.StatusOK, rec.Code)
 }
 
 func TestSummarizeRuleHistory(t *testing.T) {
@@ -51,12 +44,9 @@ func TestSummarizeRuleHistory(t *testing.T) {
 		{Name: "b", Outcome: "fail", Reason: "fail", Duration: 5 * time.Millisecond},
 	}
 	summary := summarizeRuleHistory(history)
-	if len(summary) != 2 {
-		t.Fatalf("expected two entries, got %#v", summary)
-	}
-	if summary[0]["name"] != "a" || summary[1]["outcome"] != "fail" {
-		t.Fatalf("unexpected summary content: %#v", summary)
-	}
+	require.Len(t, summary, 2)
+	require.Equal(t, "a", summary[0]["name"])
+	require.Equal(t, "fail", summary[1]["outcome"])
 }
 
 type stubAgent struct {
@@ -71,19 +61,13 @@ func (s *stubAgent) Execute(context.Context, *http.Request, *pipeline.State) pip
 func TestInstrumentedAgentName(t *testing.T) {
 	pipe := NewPipeline(nil, PipelineOptions{})
 	agents := pipe.instrumentAgents("default", []pipeline.Agent{&stubAgent{name: "stub"}})
-	if len(agents) != 1 {
-		t.Fatalf("expected one wrapped agent, got %d", len(agents))
-	}
-	if agents[0].Name() != "stub" {
-		t.Fatalf("expected instrumented agent to report inner name, got %s", agents[0].Name())
-	}
+	require.Len(t, agents, 1)
+	require.Equal(t, "stub", agents[0].Name())
 }
 
 func TestStateCacheKey(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "http://example.com/auth", http.NoBody)
 	state := pipeline.NewState(req, "endpoint", "cache-key", "corr-id")
 	getter := (*pipeline.State).CacheKey
-	if getter(state) != "cache-key" {
-		t.Fatalf("expected cache key accessor to return underlying key, got %q", state.CacheKey())
-	}
+	require.Equal(t, "cache-key", getter(state))
 }

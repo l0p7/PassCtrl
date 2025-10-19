@@ -44,11 +44,11 @@ func startServerProcess(t *testing.T, configPath string, env map[string]string) 
 	moduleCache := filepath.Join(cacheRoot, "gomodcache")
 	if err := os.MkdirAll(cacheDir, 0o750); err != nil {
 		cancel()
-		t.Fatalf("failed to create gocache dir: %v", err)
+		require.NoError(t, err, "failed to create gocache dir")
 	}
 	if err := os.MkdirAll(moduleCache, 0o750); err != nil {
 		cancel()
-		t.Fatalf("failed to create gomodcache dir: %v", err)
+		require.NoError(t, err, "failed to create gomodcache dir")
 	}
 	cmd.Env = append(os.Environ(), "GOFLAGS=", "GOCACHE="+cacheDir, "GOMODCACHE="+moduleCache)
 	for k, v := range env {
@@ -62,7 +62,7 @@ func startServerProcess(t *testing.T, configPath string, env map[string]string) 
 
 	if err := cmd.Start(); err != nil {
 		cancel()
-		t.Fatalf("failed to start server process: %v", err)
+		require.NoError(t, err, "failed to start server process")
 	}
 
 	proc := &integrationProcess{cmd: cmd, cancel: cancel, stdout: stdout, stderr: stderr}
@@ -130,7 +130,7 @@ func waitForEndpoint(t *testing.T, client httpDoer, target string, timeout time.
 func writeIntegrationConfig(t *testing.T, dir string, port int) string {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o750); err != nil {
-		t.Fatalf("failed to ensure rules folder: %v", err)
+		require.NoError(t, err, "failed to ensure rules folder")
 	}
 	cfg := map[string]any{
 		"server": map[string]any{
@@ -178,13 +178,9 @@ func writeIntegrationConfig(t *testing.T, dir string, port int) string {
 	}
 
 	contents, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		t.Fatalf("failed to marshal config: %v", err)
-	}
+	require.NoError(t, err, "failed to marshal config")
 	path := filepath.Join(dir, "integration-config.json")
-	if err := os.WriteFile(path, contents, 0o600); err != nil {
-		t.Fatalf("failed to write config: %v", err)
-	}
+	require.NoError(t, os.WriteFile(path, contents, 0o600), "failed to write config")
 	return path
 }
 
@@ -192,17 +188,11 @@ func allocatePort(t *testing.T) int {
 	t.Helper()
 	var lc net.ListenConfig
 	l, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("failed to allocate port: %v", err)
-	}
+	require.NoError(t, err, "failed to allocate port")
 	addr, ok := l.Addr().(*net.TCPAddr)
-	if !ok {
-		t.Fatalf("unexpected addr type %T", l.Addr())
-	}
+	require.Truef(t, ok, "unexpected addr type %T", l.Addr())
 	port := addr.Port
-	if cerr := l.Close(); cerr != nil {
-		t.Fatalf("failed to close listener: %v", cerr)
-	}
+	require.NoError(t, l.Close(), "failed to close listener")
 	return port
 }
 

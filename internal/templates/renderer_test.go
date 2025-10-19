@@ -4,95 +4,66 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestRendererInlineEnvAllowlist(t *testing.T) {
 	dir := t.TempDir()
 	sandbox, err := NewSandbox(dir, true, []string{"ALLOWED", "EMPTY"})
-	if err != nil {
-		t.Fatalf("sandbox create: %v", err)
-	}
+	require.NoError(t, err)
 	t.Setenv("ALLOWED", "visible")
 	t.Setenv("EMPTY", "")
 	t.Setenv("DENIED", "hidden")
 
 	renderer := NewRenderer(sandbox)
 	tmpl, err := renderer.CompileInline("inline", "{{ env \"ALLOWED\" }} {{ env \"DENIED\" }}")
-	if err != nil {
-		t.Fatalf("compile inline: %v", err)
-	}
+	require.NoError(t, err)
 	rendered, err := tmpl.Render(map[string]any{})
-	if err != nil {
-		t.Fatalf("render inline: %v", err)
-	}
-	if rendered != "visible " {
-		t.Fatalf("unexpected render output: %q", rendered)
-	}
+	require.NoError(t, err)
+	require.Equal(t, "visible ", rendered)
 }
 
 func TestRendererCompileFileHonoursSandbox(t *testing.T) {
 	dir := t.TempDir()
 	allowedDir := filepath.Join(dir, "templates")
-	if err := os.MkdirAll(allowedDir, 0o750); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
+	require.NoError(t, os.MkdirAll(allowedDir, 0o750))
 	file := filepath.Join(allowedDir, "body.txt")
-	if err := os.WriteFile(file, []byte("hello {{ .name }}"), 0o600); err != nil {
-		t.Fatalf("write template: %v", err)
-	}
+	require.NoError(t, os.WriteFile(file, []byte("hello {{ .name }}"), 0o600))
 	sandbox, err := NewSandbox(allowedDir, false, nil)
-	if err != nil {
-		t.Fatalf("sandbox create: %v", err)
-	}
+	require.NoError(t, err)
 	renderer := NewRenderer(sandbox)
 
 	tmpl, err := renderer.CompileFile("body.txt")
-	if err != nil {
-		t.Fatalf("compile file: %v", err)
-	}
+	require.NoError(t, err)
 	rendered, err := tmpl.Render(map[string]any{"name": "world"})
-	if err != nil {
-		t.Fatalf("render file: %v", err)
-	}
-	if rendered != "hello world" {
-		t.Fatalf("unexpected render output: %q", rendered)
-	}
+	require.NoError(t, err)
+	require.Equal(t, "hello world", rendered)
 
-	if _, err := renderer.CompileFile("../escape.txt"); err == nil {
-		t.Fatalf("expected escape attempt to fail")
-	}
+	_, err = renderer.CompileFile("../escape.txt")
+	require.Error(t, err)
 }
 
 func TestRendererStripsSprigFileHelpers(t *testing.T) {
 	renderer := NewRenderer(nil)
 
 	for _, name := range []string{"readFile", "mustReadFile", "readDir", "mustReadDir", "glob"} {
-		if _, ok := renderer.funcs[name]; ok {
-			t.Fatalf("expected sprig helper %q to be removed", name)
-		}
+		_, ok := renderer.funcs[name]
+		require.Falsef(t, ok, "expected sprig helper %q to be removed", name)
 	}
 
-	if _, err := renderer.CompileInline("inline", "{{ readFile \"/etc/passwd\" }}"); err == nil {
-		t.Fatalf("expected readFile usage to fail")
-	}
+	_, err := renderer.CompileInline("inline", "{{ readFile \"/etc/passwd\" }}")
+	require.Error(t, err)
 }
 
 func TestRendererSandboxAccessorAndTemplateName(t *testing.T) {
 	dir := t.TempDir()
 	sandbox, err := NewSandbox(dir, false, nil)
-	if err != nil {
-		t.Fatalf("sandbox create: %v", err)
-	}
+	require.NoError(t, err)
 	renderer := NewRenderer(sandbox)
-	if renderer.Sandbox() != sandbox {
-		t.Fatalf("expected sandbox accessor to return underlying sandbox")
-	}
+	require.Equal(t, sandbox, renderer.Sandbox())
 
 	tmpl, err := renderer.CompileInline("example", "static")
-	if err != nil {
-		t.Fatalf("compile inline: %v", err)
-	}
-	if tmpl.Name() != "example" {
-		t.Fatalf("expected template name to be preserved, got %q", tmpl.Name())
-	}
+	require.NoError(t, err)
+	require.Equal(t, "example", tmpl.Name())
 }

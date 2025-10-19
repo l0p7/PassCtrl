@@ -4,26 +4,21 @@ import (
 	"testing"
 
 	"github.com/l0p7/passctrl/internal/config"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewAcceptsKnownLevelsAndFormats(t *testing.T) {
 	logger, err := New(config.LoggingConfig{Level: "info", Format: "json", CorrelationHeader: "X-Request-ID"})
-	if err != nil {
-		t.Fatalf("expected logger construction to succeed: %v", err)
-	}
-	if logger == nil {
-		t.Fatalf("logger should not be nil")
-	}
+	require.NoError(t, err)
+	require.NotNil(t, logger)
 }
 
 func TestNewRejectsUnknownLevel(t *testing.T) {
-	if _, err := New(config.LoggingConfig{Level: "verbose"}); err == nil {
-		t.Fatalf("expected error for unsupported level")
-	}
+	_, err := New(config.LoggingConfig{Level: "verbose"})
+	require.Error(t, err)
 }
 
 func TestNewRejectsUnknownFormat(t *testing.T) {
-	if _, err := New(config.LoggingConfig{Format: "binary"}); err == nil {
-		t.Fatalf("expected error for unsupported format")
-	}
+	_, err := New(config.LoggingConfig{Format: "binary"})
+	require.Error(t, err)
 }

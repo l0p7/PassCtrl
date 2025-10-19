@@ -9,7 +9,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -21,6 +20,7 @@ import (
 	"github.com/l0p7/passctrl/internal/runtime/resultcaching"
 	"github.com/l0p7/passctrl/internal/runtime/rulechain"
 	"github.com/l0p7/passctrl/internal/templates"
+	"github.com/stretchr/testify/require"
 )
 
 func newTestPipelineState(req *http.Request) *pipeline.State {
@@ -34,21 +34,12 @@ func TestNewPipelineState(t *testing.T) {
 
 	state := newTestPipelineState(req)
 
-	if state.CacheKey() != "bearer-token|test|/v1/auth" {
-		t.Fatalf("unexpected cache key: %q", state.CacheKey())
-	}
-	if state.Raw.Method != http.MethodPost {
-		t.Errorf("expected method %s, got %s", http.MethodPost, state.Raw.Method)
-	}
-	if state.Raw.Headers["authorization"] != "bearer-token" {
-		t.Errorf("authorization header not captured: %#v", state.Raw.Headers)
-	}
-	if state.Response.Headers == nil {
-		t.Fatalf("response headers map should be initialized")
-	}
-	if state.Forward.Headers == nil || state.Forward.Query == nil {
-		t.Fatalf("forward state should be initialized with empty maps")
-	}
+	require.Equal(t, "bearer-token|test|/v1/auth", state.CacheKey())
+	require.Equal(t, http.MethodPost, state.Raw.Method)
+	require.Equal(t, "bearer-token", state.Raw.Headers["authorization"])
+	require.NotNil(t, state.Response.Headers)
+	require.NotNil(t, state.Forward.Headers)
+	require.NotNil(t, state.Forward.Query)
 }
 
 func TestAdmissionAgentExecute(t *testing.T) {
@@ -64,21 +55,12 @@ func TestAdmissionAgentExecute(t *testing.T) {
 		state := newTestPipelineState(req)
 		res := agent.Execute(req.Context(), req, state)
 
-		if res.Status != "pass" {
-			t.Fatalf("expected pass, got %s", res.Status)
-		}
-		if !state.Admission.Authenticated || !state.Admission.TrustedProxy {
-			t.Fatalf("expected authenticated via trusted proxy: %#v", state.Admission)
-		}
-		if state.Admission.ClientIP != "203.0.113.5" {
-			t.Fatalf("expected client ip from forwarded header, got %s", state.Admission.ClientIP)
-		}
-		if state.Admission.ForwardedFor != "203.0.113.5" {
-			t.Fatalf("expected sanitized forwarded chain, got %s", state.Admission.ForwardedFor)
-		}
-		if req.Header.Get("X-Forwarded-For") != "203.0.113.5" {
-			t.Fatalf("expected forwarded header to be normalized on the request")
-		}
+		require.Equal(t, "pass", res.Status)
+		require.True(t, state.Admission.Authenticated)
+		require.True(t, state.Admission.TrustedProxy)
+		require.Equal(t, "203.0.113.5", state.Admission.ClientIP)
+		require.Equal(t, "203.0.113.5", state.Admission.ForwardedFor)
+		require.Equal(t, "203.0.113.5", req.Header.Get("X-Forwarded-For"))
 	})
 
 	t.Run("rejects untrusted proxy in production", func(t *testing.T) {
@@ -91,12 +73,8 @@ func TestAdmissionAgentExecute(t *testing.T) {
 		state := newTestPipelineState(req)
 		res := agent.Execute(req.Context(), req, state)
 
-		if res.Status != "fail" {
-			t.Fatalf("expected fail for untrusted proxy, got %s", res.Status)
-		}
-		if state.Admission.Reason != "untrusted proxy rejected" {
-			t.Fatalf("unexpected reason: %s", state.Admission.Reason)
-		}
+		require.Equal(t, "fail", res.Status)
+		require.Equal(t, "untrusted proxy rejected", state.Admission.Reason)
 	})
 
 	t.Run("accepts forwarded chain when remote is trusted", func(t *testing.T) {
@@ -109,15 +87,9 @@ func TestAdmissionAgentExecute(t *testing.T) {
 		state := newTestPipelineState(req)
 		res := agent.Execute(req.Context(), req, state)
 
-		if res.Status != "pass" {
-			t.Fatalf("expected pass when remote is trusted, got %s (reason=%s)", res.Status, state.Admission.Reason)
-		}
-		if !state.Admission.TrustedProxy {
-			t.Fatalf("expected trusted proxy flag to be true")
-		}
-		if state.Admission.ClientIP != "203.0.113.5" {
-			t.Fatalf("expected client ip from first forwarded hop, got %s", state.Admission.ClientIP)
-		}
+		require.Equal(t, "pass", res.Status, "reason=%s", state.Admission.Reason)
+		require.True(t, state.Admission.TrustedProxy)
+		require.Equal(t, "203.0.113.5", state.Admission.ClientIP)
 	})
 
 	t.Run("strips forwarded headers in development", func(t *testing.T) {
@@ -131,27 +103,13 @@ func TestAdmissionAgentExecute(t *testing.T) {
 		state := newTestPipelineState(req)
 		res := agent.Execute(req.Context(), req, state)
 
-		if res.Status != "fail" {
-			t.Fatalf("expected fail due to missing auth header, got %s", res.Status)
-		}
-		if !state.Admission.ProxyStripped {
-			t.Fatalf("expected proxy headers to be stripped in development mode")
-		}
-		if req.Header.Get("X-Forwarded-For") != "" {
-			t.Fatalf("expected forwarded header removed after sanitization")
-		}
-		if req.Header.Get("Forwarded") != "" {
-			t.Fatalf("expected RFC7239 forwarded header removed after sanitization")
-		}
-		if state.Admission.Forwarded != "" {
-			t.Fatalf("expected forwarded metadata cleared when stripping headers")
-		}
-		if !strings.Contains(state.Admission.Reason, "authorization header missing") {
-			t.Fatalf("expected admission reason to mention missing authorization: %s", state.Admission.Reason)
-		}
-		if req.Header.Get("X-Forwarded-Prefix") != "" {
-			t.Fatalf("expected forwarded prefix header removed after sanitization")
-		}
+		require.Equal(t, "fail", res.Status)
+		require.True(t, state.Admission.ProxyStripped)
+		require.Empty(t, req.Header.Get("X-Forwarded-For"))
+		require.Empty(t, req.Header.Get("Forwarded"))
+		require.Empty(t, state.Admission.Forwarded)
+		require.Contains(t, state.Admission.Reason, "authorization header missing")
+		require.Empty(t, req.Header.Get("X-Forwarded-Prefix"))
 	})
 
 	t.Run("development mode keeps forwarded chain when remote is trusted", func(t *testing.T) {
@@ -164,21 +122,11 @@ func TestAdmissionAgentExecute(t *testing.T) {
 		state := newTestPipelineState(req)
 		res := agent.Execute(req.Context(), req, state)
 
-		if res.Status != "pass" {
-			t.Fatalf("expected pass with trusted remote, got %s (reason=%s)", res.Status, state.Admission.Reason)
-		}
-		if state.Admission.ProxyStripped {
-			t.Fatalf("did not expect forwarded headers stripped in development with trusted remote")
-		}
-		if !state.Admission.TrustedProxy {
-			t.Fatalf("expected trusted proxy flag to be true")
-		}
-		if state.Admission.ClientIP != "203.0.113.5" {
-			t.Fatalf("expected client ip from forwarded chain, got %s", state.Admission.ClientIP)
-		}
-		if req.Header.Get("X-Forwarded-For") == "" {
-			t.Fatalf("expected forwarded header retained in development mode when remote trusted")
-		}
+		require.Equal(t, "pass", res.Status, "reason=%s", state.Admission.Reason)
+		require.False(t, state.Admission.ProxyStripped)
+		require.True(t, state.Admission.TrustedProxy)
+		require.Equal(t, "203.0.113.5", state.Admission.ClientIP)
+		require.NotEmpty(t, req.Header.Get("X-Forwarded-For"))
 	})
 
 	t.Run("rejects invalid forwarded chain", func(t *testing.T) {
@@ -191,12 +139,8 @@ func TestAdmissionAgentExecute(t *testing.T) {
 		state := newTestPipelineState(req)
 		res := agent.Execute(req.Context(), req, state)
 
-		if res.Status != "fail" {
-			t.Fatalf("expected fail for invalid forwarded chain, got %s", res.Status)
-		}
-		if state.Admission.Reason != "invalid forwarded chain" {
-			t.Fatalf("unexpected reason: %s", state.Admission.Reason)
-		}
+		require.Equal(t, "fail", res.Status)
+		require.Equal(t, "invalid forwarded chain", state.Admission.Reason)
 	})
 
 	t.Run("accepts RFC7239 forwarded header", func(t *testing.T) {
@@ -209,19 +153,11 @@ func TestAdmissionAgentExecute(t *testing.T) {
 		state := newTestPipelineState(req)
 		res := agent.Execute(req.Context(), req, state)
 
-		if res.Status != "pass" {
-			t.Fatalf("expected pass for valid forwarded header, got %s", res.Status)
-		}
-		if state.Admission.ClientIP != "2001:db8::1" {
-			t.Fatalf("expected client ip from RFC7239 header, got %s", state.Admission.ClientIP)
-		}
+		require.Equal(t, "pass", res.Status, "expected pass for valid forwarded header")
+		require.Equal(t, "2001:db8::1", state.Admission.ClientIP)
 		expected := "for=\"[2001:db8::1]:443\"; proto=https; by=203.0.113.10"
-		if state.Admission.Forwarded != expected {
-			t.Fatalf("unexpected sanitized forwarded header: %s", state.Admission.Forwarded)
-		}
-		if req.Header.Get("Forwarded") != expected {
-			t.Fatalf("expected forwarded header normalized on request: %s", req.Header.Get("Forwarded"))
-		}
+		require.Equal(t, expected, state.Admission.Forwarded)
+		require.Equal(t, expected, req.Header.Get("Forwarded"))
 	})
 
 	t.Run("rejects mismatched forwarded metadata", func(t *testing.T) {
@@ -235,12 +171,8 @@ func TestAdmissionAgentExecute(t *testing.T) {
 		state := newTestPipelineState(req)
 		res := agent.Execute(req.Context(), req, state)
 
-		if res.Status != "fail" {
-			t.Fatalf("expected fail for mismatched forwarded metadata, got %s", res.Status)
-		}
-		if state.Admission.Reason != "forwarded metadata mismatch between headers" {
-			t.Fatalf("unexpected reason: %s", state.Admission.Reason)
-		}
+		require.Equal(t, "fail", res.Status)
+		require.Equal(t, "forwarded metadata mismatch between headers", state.Admission.Reason)
 	})
 
 	t.Run("rejects obfuscated forwarded directive", func(t *testing.T) {
@@ -253,12 +185,8 @@ func TestAdmissionAgentExecute(t *testing.T) {
 		state := newTestPipelineState(req)
 		res := agent.Execute(req.Context(), req, state)
 
-		if res.Status != "fail" {
-			t.Fatalf("expected fail for obfuscated forwarded directive, got %s", res.Status)
-		}
-		if state.Admission.Reason != "forwarded metadata missing for directive" {
-			t.Fatalf("unexpected reason: %s", state.Admission.Reason)
-		}
+		require.Equal(t, "fail", res.Status)
+		require.Equal(t, "forwarded metadata missing for directive", state.Admission.Reason)
 	})
 
 	t.Run("captures invalid remote address", func(t *testing.T) {
@@ -270,12 +198,8 @@ func TestAdmissionAgentExecute(t *testing.T) {
 		state := newTestPipelineState(req)
 		res := agent.Execute(req.Context(), req, state)
 
-		if res.Status != "fail" {
-			t.Fatalf("expected fail for invalid remote address, got %s", res.Status)
-		}
-		if state.Admission.Reason != "invalid remote address" {
-			t.Fatalf("unexpected reason: %s", state.Admission.Reason)
-		}
+		require.Equal(t, "fail", res.Status)
+		require.Equal(t, "invalid remote address", state.Admission.Reason)
 	})
 
 	t.Run("records decision snapshot on success", func(t *testing.T) {
@@ -287,18 +211,12 @@ func TestAdmissionAgentExecute(t *testing.T) {
 		state := newTestPipelineState(req)
 		res := agent.Execute(req.Context(), req, state)
 
-		if res.Status != "pass" {
-			t.Fatalf("expected pass status, got %s", res.Status)
-		}
-		if state.Admission.Decision != "pass" {
-			t.Fatalf("expected decision snapshot to record pass, got %s", state.Admission.Decision)
-		}
-		if state.Admission.Snapshot == nil {
-			t.Fatalf("snapshot should be populated on success")
-		}
-		if reason, ok := state.Admission.Snapshot["reason"].(string); !ok || !strings.Contains(reason, "accepted") {
-			t.Fatalf("expected snapshot reason to include accepted, got %#v", state.Admission.Snapshot["reason"])
-		}
+		require.Equal(t, "pass", res.Status)
+		require.Equal(t, "pass", state.Admission.Decision)
+		require.NotNil(t, state.Admission.Snapshot)
+		reason, ok := state.Admission.Snapshot["reason"].(string)
+		require.True(t, ok)
+		require.Contains(t, reason, "accepted")
 	})
 
 	t.Run("records decision snapshot on missing credentials", func(t *testing.T) {
@@ -309,18 +227,12 @@ func TestAdmissionAgentExecute(t *testing.T) {
 		state := newTestPipelineState(req)
 		res := agent.Execute(req.Context(), req, state)
 
-		if res.Status != "fail" {
-			t.Fatalf("expected fail status when authorization missing, got %s", res.Status)
-		}
-		if state.Admission.Decision != "fail" {
-			t.Fatalf("expected decision snapshot to record fail, got %s", state.Admission.Decision)
-		}
-		if state.Admission.Snapshot == nil {
-			t.Fatalf("snapshot should be populated on failure")
-		}
-		if reason, ok := state.Admission.Snapshot["reason"].(string); !ok || !strings.Contains(reason, "missing") {
-			t.Fatalf("expected snapshot reason to capture missing credential, got %#v", state.Admission.Snapshot["reason"])
-		}
+		require.Equal(t, "fail", res.Status)
+		require.Equal(t, "fail", state.Admission.Decision)
+		require.NotNil(t, state.Admission.Snapshot)
+		reason, ok := state.Admission.Snapshot["reason"].(string)
+		require.True(t, ok)
+		require.Contains(t, reason, "missing")
 	})
 }
 
@@ -333,12 +245,9 @@ func TestRuleChainAgentExecute(t *testing.T) {
 		agent := rulechain.NewAgent(rulechain.DefaultDefinitions(nil))
 		res := agent.Execute(context.Background(), nil, state)
 
-		if res.Status != "cached" {
-			t.Fatalf("expected cached status, got %s", res.Status)
-		}
-		if state.Rule.Outcome != "pass" || !state.Rule.FromCache {
-			t.Fatalf("expected rule to reuse cached decision: %#v", state.Rule)
-		}
+		require.Equal(t, "cached", res.Status)
+		require.Equal(t, "pass", state.Rule.Outcome)
+		require.True(t, state.Rule.FromCache)
 	})
 
 	t.Run("admission failure", func(t *testing.T) {
@@ -348,12 +257,8 @@ func TestRuleChainAgentExecute(t *testing.T) {
 		agent := rulechain.NewAgent(rulechain.DefaultDefinitions(nil))
 		res := agent.Execute(context.Background(), nil, state)
 
-		if res.Status != "short_circuited" {
-			t.Fatalf("expected short circuit status, got %s", res.Status)
-		}
-		if state.Rule.ShouldExecute {
-			t.Fatalf("rule execution should be disabled on admission failure")
-		}
+		require.Equal(t, "short_circuited", res.Status)
+		require.False(t, state.Rule.ShouldExecute)
 	})
 
 	t.Run("ready", func(t *testing.T) {
@@ -363,15 +268,11 @@ func TestRuleChainAgentExecute(t *testing.T) {
 		agent := rulechain.NewAgent(rulechain.DefaultDefinitions(nil))
 		res := agent.Execute(context.Background(), nil, state)
 
-		if res.Status != "ready" {
-			t.Fatalf("expected ready status, got %s", res.Status)
-		}
-		if !state.Rule.ShouldExecute {
-			t.Fatalf("rule execution should proceed after admission success")
-		}
-		if plan, _ := state.Plan().(rulechain.ExecutionPlan); len(plan.Rules) != len(rulechain.DefaultDefinitions(nil)) {
-			t.Fatalf("expected rule plan to include default rules")
-		}
+		require.Equal(t, "ready", res.Status)
+		require.True(t, state.Rule.ShouldExecute)
+		plan, ok := state.Plan().(rulechain.ExecutionPlan)
+		require.True(t, ok)
+		require.Len(t, plan.Rules, len(rulechain.DefaultDefinitions(nil)))
 	})
 }
 
@@ -381,9 +282,7 @@ func TestRuleExecutionAgentExecute(t *testing.T) {
 	t.Run("skip on cache", func(t *testing.T) {
 		state := &pipeline.State{Rule: pipeline.RuleState{FromCache: true}}
 		res := agent.Execute(context.Background(), nil, state)
-		if res.Status != "skipped" {
-			t.Fatalf("expected skip status, got %s", res.Status)
-		}
+		require.Equal(t, "skipped", res.Status)
 	})
 
 	t.Run("no rules defined defaults to pass", func(t *testing.T) {
@@ -392,131 +291,97 @@ func TestRuleExecutionAgentExecute(t *testing.T) {
 		state.SetPlan(rulechain.ExecutionPlan{})
 
 		res := agent.Execute(context.Background(), nil, state)
-		if state.Rule.Outcome != "pass" || res.Status != "pass" {
-			t.Fatalf("expected pass outcome, got state=%s result=%s", state.Rule.Outcome, res.Status)
-		}
-		if state.Rule.Reason != "no rules defined" {
-			t.Fatalf("expected default reason for empty plan, got %s", state.Rule.Reason)
-		}
+		require.Equal(t, "pass", state.Rule.Outcome)
+		require.Equal(t, "pass", res.Status)
+		require.Equal(t, "no rules defined", state.Rule.Reason)
 	})
 
 	t.Run("fail when condition matches", func(t *testing.T) {
 		defs, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{{
-			Name: "deny",
-			Conditions: rulechain.ConditionSpec{
-				Fail: []string{`forward.headers["x-passctrl-deny"] == "true"`},
-			},
+			Name:        "deny",
+			Conditions:  rulechain.ConditionSpec{Fail: []string{`forward.headers["x-passctrl-deny"] == "true"`}},
 			FailMessage: "denied by header",
 		}}, nil)
-		if err != nil {
-			t.Fatalf("compile rule: %v", err)
-		}
+		require.NoError(t, err)
 
 		state := &pipeline.State{Forward: pipeline.ForwardState{Headers: map[string]string{"x-passctrl-deny": "true"}}}
 		state.Rule.ShouldExecute = true
 		state.SetPlan(rulechain.ExecutionPlan{Rules: defs})
 
 		res := agent.Execute(context.Background(), nil, state)
-		if state.Rule.Outcome != "fail" || res.Status != "fail" {
-			t.Fatalf("expected fail outcome, got state=%s result=%s", state.Rule.Outcome, res.Status)
-		}
-		if len(state.Rule.History) != 1 || state.Rule.History[0].Outcome != "fail" {
-			t.Fatalf("expected history to record failure: %#v", state.Rule.History)
-		}
-		if state.Rule.Reason != "denied by header" {
-			t.Fatalf("unexpected failure reason: %s", state.Rule.Reason)
-		}
+		require.Equal(t, "fail", state.Rule.Outcome)
+		require.Equal(t, "fail", res.Status)
+		require.Len(t, state.Rule.History, 1)
+		require.Equal(t, "fail", state.Rule.History[0].Outcome)
+		require.Equal(t, "denied by header", state.Rule.Reason)
 	})
 
 	t.Run("error when condition matches", func(t *testing.T) {
 		defs, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{{
-			Name: "error",
-			Conditions: rulechain.ConditionSpec{
-				Error: []string{`forward.query["error"] == "true"`},
-			},
+			Name:         "error",
+			Conditions:   rulechain.ConditionSpec{Error: []string{`forward.query["error"] == "true"`}},
 			ErrorMessage: "error toggle requested",
 		}}, nil)
-		if err != nil {
-			t.Fatalf("compile rule: %v", err)
-		}
+		require.NoError(t, err)
 
 		state := &pipeline.State{Forward: pipeline.ForwardState{Query: map[string]string{"error": "true"}}}
 		state.Rule.ShouldExecute = true
 		state.SetPlan(rulechain.ExecutionPlan{Rules: defs})
 
 		res := agent.Execute(context.Background(), nil, state)
-		if state.Rule.Outcome != "error" || res.Status != "error" {
-			t.Fatalf("expected error outcome, got state=%s result=%s", state.Rule.Outcome, res.Status)
-		}
+		require.Equal(t, "error", state.Rule.Outcome)
+		require.Equal(t, "error", res.Status)
 	})
 
 	t.Run("pass outcome when condition satisfied", func(t *testing.T) {
 		defs, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{{
-			Name: "pass",
-			Conditions: rulechain.ConditionSpec{
-				Pass: []string{`forward.headers["authorization"] == "token"`},
-			},
+			Name:        "pass",
+			Conditions:  rulechain.ConditionSpec{Pass: []string{`forward.headers["authorization"] == "token"`}},
 			PassMessage: "allowed",
 		}}, nil)
-		if err != nil {
-			t.Fatalf("compile rule: %v", err)
-		}
+		require.NoError(t, err)
 
 		state := &pipeline.State{Forward: pipeline.ForwardState{Headers: map[string]string{"authorization": "token"}}}
 		state.Rule.ShouldExecute = true
 		state.SetPlan(rulechain.ExecutionPlan{Rules: defs})
 
 		res := agent.Execute(context.Background(), nil, state)
-		if state.Rule.Outcome != "pass" || res.Status != "pass" {
-			t.Fatalf("expected pass outcome, got state=%s result=%s", state.Rule.Outcome, res.Status)
-		}
-		if state.Rule.Reason != "allowed" {
-			t.Fatalf("unexpected pass reason: %s", state.Rule.Reason)
-		}
+		require.Equal(t, "pass", state.Rule.Outcome)
+		require.Equal(t, "pass", res.Status)
+		require.Equal(t, "allowed", state.Rule.Reason)
 	})
 
 	t.Run("fails when required condition missing", func(t *testing.T) {
 		defs, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{{
 			Name: "requires-query",
-			Conditions: rulechain.ConditionSpec{
-				Pass: []string{
-					`forward.headers["authorization"] == "token"`,
-					`lookup(forward.query, "allow") == "true"`,
-				},
-			},
+			Conditions: rulechain.ConditionSpec{Pass: []string{
+				`forward.headers["authorization"] == "token"`,
+				`lookup(forward.query, "allow") == "true"`,
+			}},
 			FailMessage: "required condition missing",
 		}}, nil)
-		if err != nil {
-			t.Fatalf("compile rule: %v", err)
-		}
+		require.NoError(t, err)
 
 		state := &pipeline.State{Forward: pipeline.ForwardState{Headers: map[string]string{"authorization": "token"}}}
 		state.Rule.ShouldExecute = true
 		state.SetPlan(rulechain.ExecutionPlan{Rules: defs})
 
 		res := agent.Execute(context.Background(), nil, state)
-		if state.Rule.Outcome != "fail" || res.Status != "fail" {
-			t.Fatalf("expected fail outcome when condition missing, got state=%s result=%s", state.Rule.Outcome, res.Status)
-		}
-		if state.Rule.Reason != "required condition missing" {
-			t.Fatalf("unexpected failure reason: %s", state.Rule.Reason)
-		}
+		require.Equal(t, "fail", state.Rule.Outcome)
+		require.Equal(t, "fail", res.Status)
+		require.Equal(t, "required condition missing", state.Rule.Reason)
 	})
 
 	t.Run("pass when all predicates satisfied", func(t *testing.T) {
 		defs, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{{
 			Name: "requires-query",
-			Conditions: rulechain.ConditionSpec{
-				Pass: []string{
-					`forward.headers["authorization"] == "token"`,
-					`lookup(forward.query, "allow") == "true"`,
-				},
-			},
+			Conditions: rulechain.ConditionSpec{Pass: []string{
+				`forward.headers["authorization"] == "token"`,
+				`lookup(forward.query, "allow") == "true"`,
+			}},
 			PassMessage: "all conditions met",
 		}}, nil)
-		if err != nil {
-			t.Fatalf("compile rule: %v", err)
-		}
+		require.NoError(t, err)
 
 		state := &pipeline.State{Forward: pipeline.ForwardState{
 			Headers: map[string]string{"authorization": "token"},
@@ -526,19 +391,17 @@ func TestRuleExecutionAgentExecute(t *testing.T) {
 		state.SetPlan(rulechain.ExecutionPlan{Rules: defs})
 
 		res := agent.Execute(context.Background(), nil, state)
-		if state.Rule.Outcome != "pass" || res.Status != "pass" {
-			t.Fatalf("expected pass outcome when all predicates met, got state=%s result=%s", state.Rule.Outcome, res.Status)
-		}
-		if state.Rule.Reason != "all conditions met" {
-			t.Fatalf("unexpected pass reason: %s", state.Rule.Reason)
-		}
+		require.Equal(t, "pass", state.Rule.Outcome)
+		require.Equal(t, "pass", res.Status)
+		require.Equal(t, "all conditions met", state.Rule.Reason)
 	})
 
 	t.Run("backend response evaluated with cel", func(t *testing.T) {
+		var handlerErr error
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			if _, err := fmt.Fprint(w, `{"allowed": true, "count": 5}`); err != nil {
-				t.Fatalf("write backend response: %v", err)
+				handlerErr = err
 			}
 		}))
 		t.Cleanup(server.Close)
@@ -554,28 +417,22 @@ func TestRuleExecutionAgentExecute(t *testing.T) {
 			},
 			PassMessage: "backend allowed",
 		}}, nil)
-		if err != nil {
-			t.Fatalf("compile rule: %v", err)
-		}
+		require.NoError(t, err)
 
 		state := &pipeline.State{}
 		state.Rule.ShouldExecute = true
 		state.SetPlan(rulechain.ExecutionPlan{Rules: defs})
 
 		res := agent.Execute(context.Background(), nil, state)
-		if state.Rule.Outcome != "pass" || res.Status != "pass" {
-			t.Fatalf("expected backend-driven pass, got state=%s result=%s", state.Rule.Outcome, res.Status)
-		}
-		if state.Rule.Reason != "backend allowed" {
-			t.Fatalf("unexpected pass reason: %s", state.Rule.Reason)
-		}
-		if !state.Backend.Requested || state.Backend.Status != http.StatusOK {
-			t.Fatalf("expected backend request to be recorded: %#v", state.Backend)
-		}
+		require.NoError(t, handlerErr)
+		require.Equal(t, "pass", state.Rule.Outcome)
+		require.Equal(t, "pass", res.Status)
+		require.Equal(t, "backend allowed", state.Rule.Reason)
+		require.True(t, state.Backend.Requested)
+		require.Equal(t, http.StatusOK, state.Backend.Status)
 		body, ok := state.Backend.Body.(map[string]any)
-		if !ok || body["allowed"] != true {
-			t.Fatalf("expected backend body to be stored: %#v", state.Backend.Body)
-		}
+		require.True(t, ok)
+		require.Equal(t, true, body["allowed"])
 	})
 
 	t.Run("forwards curated metadata to backend", func(t *testing.T) {
@@ -585,6 +442,7 @@ func TestRuleExecutionAgentExecute(t *testing.T) {
 			seenProxy  string
 			seenQuery  string
 		)
+		var handlerErr error
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			seenAuth = r.Header.Get("Authorization")
@@ -592,7 +450,7 @@ func TestRuleExecutionAgentExecute(t *testing.T) {
 			seenProxy = r.Header.Get("X-Forwarded-For")
 			seenQuery = r.URL.RawQuery
 			if _, err := fmt.Fprint(w, `{"allowed": true}`); err != nil {
-				t.Fatalf("write backend response: %v", err)
+				handlerErr = err
 			}
 		}))
 		t.Cleanup(server.Close)
@@ -615,9 +473,7 @@ func TestRuleExecutionAgentExecute(t *testing.T) {
 				Pass: []string{`backend.body.allowed == true`},
 			},
 		}}, nil)
-		if err != nil {
-			t.Fatalf("compile rule: %v", err)
-		}
+		require.NoError(t, err)
 
 		state := &pipeline.State{
 			Forward: pipeline.ForwardState{
@@ -634,31 +490,17 @@ func TestRuleExecutionAgentExecute(t *testing.T) {
 		state.SetPlan(rulechain.ExecutionPlan{Rules: defs})
 
 		res := agent.Execute(context.Background(), nil, state)
-		if res.Status != "pass" {
-			t.Fatalf("expected pass status, got %s", res.Status)
-		}
-		if seenAuth != "Bearer original" {
-			t.Fatalf("backend should observe forwarded authorization header, got %s", seenAuth)
-		}
-		if seenCustom != "custom" {
-			t.Fatalf("backend should receive custom header, got %s", seenCustom)
-		}
-		if seenProxy != "198.51.100.10" {
-			t.Fatalf("backend should receive sanitized forwarded header, got %s", seenProxy)
-		}
+		require.NoError(t, handlerErr)
+		require.Equal(t, "pass", res.Status)
+		require.Equal(t, "Bearer original", seenAuth)
+		require.Equal(t, "custom", seenCustom)
+		require.Equal(t, "198.51.100.10", seenProxy)
 		values, err := url.ParseQuery(seenQuery)
-		if err != nil {
-			t.Fatalf("parse backend query: %v", err)
-		}
-		if values.Get("allow") != "true" {
-			t.Fatalf("expected allow query parameter forwarded, got %s", values.Get("allow"))
-		}
-		if len(state.Backend.Pages) != 1 {
-			t.Fatalf("expected single page recorded, got %d", len(state.Backend.Pages))
-		}
+		require.NoError(t, err)
+		require.Equal(t, "true", values.Get("allow"))
+		require.Len(t, state.Backend.Pages, 1)
 	})
 
-	// New test: renders backend body from inline template and file
 	t.Run("renders backend body from templates", func(t *testing.T) {
 		var seenBodyInline string
 		var seenBodyFile string
@@ -683,17 +525,13 @@ func TestRuleExecutionAgentExecute(t *testing.T) {
 
 		dir := t.TempDir()
 		sandbox, err := templates.NewSandbox(dir, true, []string{"TOKEN"})
-		if err != nil {
-			t.Fatalf("sandbox create: %v", err)
-		}
+		require.NoError(t, err)
 		t.Setenv("TOKEN", "secret")
 		renderer := templates.NewRenderer(sandbox)
 
 		// Create a file template
 		path := filepath.Join(dir, "body.txt")
-		if err := os.WriteFile(path, []byte("file-{{ env \"TOKEN\" }}"), 0o600); err != nil {
-			t.Fatalf("write template file: %v", err)
-		}
+		require.NoError(t, os.WriteFile(path, []byte("file-{{ env \"TOKEN\" }}"), 0o600))
 
 		defs, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{
 			{
@@ -707,9 +545,7 @@ func TestRuleExecutionAgentExecute(t *testing.T) {
 				Conditions: rulechain.ConditionSpec{Pass: []string{"true"}},
 			},
 		}, renderer)
-		if err != nil {
-			t.Fatalf("compile rule: %v", err)
-		}
+		require.NoError(t, err)
 
 		state := &pipeline.State{}
 		state.Rule.ShouldExecute = true
@@ -717,19 +553,20 @@ func TestRuleExecutionAgentExecute(t *testing.T) {
 
 		agentWithRenderer := newRuleExecutionAgent(nil, nil, renderer)
 		res := agentWithRenderer.Execute(context.Background(), nil, state)
-		if res.Status != "pass" {
-			t.Fatalf("expected pass, got %s", res.Status)
-		}
-		if seenBodyInline != "inline-secret" {
-			t.Fatalf("expected inline body rendered, got %q", seenBodyInline)
-		}
-		if seenBodyFile != "file-secret" {
-			t.Fatalf("expected file body rendered, got %q", seenBodyFile)
-		}
+		require.Equal(t, "pass", res.Status)
+		require.Equal(t, "pass", state.Rule.Outcome)
+		require.Len(t, state.Rule.History, 2)
+		require.Equal(t, "inline", state.Rule.History[0].Name)
+		require.Equal(t, "file", state.Rule.History[1].Name)
+		require.True(t, state.Backend.Requested)
+		require.True(t, state.Backend.Accepted)
+		require.Equal(t, "inline-secret", seenBodyInline)
+		require.Equal(t, "file-secret", seenBodyFile)
 	})
 
 	t.Run("follows link header pagination", func(t *testing.T) {
 		var server *httptest.Server
+		var handlerErr error
 		handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			page := r.URL.Query().Get("page")
 			if page == "" {
@@ -739,12 +576,12 @@ func TestRuleExecutionAgentExecute(t *testing.T) {
 			if page == "1" {
 				w.Header().Set("Link", fmt.Sprintf("<%s?page=2>; rel=\"next\"", server.URL+"/paginate"))
 				if _, err := fmt.Fprint(w, `{"allowed": false}`); err != nil {
-					t.Fatalf("write backend response: %v", err)
+					handlerErr = err
 				}
 				return
 			}
 			if _, err := fmt.Fprint(w, `{"allowed": true}`); err != nil {
-				t.Fatalf("write backend response: %v", err)
+				handlerErr = err
 			}
 		})
 		server = httptest.NewServer(handler)
@@ -767,9 +604,7 @@ func TestRuleExecutionAgentExecute(t *testing.T) {
 				},
 			},
 		}}, nil)
-		if err != nil {
-			t.Fatalf("compile rule: %v", err)
-		}
+		require.NoError(t, err)
 
 		state := &pipeline.State{
 			Forward: pipeline.ForwardState{Query: map[string]string{"allow": "true"}},
@@ -781,29 +616,21 @@ func TestRuleExecutionAgentExecute(t *testing.T) {
 		state.SetPlan(rulechain.ExecutionPlan{Rules: defs})
 
 		res := agent.Execute(context.Background(), nil, state)
-		if res.Status != "pass" {
-			t.Fatalf("expected pass status after pagination, got %s", res.Status)
-		}
-		if len(state.Backend.Pages) != 2 {
-			t.Fatalf("expected two backend pages recorded, got %d", len(state.Backend.Pages))
-		}
-		if state.Backend.Status != http.StatusOK || !state.Backend.Accepted {
-			t.Fatalf("expected final backend status accepted, got %#v", state.Backend)
-		}
-		if body, ok := state.Backend.Body.(map[string]any); !ok || body["allowed"] != true {
-			t.Fatalf("expected final backend body to reflect second page: %#v", state.Backend.Body)
-		}
-		if !strings.Contains(state.Backend.BodyText, "allowed") {
-			t.Fatalf("expected body text to capture payload, got %s", state.Backend.BodyText)
-		}
+		require.NoError(t, handlerErr)
+		require.Equal(t, "pass", res.Status)
+		require.Len(t, state.Backend.Pages, 2)
+		require.Equal(t, http.StatusOK, state.Backend.Status)
+		require.True(t, state.Backend.Accepted)
+		body, ok := state.Backend.Body.(map[string]any)
+		require.True(t, ok)
+		require.Equal(t, true, body["allowed"])
+		require.Contains(t, state.Backend.BodyText, "allowed")
 	})
 
 	t.Run("renders template reason with sandbox context", func(t *testing.T) {
 		dir := t.TempDir()
 		sandbox, err := templates.NewSandbox(dir, true, []string{"ALLOWED"})
-		if err != nil {
-			t.Fatalf("sandbox create: %v", err)
-		}
+		require.NoError(t, err)
 		t.Setenv("ALLOWED", "visible")
 		renderer := templates.NewRenderer(sandbox)
 
@@ -814,21 +641,15 @@ func TestRuleExecutionAgentExecute(t *testing.T) {
 			},
 			PassMessage: "{{ env \"ALLOWED\" }}:{{ index .forward.Headers \"authorization\" }}",
 		}}, renderer)
-		if err != nil {
-			t.Fatalf("compile rule: %v", err)
-		}
+		require.NoError(t, err)
 
 		state := &pipeline.State{Forward: pipeline.ForwardState{Headers: map[string]string{"authorization": "token"}}}
 		state.Rule.ShouldExecute = true
 		state.SetPlan(rulechain.ExecutionPlan{Rules: defs})
 
 		res := agent.Execute(context.Background(), nil, state)
-		if res.Status != "pass" {
-			t.Fatalf("expected pass status for templated rule, got %s", res.Status)
-		}
-		if state.Rule.Reason != "visible:token" {
-			t.Fatalf("expected rendered template reason, got %s", state.Rule.Reason)
-		}
+		require.Equal(t, "pass", res.Status)
+		require.Equal(t, "visible:token", state.Rule.Reason)
 	})
 }
 
@@ -850,15 +671,9 @@ func TestResponsePolicyAgentExecute(t *testing.T) {
 			state.Rule.Outcome = tc.outcome
 			res := agent.Execute(context.Background(), nil, state)
 
-			if res.Status != "rendered" {
-				t.Fatalf("unexpected status: %s", res.Status)
-			}
-			if state.Response.Status != tc.expect {
-				t.Fatalf("expected %d, got %d", tc.expect, state.Response.Status)
-			}
-			if state.Response.Headers["X-PassCtrl-Outcome"] != tc.outcome {
-				t.Fatalf("expected outcome header to match %s", tc.outcome)
-			}
+			require.Equal(t, "rendered", res.Status)
+			require.Equal(t, tc.expect, state.Response.Status)
+			require.Equal(t, tc.outcome, state.Response.Headers["X-PassCtrl-Outcome"])
 		})
 	}
 }
@@ -874,30 +689,18 @@ func TestResultCachingAgentExecute(t *testing.T) {
 	state.Response.Message = "granted"
 
 	res := agent.Execute(req.Context(), req, state)
-	if res.Status != "stored" {
-		t.Fatalf("expected stored status, got %s", res.Status)
-	}
-	if !state.Cache.Stored {
-		t.Fatalf("cache state should record stored decision")
-	}
+	require.Equal(t, "stored", res.Status)
+	require.True(t, state.Cache.Stored)
 	entry, ok, err := decisionCache.Lookup(req.Context(), state.CacheKey())
-	if err != nil {
-		t.Fatalf("lookup: %v", err)
-	}
-	if !ok {
-		t.Fatalf("cache should contain stored decision")
-	}
-	if entry.Decision != "pass" {
-		t.Fatalf("expected cached decision to be pass, got %s", entry.Decision)
-	}
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, "pass", entry.Decision)
 
 	t.Run("error outcome bypasses cache", func(t *testing.T) {
 		state := newTestPipelineState(req)
 		state.Rule.Outcome = "error"
 
 		res := agent.Execute(req.Context(), req, state)
-		if res.Status != "bypassed" {
-			t.Fatalf("expected bypassed status for error, got %s", res.Status)
-		}
+		require.Equal(t, "bypassed", res.Status)
 	})
 }

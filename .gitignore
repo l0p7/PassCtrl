@@ -1,10 +1,37 @@
-# Go Related Ignores
-/.gocache/
-/.gomodcache/
-/.golangci-lint/
+# Binaries and build artifacts
+bin/
+dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
 
+# Go tooling outputs
+*.cover
+*.coverprofile
+coverage/
 coverage.out
+coverage.html
 lint.txt
 
-# Beads Ignores
+# Dependency & cache directories
+vendor/
+.gocache/
+.gomodcache/
+.golangci-lint/
+
+# Scratch Files
+_scratch_*.go
+# Logs
+*.log
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+
+# Beads db files
 .beads/*.db

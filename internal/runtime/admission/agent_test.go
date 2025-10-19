@@ -2,21 +2,19 @@ package admission
 
 import (
 	"context"
-	"errors"
 	"net/http/httptest"
 	"net/netip"
-	"strings"
 	"testing"
 
 	"github.com/l0p7/passctrl/internal/runtime/pipeline"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func mustPrefix(t *testing.T, cidr string) netip.Prefix {
 	t.Helper()
 	prefix, err := netip.ParsePrefix(cidr)
-	if err != nil {
-		t.Fatalf("parse prefix %q: %v", cidr, err)
-	}
+	require.NoErrorf(t, err, "parse prefix %q", cidr)
 	return prefix
 }
 
@@ -30,18 +28,10 @@ func TestAgentRejectsForwardedChainWithUntrustedProxy(t *testing.T) {
 
 	res := agent.Execute(context.Background(), req, state)
 
-	if res.Status != "fail" {
-		t.Fatalf("expected status fail, got %q", res.Status)
-	}
-	if state.Admission.Reason != "forwarded chain includes untrusted proxy" {
-		t.Fatalf("expected reason for untrusted chain, got %q", state.Admission.Reason)
-	}
-	if state.Admission.ProxyNote != "forwarded headers stripped due to untrusted proxy chain" {
-		t.Fatalf("expected proxy note about untrusted chain, got %q", state.Admission.ProxyNote)
-	}
-	if state.Admission.Authenticated {
-		t.Fatalf("expected authentication to fail when proxies are untrusted")
-	}
+	require.Equal(t, "fail", res.Status)
+	require.Equal(t, "forwarded chain includes untrusted proxy", state.Admission.Reason)
+	require.Equal(t, "forwarded headers stripped due to untrusted proxy chain", state.Admission.ProxyNote)
+	require.False(t, state.Admission.Authenticated, "expected authentication to fail when proxies are untrusted")
 }
 
 func TestAgentAcceptsForwardedChainFromTrustedProxies(t *testing.T) {
@@ -59,18 +49,10 @@ func TestAgentAcceptsForwardedChainFromTrustedProxies(t *testing.T) {
 
 	res := agent.Execute(context.Background(), req, state)
 
-	if res.Status != "pass" {
-		t.Fatalf("expected status pass, got %q", res.Status)
-	}
-	if !state.Admission.TrustedProxy {
-		t.Fatalf("expected trusted proxy to be recorded")
-	}
-	if state.Admission.ClientIP != "198.51.100.5" {
-		t.Fatalf("expected client ip from forwarded chain, got %q", state.Admission.ClientIP)
-	}
-	if state.Admission.Decision != "pass" {
-		t.Fatalf("expected admission decision pass, got %q", state.Admission.Decision)
-	}
+	require.Equal(t, "pass", res.Status)
+	require.True(t, state.Admission.TrustedProxy, "expected trusted proxy to be recorded")
+	require.Equal(t, "198.51.100.5", state.Admission.ClientIP)
+	require.Equal(t, "pass", state.Admission.Decision)
 }
 
 func TestAgentDevelopmentModeStripsInvalidForwarded(t *testing.T) {
@@ -84,18 +66,11 @@ func TestAgentDevelopmentModeStripsInvalidForwarded(t *testing.T) {
 
 	res := agent.Execute(context.Background(), req, state)
 
-	if res.Status != "pass" {
-		t.Fatalf("expected status pass in development mode, got %q", res.Status)
-	}
-	if !state.Admission.ProxyStripped {
-		t.Fatalf("expected forwarded headers to be stripped in development mode")
-	}
-	if state.Admission.ForwardedFor != "" || req.Header.Get("X-Forwarded-For") != "" {
-		t.Fatalf("expected forwarded for header to be cleared")
-	}
-	if state.Admission.ProxyNote == "" {
-		t.Fatalf("expected proxy note to explain stripping")
-	}
+	require.Equal(t, "pass", res.Status)
+	require.True(t, state.Admission.ProxyStripped, "expected forwarded headers to be stripped in development mode")
+	require.Empty(t, state.Admission.ForwardedFor)
+	require.Empty(t, req.Header.Get("X-Forwarded-For"))
+	require.NotEmpty(t, state.Admission.ProxyNote)
 }
 
 func TestPrepareForwardedMetadataMismatch(t *testing.T) {
@@ -108,45 +83,31 @@ func TestPrepareForwardedMetadataMismatch(t *testing.T) {
 	state.Admission.Forwarded = req.Header.Get("Forwarded")
 	state.Admission.ForwardedFor = req.Header.Get("X-Forwarded-For")
 
-	if _, err := agent.prepareForwardedMetadata(req, state); err == nil || !errors.Is(err, errForwardedMetadata) {
-		t.Fatalf("expected errForwardedMetadata mismatch, got %v", err)
-	}
+	_, err := agent.prepareForwardedMetadata(req, state)
+	require.ErrorIs(t, err, errForwardedMetadata)
 }
 
 func TestParseRFC7239Forwarded(t *testing.T) {
 	header := `for="2001:db8::1"; proto=https; host=example.com, for=203.0.113.7:443`
 	addrs, sanitized, err := parseRFC7239Forwarded(header)
-	if err != nil {
-		t.Fatalf("unexpected parse error: %v", err)
-	}
-	if len(addrs) != 2 {
-		t.Fatalf("expected two addresses, got %v", addrs)
-	}
-	if !strings.Contains(sanitized, `for="2001:db8::1"`) || !strings.Contains(sanitized, "proto=https") {
-		t.Fatalf("unexpected sanitized header: %q", sanitized)
-	}
+	require.NoError(t, err)
+	require.Len(t, addrs, 2)
+	assert.Contains(t, sanitized, `for="2001:db8::1"`)
+	assert.Contains(t, sanitized, "proto=https")
 }
 
 func TestParseRFC7239ForwardedMissingFor(t *testing.T) {
-	if _, _, err := parseRFC7239Forwarded("proto=https"); !errors.Is(err, errForwardedDirectiveEmpty) {
-		t.Fatalf("expected errForwardedDirectiveEmpty, got %v", err)
-	}
+	_, _, err := parseRFC7239Forwarded("proto=https")
+	require.ErrorIs(t, err, errForwardedDirectiveEmpty)
 }
 
 func TestParseForwardedChainAndEntry(t *testing.T) {
 	addrs, err := parseForwardedChain("198.51.100.5, 2001:db8::1, 203.0.113.7:80")
-	if err != nil {
-		t.Fatalf("unexpected chain parse error: %v", err)
-	}
-	if len(addrs) != 3 {
-		t.Fatalf("expected three entries, got %d", len(addrs))
-	}
-	if addrs[1].String() != "2001:db8::1" {
-		t.Fatalf("expected ipv6 normalization, got %s", addrs[1].String())
-	}
-	if _, err := parseForwardedEntry("not-an-ip"); err == nil {
-		t.Fatalf("expected invalid entry error")
-	}
+	require.NoError(t, err)
+	require.Len(t, addrs, 3)
+	require.Equal(t, "2001:db8::1", addrs[1].String())
+	_, err = parseForwardedEntry("not-an-ip")
+	require.Error(t, err)
 }
 
 func TestJoinForwardedAddrs(t *testing.T) {
@@ -154,59 +115,37 @@ func TestJoinForwardedAddrs(t *testing.T) {
 		netip.MustParseAddr("198.51.100.5"),
 		netip.MustParseAddr("203.0.113.7"),
 	}
-	if joined := joinForwardedAddrs(addrs); joined != "198.51.100.5, 203.0.113.7" {
-		t.Fatalf("unexpected join result: %q", joined)
-	}
-	if joined := joinForwardedAddrs(nil); joined != "" {
-		t.Fatalf("expected empty join for nil slice, got %q", joined)
-	}
+	require.Equal(t, "198.51.100.5, 203.0.113.7", joinForwardedAddrs(addrs))
+	require.Empty(t, joinForwardedAddrs(nil))
 }
 
 func TestForwardedChainsEqual(t *testing.T) {
 	a := []netip.Addr{netip.MustParseAddr("198.51.100.5")}
 	b := []netip.Addr{netip.MustParseAddr("198.51.100.5")}
-	if !forwardedChainsEqual(a, b) {
-		t.Fatalf("expected slices to be equal")
-	}
+	require.True(t, forwardedChainsEqual(a, b))
 	b = append(b, netip.MustParseAddr("203.0.113.7"))
-	if forwardedChainsEqual(a, b) {
-		t.Fatalf("expected slices of different length to differ")
-	}
+	require.False(t, forwardedChainsEqual(a, b))
 }
 
 func TestAnnotateReason(t *testing.T) {
-	if got := annotateReason("base reason", ""); got != "base reason" {
-		t.Fatalf("unexpected reason without note: %q", got)
-	}
-	if got := annotateReason("base reason", " note "); got != "base reason (note)" {
-		t.Fatalf("unexpected reason with note: %q", got)
-	}
+	require.Equal(t, "base reason", annotateReason("base reason", ""))
+	require.Equal(t, "base reason (note)", annotateReason("base reason", " note "))
 }
 
 func TestRemoteHostAndParseRemoteIP(t *testing.T) {
-	if host := remoteHost("203.0.113.7:8080"); host != "203.0.113.7" {
-		t.Fatalf("unexpected remote host: %q", host)
-	}
-	if host := remoteHost("missing-port"); host != "missing-port" {
-		t.Fatalf("expected raw value when port parsing fails, got %q", host)
-	}
-	if _, err := parseRemoteIP(""); err == nil {
-		t.Fatalf("expected error when remote address empty")
-	}
-	if _, err := parseRemoteIP("not-an-ip:80"); err == nil {
-		t.Fatalf("expected error for invalid ip")
-	}
+	require.Equal(t, "203.0.113.7", remoteHost("203.0.113.7:8080"))
+	require.Equal(t, "missing-port", remoteHost("missing-port"))
+	_, err := parseRemoteIP("")
+	require.Error(t, err)
+	_, err = parseRemoteIP("not-an-ip:80")
+	require.Error(t, err)
 }
 
 func TestParseCIDRs(t *testing.T) {
 	input := []string{"192.0.2.0/24", "invalid", " 203.0.113.0/24 "}
 	prefixes := ParseCIDRs(input)
-	if len(prefixes) != 2 {
-		t.Fatalf("expected two valid prefixes, got %d", len(prefixes))
-	}
-	if prefixes[0].String() != "192.0.2.0/24" {
-		t.Fatalf("unexpected prefix order, got %s", prefixes[0])
-	}
+	require.Len(t, prefixes, 2)
+	require.Equal(t, "192.0.2.0/24", prefixes[0].String())
 }
 
 func TestStripForwardedHeaders(t *testing.T) {
@@ -218,10 +157,8 @@ func TestStripForwardedHeaders(t *testing.T) {
 
 	stripForwardedHeaders(req)
 
-	if req.Header.Get("Forwarded") != "" || req.Header.Get("X-Forwarded-For") != "" || req.Header.Get("X-Forwarded-Proto") != "" {
-		t.Fatalf("expected forwarded headers to be stripped")
-	}
-	if req.Header.Get("X-Other") != "value" {
-		t.Fatalf("expected unrelated headers to remain")
-	}
+	require.Empty(t, req.Header.Get("Forwarded"))
+	require.Empty(t, req.Header.Get("X-Forwarded-For"))
+	require.Empty(t, req.Header.Get("X-Forwarded-Proto"))
+	require.Equal(t, "value", req.Header.Get("X-Other"))
 }

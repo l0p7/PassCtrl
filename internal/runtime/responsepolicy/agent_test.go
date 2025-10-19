@@ -9,6 +9,7 @@ import (
 	"github.com/l0p7/passctrl/internal/runtime/forwardpolicy"
 	"github.com/l0p7/passctrl/internal/runtime/pipeline"
 	"github.com/l0p7/passctrl/internal/templates"
+	"github.com/stretchr/testify/require"
 )
 
 func TestAgentExecuteCachedResponse(t *testing.T) {
@@ -19,13 +20,8 @@ func TestAgentExecuteCachedResponse(t *testing.T) {
 	agent := New()
 	res := agent.Execute(context.Background(), nil, state)
 
-	if res.Status != "cached" {
-		t.Fatalf("expected cached status, got %s", res.Status)
-	}
-
-	if state.Response.Message != "ready" {
-		t.Fatalf("expected response to remain unchanged on cache reuse")
-	}
+	require.Equal(t, "cached", res.Status)
+	require.Equal(t, "ready", state.Response.Message)
 }
 
 func TestAgentExecuteOutcomeMapping(t *testing.T) {
@@ -67,21 +63,10 @@ func TestAgentExecuteOutcomeMapping(t *testing.T) {
 			agent := New()
 			res := agent.Execute(context.Background(), nil, state)
 
-			if res.Status != "rendered" {
-				t.Fatalf("expected rendered status, got %s", res.Status)
-			}
-
-			if state.Response.Status != tc.wantStatus {
-				t.Fatalf("expected status %d, got %d", tc.wantStatus, state.Response.Status)
-			}
-
-			if state.Response.Message != "" {
-				t.Fatalf("expected empty message by default, got %q", state.Response.Message)
-			}
-
-			if outcome := state.Response.Headers["X-PassCtrl-Outcome"]; outcome != tc.outcome {
-				t.Fatalf("expected outcome header %q, got %q", tc.outcome, outcome)
-			}
+			require.Equal(t, "rendered", res.Status)
+			require.Equal(t, tc.wantStatus, state.Response.Status)
+			require.Empty(t, state.Response.Message)
+			require.Equal(t, tc.outcome, state.Response.Headers["X-PassCtrl-Outcome"])
 		})
 	}
 }
@@ -94,13 +79,8 @@ func TestAgentExecuteInitializesHeaders(t *testing.T) {
 	agent := New()
 	_ = agent.Execute(context.Background(), nil, state)
 
-	if state.Response.Headers == nil {
-		t.Fatalf("expected response headers to be initialized")
-	}
-
-	if value := state.Response.Headers["X-PassCtrl-Outcome"]; value != "fail" {
-		t.Fatalf("expected outcome header to be recorded, got %q", value)
-	}
+	require.NotNil(t, state.Response.Headers)
+	require.Equal(t, "fail", state.Response.Headers["X-PassCtrl-Outcome"])
 }
 
 func TestAgentExecuteWithConfigAppliesOverrides(t *testing.T) {
@@ -132,47 +112,24 @@ func TestAgentExecuteWithConfigAppliesOverrides(t *testing.T) {
 	agent := NewWithConfig(cfg)
 	res := agent.Execute(context.Background(), nil, state)
 
-	if res.Status != "rendered" {
-		t.Fatalf("expected rendered status with config, got %s", res.Status)
-	}
-	if state.Response.Status != http.StatusAccepted {
-		t.Fatalf("expected status override to apply, got %d", state.Response.Status)
-	}
-	if state.Response.Message != "hello endpoint-a" {
-		t.Fatalf("expected templated body to render, got %q", state.Response.Message)
-	}
-	if _, exists := state.Response.Headers["stripme"]; exists {
-		t.Fatalf("expected strip list to remove header")
-	}
-	if _, exists := state.Response.Headers["other"]; exists {
-		t.Fatalf("expected allow list to drop unlisted headers")
-	}
-	if state.Response.Headers["keep"] != "value" {
-		t.Fatalf("expected allow list to retain keep header, got %q", state.Response.Headers["keep"])
-	}
-	if got := state.Response.Headers["X-Rendered"]; got != "outcome pass" {
-		t.Fatalf("expected rendered custom header, got %q", got)
-	}
-	if got := state.Response.Headers["X-Static"]; got != "static" {
-		t.Fatalf("expected static custom header to be trimmed, got %q", got)
-	}
-	if outcome := state.Response.Headers["X-PassCtrl-Outcome"]; outcome != "pass" {
-		t.Fatalf("expected outcome header to remain accurate, got %q", outcome)
-	}
+	require.Equal(t, "rendered", res.Status)
+	require.Equal(t, http.StatusAccepted, state.Response.Status)
+	require.Equal(t, "hello endpoint-a", state.Response.Message)
+	require.NotContains(t, state.Response.Headers, "stripme")
+	require.NotContains(t, state.Response.Headers, "other")
+	require.Equal(t, "value", state.Response.Headers["keep"])
+	require.Equal(t, "outcome pass", state.Response.Headers["X-Rendered"])
+	require.Equal(t, "static", state.Response.Headers["X-Static"])
+	require.Equal(t, "pass", state.Response.Headers["X-PassCtrl-Outcome"])
 }
 
 func TestCloneHeaders(t *testing.T) {
-	if clone := cloneHeaders(nil); clone != nil {
-		t.Fatalf("expected nil clone for nil input, got %#v", clone)
-	}
+	require.Nil(t, cloneHeaders(nil))
 
 	original := map[string]string{"a": "1", "b": "2"}
 	clone := cloneHeaders(original)
-	if clone["a"] != "1" || clone["b"] != "2" {
-		t.Fatalf("expected clone to copy values, got %#v", clone)
-	}
+	require.Equal(t, "1", clone["a"])
+	require.Equal(t, "2", clone["b"])
 	clone["a"] = "updated"
-	if original["a"] != "1" {
-		t.Fatalf("expected clone to be independent from original")
-	}
+	require.Equal(t, "1", original["a"])
 }
