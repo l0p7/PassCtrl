@@ -11,11 +11,16 @@ PassCtrl-5 through PassCtrl-13.
   mockery-generated `httpDoer`.
 - ✅ `internal/runtime/resultcaching/agent_test.go` and
   `internal/runtime/runtime_additional_test.go` use mockery + testify.
-- ❌ Most other tests still rely on `t.Fatalf`/`t.Errorf`, inline stubs, or
-  bespoke helpers. Notable areas:
-  - `internal/runtime/*`: admission, forward policy, rulechain, pipeline.
-  - `internal/server/*`: router and server tests.
-  - `internal/config/*`, `internal/metrics/*`, `internal/templates/*`.
+- ✅ Remaining runtime, server, config, metrics, and template suites converted
+  to table-driven `testify` tests with mockery doubles where interfaces exist.
+- ✅ HTTP-focused scenarios rely on `httpexpect` for declarative assertions.
+
+### Coverage Snapshot
+
+- `go test ./... -coverprofile=coverage.out` (Oct 2025) reports **71.7%** total
+  statement coverage. Runtime subpackages sit between 67–93%; CLI package
+  coverage remains low (15.9%) because it primarily exercises integration
+  flows.
 
 ## Migration Phases
 
@@ -56,7 +61,7 @@ PassCtrl-5 through PassCtrl-13.
 | `internal/metrics/metrics_test.go` | ✅ Testify | - |
 | `internal/server/router_test.go` | ✅ Testify | - |
 | `internal/server/server_test.go` | ✅ Testify | - |
-| `internal/templates/renderer_test.go`, `sandbox_test.go` | Filesystem ops + `t.Fatalf` | Convert to `require`; table-drive sandbox scenarios; potential mock for FS guard if introduced. |
+| `internal/templates/renderer_test.go`, `sandbox_test.go` | ✅ Testify | - |
 | `internal/runtime/admission/agent_test.go` | ✅ Testify | - |
 | `internal/runtime/forwardpolicy/agent_test.go` | ✅ Testify | - |
 | `internal/runtime/pipeline/state_test.go` | ✅ Testify | - |
