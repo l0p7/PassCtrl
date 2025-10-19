@@ -19,13 +19,17 @@ import (
 	"github.com/l0p7/passctrl/internal/templates"
 )
 
+type httpDoer interface {
+	Do(*http.Request) (*http.Response, error)
+}
+
 type ruleExecutionAgent struct {
-	client   *http.Client
+	client   httpDoer
 	logger   *slog.Logger
 	renderer *templates.Renderer
 }
 
-func newRuleExecutionAgent(client *http.Client, logger *slog.Logger, renderer *templates.Renderer) *ruleExecutionAgent {
+func newRuleExecutionAgent(client httpDoer, logger *slog.Logger, renderer *templates.Renderer) *ruleExecutionAgent {
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}
 	}

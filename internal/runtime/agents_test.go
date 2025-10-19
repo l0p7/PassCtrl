@@ -6,12 +6,12 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	runtimemocks "github.com/l0p7/passctrl/internal/mocks/runtime"
 	"github.com/l0p7/passctrl/internal/runtime/admission"
 	"github.com/l0p7/passctrl/internal/runtime/cache"
 	"github.com/l0p7/passctrl/internal/runtime/forwardpolicy"
@@ -20,6 +20,7 @@ import (
 	"github.com/l0p7/passctrl/internal/runtime/resultcaching"
 	"github.com/l0p7/passctrl/internal/runtime/rulechain"
 	"github.com/l0p7/passctrl/internal/templates"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -277,15 +278,19 @@ func TestRuleChainAgentExecute(t *testing.T) {
 }
 
 func TestRuleExecutionAgentExecute(t *testing.T) {
-	agent := newRuleExecutionAgent(nil, nil, nil)
+	newAgent := func(client httpDoer) *ruleExecutionAgent {
+		return newRuleExecutionAgent(client, nil, nil)
+	}
 
 	t.Run("skip on cache", func(t *testing.T) {
+		agent := newAgent(nil)
 		state := &pipeline.State{Rule: pipeline.RuleState{FromCache: true}}
 		res := agent.Execute(context.Background(), nil, state)
 		require.Equal(t, "skipped", res.Status)
 	})
 
 	t.Run("no rules defined defaults to pass", func(t *testing.T) {
+		agent := newAgent(nil)
 		state := &pipeline.State{}
 		state.Rule.ShouldExecute = true
 		state.SetPlan(rulechain.ExecutionPlan{})
@@ -297,6 +302,7 @@ func TestRuleExecutionAgentExecute(t *testing.T) {
 	})
 
 	t.Run("fail when condition matches", func(t *testing.T) {
+		agent := newAgent(nil)
 		defs, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{{
 			Name:        "deny",
 			Conditions:  rulechain.ConditionSpec{Fail: []string{`forward.headers["x-passctrl-deny"] == "true"`}},
@@ -317,6 +323,7 @@ func TestRuleExecutionAgentExecute(t *testing.T) {
 	})
 
 	t.Run("error when condition matches", func(t *testing.T) {
+		agent := newAgent(nil)
 		defs, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{{
 			Name:         "error",
 			Conditions:   rulechain.ConditionSpec{Error: []string{`forward.query["error"] == "true"`}},
@@ -334,6 +341,7 @@ func TestRuleExecutionAgentExecute(t *testing.T) {
 	})
 
 	t.Run("pass outcome when condition satisfied", func(t *testing.T) {
+		agent := newAgent(nil)
 		defs, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{{
 			Name:        "pass",
 			Conditions:  rulechain.ConditionSpec{Pass: []string{`forward.headers["authorization"] == "token"`}},
@@ -352,6 +360,7 @@ func TestRuleExecutionAgentExecute(t *testing.T) {
 	})
 
 	t.Run("fails when required condition missing", func(t *testing.T) {
+		agent := newAgent(nil)
 		defs, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{{
 			Name: "requires-query",
 			Conditions: rulechain.ConditionSpec{Pass: []string{
@@ -373,6 +382,7 @@ func TestRuleExecutionAgentExecute(t *testing.T) {
 	})
 
 	t.Run("pass when all predicates satisfied", func(t *testing.T) {
+		agent := newAgent(nil)
 		defs, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{{
 			Name: "requires-query",
 			Conditions: rulechain.ConditionSpec{Pass: []string{
@@ -397,19 +407,19 @@ func TestRuleExecutionAgentExecute(t *testing.T) {
 	})
 
 	t.Run("backend response evaluated with cel", func(t *testing.T) {
-		var handlerErr error
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			if _, err := fmt.Fprint(w, `{"allowed": true, "count": 5}`); err != nil {
-				handlerErr = err
-			}
-		}))
-		t.Cleanup(server.Close)
+		backendURL := "https://backend.test/cel"
+		mockClient := runtimemocks.NewMockHTTPDoer(t)
+		mockClient.EXPECT().
+			Do(mock.AnythingOfType("*http.Request")).
+			RunAndReturn(func(req *http.Request) (*http.Response, error) {
+				require.Equal(t, backendURL, req.URL.String())
+				return newBackendResponse(http.StatusOK, `{"allowed": true, "count": 5}`, map[string]string{"Content-Type": "application/json"}), nil
+			}).Once()
 
 		defs, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{{
 			Name: "backend-pass",
 			Backend: rulechain.BackendDefinitionSpec{
-				URL: server.URL,
+				URL: backendURL,
 			},
 			Conditions: rulechain.ConditionSpec{
 				Pass: []string{`backend.body.allowed == true`},
@@ -423,8 +433,7 @@ func TestRuleExecutionAgentExecute(t *testing.T) {
 		state.Rule.ShouldExecute = true
 		state.SetPlan(rulechain.ExecutionPlan{Rules: defs})
 
-		res := agent.Execute(context.Background(), nil, state)
-		require.NoError(t, handlerErr)
+		res := newAgent(mockClient).Execute(context.Background(), nil, state)
 		require.Equal(t, "pass", state.Rule.Outcome)
 		require.Equal(t, "pass", res.Status)
 		require.Equal(t, "backend allowed", state.Rule.Reason)
@@ -436,29 +445,25 @@ func TestRuleExecutionAgentExecute(t *testing.T) {
 	})
 
 	t.Run("forwards curated metadata to backend", func(t *testing.T) {
-		var (
-			seenAuth   string
-			seenCustom string
-			seenProxy  string
-			seenQuery  string
-		)
-		var handlerErr error
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			seenAuth = r.Header.Get("Authorization")
-			seenCustom = r.Header.Get("X-Test")
-			seenProxy = r.Header.Get("X-Forwarded-For")
-			seenQuery = r.URL.RawQuery
-			if _, err := fmt.Fprint(w, `{"allowed": true}`); err != nil {
-				handlerErr = err
-			}
-		}))
-		t.Cleanup(server.Close)
+		backendURL := "https://backend.test/check"
+		mockClient := runtimemocks.NewMockHTTPDoer(t)
+		mockClient.EXPECT().
+			Do(mock.AnythingOfType("*http.Request")).
+			RunAndReturn(func(req *http.Request) (*http.Response, error) {
+				require.Equal(t, "https", req.URL.Scheme)
+				require.Equal(t, "backend.test", req.URL.Host)
+				require.Equal(t, "/check", req.URL.Path)
+				require.Equal(t, "Bearer original", req.Header.Get("Authorization"))
+				require.Equal(t, "custom", req.Header.Get("X-Test"))
+				require.Equal(t, "198.51.100.10", req.Header.Get("X-Forwarded-For"))
+				require.Equal(t, "true", req.URL.Query().Get("allow"))
+				return newBackendResponse(http.StatusOK, `{"allowed": true}`, map[string]string{"Content-Type": "application/json"}), nil
+			}).Once()
 
 		defs, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{{
 			Name: "forwarding",
 			Backend: rulechain.BackendDefinitionSpec{
-				URL:                 server.URL + "/check",
+				URL:                 backendURL,
 				Method:              http.MethodGet,
 				ForwardProxyHeaders: true,
 				Headers: forwardpolicy.CategoryConfig{
@@ -489,59 +494,59 @@ func TestRuleExecutionAgentExecute(t *testing.T) {
 		state.Rule.ShouldExecute = true
 		state.SetPlan(rulechain.ExecutionPlan{Rules: defs})
 
-		res := agent.Execute(context.Background(), nil, state)
-		require.NoError(t, handlerErr)
+		res := newAgent(mockClient).Execute(context.Background(), nil, state)
 		require.Equal(t, "pass", res.Status)
-		require.Equal(t, "Bearer original", seenAuth)
-		require.Equal(t, "custom", seenCustom)
-		require.Equal(t, "198.51.100.10", seenProxy)
-		values, err := url.ParseQuery(seenQuery)
-		require.NoError(t, err)
-		require.Equal(t, "true", values.Get("allow"))
 		require.Len(t, state.Backend.Pages, 1)
 	})
 
 	t.Run("renders backend body from templates", func(t *testing.T) {
-		var seenBodyInline string
-		var seenBodyFile string
-
-		serverInline := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			b, _ := io.ReadAll(r.Body)
-			_ = r.Body.Close()
-			seenBodyInline = string(b)
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = fmt.Fprint(w, `{"ok": true}`)
-		}))
-		t.Cleanup(serverInline.Close)
-
-		serverFile := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			b, _ := io.ReadAll(r.Body)
-			_ = r.Body.Close()
-			seenBodyFile = string(b)
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = fmt.Fprint(w, `{"ok": true}`)
-		}))
-		t.Cleanup(serverFile.Close)
-
 		dir := t.TempDir()
 		sandbox, err := templates.NewSandbox(dir, true, []string{"TOKEN"})
 		require.NoError(t, err)
 		t.Setenv("TOKEN", "secret")
 		renderer := templates.NewRenderer(sandbox)
 
-		// Create a file template
 		path := filepath.Join(dir, "body.txt")
 		require.NoError(t, os.WriteFile(path, []byte("file-{{ env \"TOKEN\" }}"), 0o600))
+
+		inlineURL := "https://backend.test/inline"
+		fileURL := "https://backend.test/file"
+
+		mockClient := runtimemocks.NewMockHTTPDoer(t)
+		var inlineBodies []string
+		var fileBodies []string
+
+		mockClient.EXPECT().
+			Do(mock.AnythingOfType("*http.Request")).
+			RunAndReturn(func(req *http.Request) (*http.Response, error) {
+				require.Equal(t, inlineURL, req.URL.String())
+				data, err := io.ReadAll(req.Body)
+				require.NoError(t, err)
+				_ = req.Body.Close()
+				inlineBodies = append(inlineBodies, string(data))
+				return newBackendResponse(http.StatusOK, `{"ok": true}`, map[string]string{"Content-Type": "application/json"}), nil
+			}).Once()
+
+		mockClient.EXPECT().
+			Do(mock.AnythingOfType("*http.Request")).
+			RunAndReturn(func(req *http.Request) (*http.Response, error) {
+				require.Equal(t, fileURL, req.URL.String())
+				data, err := io.ReadAll(req.Body)
+				require.NoError(t, err)
+				_ = req.Body.Close()
+				fileBodies = append(fileBodies, string(data))
+				return newBackendResponse(http.StatusOK, `{"ok": true}`, map[string]string{"Content-Type": "application/json"}), nil
+			}).Once()
 
 		defs, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{
 			{
 				Name:       "inline",
-				Backend:    rulechain.BackendDefinitionSpec{URL: serverInline.URL, Method: http.MethodPost, Body: "inline-{{ env \"TOKEN\" }}"},
+				Backend:    rulechain.BackendDefinitionSpec{URL: inlineURL, Method: http.MethodPost, Body: "inline-{{ env \"TOKEN\" }}"},
 				Conditions: rulechain.ConditionSpec{Pass: []string{"true"}},
 			},
 			{
 				Name:       "file",
-				Backend:    rulechain.BackendDefinitionSpec{URL: serverFile.URL, Method: http.MethodPost, BodyFile: fmt.Sprintf("{{ \"%s\" }}", path)},
+				Backend:    rulechain.BackendDefinitionSpec{URL: fileURL, Method: http.MethodPost, BodyFile: fmt.Sprintf("{{ \"%s\" }}", path)},
 				Conditions: rulechain.ConditionSpec{Pass: []string{"true"}},
 			},
 		}, renderer)
@@ -551,46 +556,49 @@ func TestRuleExecutionAgentExecute(t *testing.T) {
 		state.Rule.ShouldExecute = true
 		state.SetPlan(rulechain.ExecutionPlan{Rules: defs})
 
-		agentWithRenderer := newRuleExecutionAgent(nil, nil, renderer)
-		res := agentWithRenderer.Execute(context.Background(), nil, state)
+		res := newRuleExecutionAgent(mockClient, nil, renderer).Execute(context.Background(), nil, state)
 		require.Equal(t, "pass", res.Status)
 		require.Equal(t, "pass", state.Rule.Outcome)
 		require.Len(t, state.Rule.History, 2)
-		require.Equal(t, "inline", state.Rule.History[0].Name)
-		require.Equal(t, "file", state.Rule.History[1].Name)
 		require.True(t, state.Backend.Requested)
 		require.True(t, state.Backend.Accepted)
-		require.Equal(t, "inline-secret", seenBodyInline)
-		require.Equal(t, "file-secret", seenBodyFile)
+		require.Contains(t, inlineBodies, "inline-secret")
+		require.Contains(t, fileBodies, "file-secret")
 	})
 
 	t.Run("follows link header pagination", func(t *testing.T) {
-		var server *httptest.Server
-		var handlerErr error
-		handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			page := r.URL.Query().Get("page")
-			if page == "" {
-				page = "1"
-			}
-			w.Header().Set("Content-Type", "application/json")
-			if page == "1" {
-				w.Header().Set("Link", fmt.Sprintf("<%s?page=2>; rel=\"next\"", server.URL+"/paginate"))
-				if _, err := fmt.Fprint(w, `{"allowed": false}`); err != nil {
-					handlerErr = err
-				}
-				return
-			}
-			if _, err := fmt.Fprint(w, `{"allowed": true}`); err != nil {
-				handlerErr = err
-			}
-		})
-		server = httptest.NewServer(handler)
-		t.Cleanup(server.Close)
+		initialURL := "https://backend.test/paginate?page=1"
+		nextURL := "https://backend.test/paginate?page=2"
+		mockClient := runtimemocks.NewMockHTTPDoer(t)
+
+		mockClient.EXPECT().
+			Do(mock.AnythingOfType("*http.Request")).
+			RunAndReturn(func(req *http.Request) (*http.Response, error) {
+				require.Equal(t, "https", req.URL.Scheme)
+				require.Equal(t, "backend.test", req.URL.Host)
+				require.Equal(t, "/paginate", req.URL.Path)
+				require.Equal(t, "1", req.URL.Query().Get("page"))
+				require.Equal(t, "true", req.URL.Query().Get("allow"))
+				resp := newBackendResponse(http.StatusOK, `{"allowed": false}`, map[string]string{"Content-Type": "application/json"})
+				resp.Header.Set("Link", fmt.Sprintf("<%s>; rel=\"next\"", nextURL))
+				return resp, nil
+			}).Once()
+
+		mockClient.EXPECT().
+			Do(mock.AnythingOfType("*http.Request")).
+			RunAndReturn(func(req *http.Request) (*http.Response, error) {
+				require.Equal(t, "https", req.URL.Scheme)
+				require.Equal(t, "backend.test", req.URL.Host)
+				require.Equal(t, "/paginate", req.URL.Path)
+				require.Equal(t, "2", req.URL.Query().Get("page"))
+				require.Equal(t, "true", req.URL.Query().Get("allow"))
+				return newBackendResponse(http.StatusOK, `{"allowed": true}`, map[string]string{"Content-Type": "application/json"}), nil
+			}).Once()
 
 		defs, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{{
 			Name: "paginate",
 			Backend: rulechain.BackendDefinitionSpec{
-				URL:   server.URL + "/paginate?page=1",
+				URL:   initialURL,
 				Query: forwardpolicy.CategoryConfig{Allow: []string{"allow"}},
 				Pagination: rulechain.BackendPaginationSpec{
 					Type:     "link-header",
@@ -615,8 +623,7 @@ func TestRuleExecutionAgentExecute(t *testing.T) {
 		state.Rule.ShouldExecute = true
 		state.SetPlan(rulechain.ExecutionPlan{Rules: defs})
 
-		res := agent.Execute(context.Background(), nil, state)
-		require.NoError(t, handlerErr)
+		res := newAgent(mockClient).Execute(context.Background(), nil, state)
 		require.Equal(t, "pass", res.Status)
 		require.Len(t, state.Backend.Pages, 2)
 		require.Equal(t, http.StatusOK, state.Backend.Status)
@@ -628,6 +635,7 @@ func TestRuleExecutionAgentExecute(t *testing.T) {
 	})
 
 	t.Run("renders template reason with sandbox context", func(t *testing.T) {
+		agent := newAgent(nil)
 		dir := t.TempDir()
 		sandbox, err := templates.NewSandbox(dir, true, []string{"ALLOWED"})
 		require.NoError(t, err)

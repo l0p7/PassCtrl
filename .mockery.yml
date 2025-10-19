@@ -28,3 +28,11 @@ packages:
       structname: MockHTTPDoer
     interfaces:
       httpDoer: {}
+  github.com/l0p7/passctrl/internal/runtime:
+    config:
+      dir: internal/mocks/runtime
+      filename: http_doer_mock.go
+      pkgname: runtimemocks
+      structname: MockHTTPDoer
+    interfaces:
+      httpDoer: {}

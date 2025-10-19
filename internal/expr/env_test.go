@@ -10,23 +10,31 @@ func TestLookupMapValue(t *testing.T) {
 	env, err := NewEnvironment()
 	require.NoError(t, err)
 
-	program, err := env.Compile(`lookup(forward.headers, "key") == "value"`)
-	require.NoError(t, err)
-
 	activation := map[string]any{
 		"forward": map[string]any{
 			"headers": map[string]any{"key": "value"},
 		},
 	}
-	matched, err := program.EvalBool(activation)
-	require.NoError(t, err)
-	require.True(t, matched, "expected lookup to match existing key")
 
-	missingProgram, err := env.Compile(`lookup(forward.headers, "missing") == "value"`)
-	require.NoError(t, err)
-	matched, err = missingProgram.EvalBool(activation)
-	require.NoError(t, err)
-	require.False(t, matched, "expected lookup to return null for missing key")
+	tests := []struct {
+		name string
+		expr string
+		want bool
+	}{
+		{name: "returns true when key found", expr: `lookup(forward.headers, "key") == "value"`, want: true},
+		{name: "returns false when key missing", expr: `lookup(forward.headers, "missing") == "value"`, want: false},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			program, err := env.Compile(tc.expr)
+			require.NoError(t, err)
+			matched, err := program.EvalBool(activation)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, matched)
+		})
+	}
 }
 
 func TestCompileValue(t *testing.T) {
@@ -42,18 +50,37 @@ func TestCompileValue(t *testing.T) {
 		},
 	}
 
-	result, err := program.Eval(activation)
-	require.NoError(t, err)
-	require.Equal(t, "value", result)
+	t.Run("evaluates value", func(t *testing.T) {
+		result, err := program.Eval(activation)
+		require.NoError(t, err)
+		require.Equal(t, "value", result)
+	})
 
-	_, err = program.EvalBool(activation)
-	require.Error(t, err, "expected EvalBool to fail for non-boolean program")
+	t.Run("boolean evaluation fails", func(t *testing.T) {
+		_, err := program.EvalBool(activation)
+		require.Error(t, err, "expected EvalBool to fail for non-boolean program")
+	})
 }
 
 func TestProgramSource(t *testing.T) {
 	env, err := NewEnvironment()
 	require.NoError(t, err)
-	program, err := env.Compile(`  true `)
-	require.NoError(t, err)
-	require.Equal(t, "true", program.Source())
+
+	tests := []struct {
+		name string
+		expr string
+		want string
+	}{
+		{name: "trims whitespace", expr: "  true ", want: "true"},
+		{name: "preserves expression", expr: "forward.request", want: "forward.request"},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			program, err := env.Compile(tc.expr)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, program.Source())
+		})
+	}
 }

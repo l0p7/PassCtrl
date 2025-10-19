@@ -14,6 +14,15 @@ PassCtrl-5 through PassCtrl-13.
 - ✅ Remaining runtime, server, config, metrics, and template suites converted
   to table-driven `testify` tests with mockery doubles where interfaces exist.
 - ✅ HTTP-focused scenarios rely on `httpexpect` for declarative assertions.
+- ✅ Admission, forward request policy, and response policy agents now share
+  table-driven testify suites that cover proxy metadata sanitisation and
+  outcome mapping permutations.
+- ✅ Config loader/CLI, templates, metrics, and CEL helper tests are table-driven
+  to exercise configuration precedence, sandbox boundaries, and metrics
+  instrumentation paths.
+- ✅ Rule execution agent scenarios use mockery-generated HTTP clients to avoid
+  external listeners while validating backend pagination, templating, and
+  metadata forwarding.
 
 ### Coverage Snapshot
 

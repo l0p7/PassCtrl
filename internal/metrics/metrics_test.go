@@ -15,24 +15,50 @@ func TestRecorderObserveAuth(t *testing.T) {
 
 	families := gather(t, rec, "passctrl_auth_requests_total", "passctrl_auth_request_duration_seconds")
 
-	counter := findMetric(t, families["passctrl_auth_requests_total"], map[string]string{
-		"endpoint":    "alpha",
-		"outcome":     "pass",
-		"status_code": "200",
-		"from_cache":  "true",
-	})
-	require.NotNil(t, counter.GetCounter(), "expected counter metric for auth requests")
-	require.InDelta(t, 1, counter.GetCounter().GetValue(), 1e-9)
+	tests := []struct {
+		name   string
+		metric string
+		labels map[string]string
+		assert func(t *testing.T, metric *dto.Metric)
+	}{
+		{
+			name:   "increments counter",
+			metric: "passctrl_auth_requests_total",
+			labels: map[string]string{
+				"endpoint":    "alpha",
+				"outcome":     "pass",
+				"status_code": "200",
+				"from_cache":  "true",
+			},
+			assert: func(t *testing.T, metric *dto.Metric) {
+				require.NotNil(t, metric.GetCounter(), "expected counter metric for auth requests")
+				require.InDelta(t, 1, metric.GetCounter().GetValue(), 1e-9)
+			},
+		},
+		{
+			name:   "observes latency histogram",
+			metric: "passctrl_auth_request_duration_seconds",
+			labels: map[string]string{
+				"endpoint": "alpha",
+				"outcome":  "pass",
+			},
+			assert: func(t *testing.T, metric *dto.Metric) {
+				hist := metric.GetHistogram()
+				require.NotNil(t, hist, "expected histogram metric for auth latency")
+				require.Equal(t, uint64(1), hist.GetSampleCount())
+				want := 0.25
+				require.InDelta(t, want, hist.GetSampleSum(), 0.001)
+			},
+		},
+	}
 
-	histMetric := findMetric(t, families["passctrl_auth_request_duration_seconds"], map[string]string{
-		"endpoint": "alpha",
-		"outcome":  "pass",
-	})
-	hist := histMetric.GetHistogram()
-	require.NotNil(t, hist, "expected histogram metric for auth latency")
-	require.Equal(t, uint64(1), hist.GetSampleCount())
-	want := 0.25
-	require.InDelta(t, want, hist.GetSampleSum(), 0.001)
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			metric := findMetric(t, families[tc.metric], tc.labels)
+			tc.assert(t, metric)
+		})
+	}
 }
 
 func TestRecorderObserveCacheOperations(t *testing.T) {
@@ -42,32 +68,63 @@ func TestRecorderObserveCacheOperations(t *testing.T) {
 
 	families := gather(t, rec, "passctrl_cache_operations_total", "passctrl_cache_operation_duration_seconds")
 
-	lookupMetric := findMetric(t, families["passctrl_cache_operations_total"], map[string]string{
-		"endpoint":  "alpha",
-		"operation": string(CacheOperationLookup),
-		"result":    string(CacheLookupHit),
-	})
-	require.NotNil(t, lookupMetric.GetCounter(), "expected counter metric for cache lookup")
-	require.InDelta(t, 1, lookupMetric.GetCounter().GetValue(), 1e-9)
+	tests := []struct {
+		name   string
+		metric string
+		labels map[string]string
+		assert func(t *testing.T, metric *dto.Metric)
+	}{
+		{
+			name:   "increments lookup counter",
+			metric: "passctrl_cache_operations_total",
+			labels: map[string]string{
+				"endpoint":  "alpha",
+				"operation": string(CacheOperationLookup),
+				"result":    string(CacheLookupHit),
+			},
+			assert: func(t *testing.T, metric *dto.Metric) {
+				require.NotNil(t, metric.GetCounter(), "expected counter metric for cache lookup")
+				require.InDelta(t, 1, metric.GetCounter().GetValue(), 1e-9)
+			},
+		},
+		{
+			name:   "increments store counter",
+			metric: "passctrl_cache_operations_total",
+			labels: map[string]string{
+				"endpoint":  "alpha",
+				"operation": string(CacheOperationStore),
+				"result":    string(CacheStoreStored),
+			},
+			assert: func(t *testing.T, metric *dto.Metric) {
+				require.NotNil(t, metric.GetCounter(), "expected counter metric for cache store")
+				require.InDelta(t, 1, metric.GetCounter().GetValue(), 1e-9)
+			},
+		},
+		{
+			name:   "records store latency",
+			metric: "passctrl_cache_operation_duration_seconds",
+			labels: map[string]string{
+				"endpoint":  "alpha",
+				"operation": string(CacheOperationStore),
+				"result":    string(CacheStoreStored),
+			},
+			assert: func(t *testing.T, metric *dto.Metric) {
+				hist := metric.GetHistogram()
+				require.NotNil(t, hist, "expected histogram metric for cache store latency")
+				require.Equal(t, uint64(1), hist.GetSampleCount())
+				want := 0.005
+				require.InDelta(t, want, hist.GetSampleSum(), 0.001)
+			},
+		},
+	}
 
-	storeMetric := findMetric(t, families["passctrl_cache_operations_total"], map[string]string{
-		"endpoint":  "alpha",
-		"operation": string(CacheOperationStore),
-		"result":    string(CacheStoreStored),
-	})
-	require.NotNil(t, storeMetric.GetCounter(), "expected counter metric for cache store")
-	require.InDelta(t, 1, storeMetric.GetCounter().GetValue(), 1e-9)
-
-	latencyMetric := findMetric(t, families["passctrl_cache_operation_duration_seconds"], map[string]string{
-		"endpoint":  "alpha",
-		"operation": string(CacheOperationStore),
-		"result":    string(CacheStoreStored),
-	})
-	hist := latencyMetric.GetHistogram()
-	require.NotNil(t, hist, "expected histogram metric for cache store latency")
-	require.Equal(t, uint64(1), hist.GetSampleCount())
-	want := 0.005
-	require.InDelta(t, want, hist.GetSampleSum(), 0.001)
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			metric := findMetric(t, families[tc.metric], tc.labels)
+			tc.assert(t, metric)
+		})
+	}
 }
 
 func TestRecorderHandler(t *testing.T) {
@@ -75,10 +132,11 @@ func TestRecorderHandler(t *testing.T) {
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/metrics", nil)
 
-	rec.Handler().ServeHTTP(rr, req)
-
-	require.Equal(t, 200, rr.Code)
-	require.NotZero(t, rr.Body.Len(), "expected response body")
+	t.Run("responds with metrics", func(t *testing.T) {
+		rec.Handler().ServeHTTP(rr, req)
+		require.Equal(t, 200, rr.Code)
+		require.NotZero(t, rr.Body.Len(), "expected response body")
+	})
 }
 
 func gather(t *testing.T, rec *Recorder, names ...string) map[string][]*dto.Metric {

@@ -2,9 +2,9 @@ package server
 
 import (
 	"net/http"
-	"net/http/httptest"
 	"testing"
 
+	"github.com/gavv/httpexpect/v2"
 	"github.com/stretchr/testify/require"
 )
 
@@ -60,6 +60,27 @@ func (s *stubPipeline) WriteError(w http.ResponseWriter, status int, message str
 	_, _ = w.Write([]byte(message))
 }
 
+func (s *stubPipeline) reset() {
+	s.serveAuthCalls = 0
+	s.serveHealthCalls = 0
+	s.serveExplainCalls = 0
+	s.hints = nil
+	s.receivedHintHeaders = nil
+	s.writeErrorCalled = false
+	s.writeErrorStatus = 0
+	s.writeErrorMessage = ""
+}
+
+func newPipelineExpect(t *testing.T, handler http.Handler) *httpexpect.Expect {
+	t.Helper()
+	return httpexpect.WithConfig(httpexpect.Config{
+		Reporter: httpexpect.NewRequireReporter(t),
+		Client: &http.Client{
+			Transport: httpexpect.NewBinder(handler),
+		},
+	})
+}
+
 func TestParseEndpointRoute(t *testing.T) {
 	cases := map[string]struct {
 		path     string
@@ -93,17 +114,15 @@ func TestParseEndpointRoute(t *testing.T) {
 
 func TestNewPipelineHandlerNilPipeline(t *testing.T) {
 	handler := NewPipelineHandler(nil)
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/auth", http.NoBody)
+	expect := newPipelineExpect(t, handler)
 
-	handler.ServeHTTP(rec, req)
-
-	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	expect.GET("/auth").Expect().Status(http.StatusServiceUnavailable)
 }
 
 func TestPipelineHandlerDispatchesRoutes(t *testing.T) {
 	stub := &stubPipeline{endpoints: map[string]bool{"tenant": true}}
 	handler := NewPipelineHandler(stub)
+	expect := newPipelineExpect(t, handler)
 
 	tests := []struct {
 		name             string
@@ -151,18 +170,10 @@ func TestPipelineHandlerDispatchesRoutes(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			stub.serveAuthCalls = 0
-			stub.serveHealthCalls = 0
-			stub.serveExplainCalls = 0
-			stub.hints = nil
-			stub.receivedHintHeaders = nil
+			stub.reset()
 
-			rec := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodGet, tc.path, http.NoBody)
-
-			handler.ServeHTTP(rec, req)
-
-			require.Equal(t, tc.wantStatus, rec.Code)
+			resp := expect.GET(tc.path).Expect()
+			resp.Status(tc.wantStatus)
 			require.Equal(t, tc.wantAuthCalls, stub.serveAuthCalls)
 			require.Equal(t, tc.wantHealthCalls, stub.serveHealthCalls)
 			require.Equal(t, tc.wantExplainCalls, stub.serveExplainCalls)
@@ -182,14 +193,12 @@ func TestPipelineHandlerMissingEndpoint(t *testing.T) {
 	stub := &stubPipeline{endpoints: map[string]bool{}}
 	handler := NewPipelineHandler(stub)
 
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/missing/health", http.NoBody)
-
-	handler.ServeHTTP(rec, req)
+	resp := newPipelineExpect(t, handler).GET("/missing/health").Expect()
+	resp.Status(http.StatusNotFound)
+	resp.Body().Contains("endpoint \"missing\" not found")
 
 	require.True(t, stub.writeErrorCalled, "expected WriteError to be invoked for unknown endpoint")
 	require.Equal(t, http.StatusNotFound, stub.writeErrorStatus)
-	require.Equal(t, http.StatusNotFound, rec.Code)
 	require.Zero(t, stub.serveHealthCalls, "ServeHealth should not be called on missing endpoint")
 }
 
@@ -197,11 +206,7 @@ func TestPipelineHandlerNotFound(t *testing.T) {
 	stub := &stubPipeline{}
 	handler := NewPipelineHandler(stub)
 
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/unsupported/path", http.NoBody)
+	newPipelineExpect(t, handler).GET("/unsupported/path").Expect().Status(http.StatusNotFound)
 
-	handler.ServeHTTP(rec, req)
-
-	require.Equal(t, http.StatusNotFound, rec.Code)
 	require.Zero(t, stub.serveAuthCalls+stub.serveHealthCalls+stub.serveExplainCalls, "expected no pipeline calls for unsupported route")
 }
