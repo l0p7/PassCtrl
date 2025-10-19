@@ -62,13 +62,17 @@ engineering conventions the codebase must follow.
 ## Testing
 
 1. **Table-driven defaults.** Unit and integration tests should model scenarios via table-driven
-   structures and leverage the `github.com/stretchr/testify` family for assertions (`require`
-   for fatal checks, `assert` for non-fatal comparisons, the forthcoming `expect` helpers once
-   available in the pinned version, and `suite` for lifecycle orchestration).
+   structures (with descriptive `name` fields) and leverage the `github.com/stretchr/testify`
+   family for assertions (`require` for fatal checks, `assert` for non-fatal comparisons, the
+   forthcoming `expect` helpers once available in the pinned version, and `suite` for lifecycle
+   orchestration). Shared setup belongs in helpers marked with `t.Helper()` so failure locations stay readable.
 2. **Mocks and doubles.** Prefer `testify/mock` for interface doubles; generate new mocks with the
    `mockery` v3 CLI using the shared configuration (`mockery --config .mockery.yml`).
 3. **HTTP behavior.** Continue using `github.com/gavv/httpexpect/v2` wherever tests exercise the
    runtime's HTTP surface so request and response expectations remain declarative.
+4. **Validation loop.** Run `go test ./...` followed by the cached `golangci-lint run ./...`
+   command (see AGENTS.md for cache environment variables) after altering tests to keep formatters,
+   `testifylint`, and analyzers passing locally before sending changes for review.
 
 These requirements keep the runtime maintainable, observable, and aligned with the design so teams
 can reason about endpoint behavior without reverse-engineering the code.

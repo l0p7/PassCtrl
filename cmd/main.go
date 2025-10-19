@@ -24,6 +24,44 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
+type configLoader interface {
+	Load(context.Context) (config.Config, error)
+	WatchRules(context.Context, config.Config, func(config.RuleBundle), func(error)) (ruleWatcher, error)
+}
+
+type ruleWatcher interface {
+	Stop()
+}
+
+type runnableServer interface {
+	Run(context.Context) error
+}
+
+var (
+	newConfigLoader = func(envPrefix, configFile string) configLoader {
+		return &loaderAdapter{inner: config.NewLoader(envPrefix, configFile)}
+	}
+	newAppLogger       = logging.New
+	newPromRegistry    = func() *prometheus.Registry { return prometheus.NewRegistry() }
+	newMetricsRecorder = func(reg *prometheus.Registry) metrics.Recorder { return metrics.NewRecorder(reg) }
+	newHTTPServer      = func(cfg config.Config, logger *slog.Logger, handler http.Handler) (runnableServer, error) {
+		return server.New(cfg, logger, handler)
+	}
+	buildCache = buildDecisionCache
+)
+
+type loaderAdapter struct {
+	inner *config.Loader
+}
+
+func (l *loaderAdapter) Load(ctx context.Context) (config.Config, error) {
+	return l.inner.Load(ctx)
+}
+
+func (l *loaderAdapter) WatchRules(ctx context.Context, cfg config.Config, onChange func(config.RuleBundle), onError func(error)) (ruleWatcher, error) {
+	return l.inner.WatchRules(ctx, cfg, onChange, onError)
+}
+
 func main() {
 	var (
 		configFile = flag.String("config", "", "path to server configuration file")
@@ -34,19 +72,25 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	loader := config.NewLoader(*envPrefix, *configFile)
+	if err := run(ctx, *envPrefix, *configFile); err != nil {
+		log.Fatalf("server startup failed: %v", err)
+	}
+}
+
+func run(ctx context.Context, envPrefix, configPath string) error {
+	loader := newConfigLoader(envPrefix, configPath)
 	cfg, err := loader.Load(ctx)
 	if err != nil {
-		log.Fatalf("failed to load configuration: %v", err)
+		return fmt.Errorf("load configuration: %w", err)
 	}
 
-	logger, err := logging.New(cfg.Server.Logging)
+	logger, err := newAppLogger(cfg.Server.Logging)
 	if err != nil {
-		log.Fatalf("failed to configure logger: %v", err)
+		return fmt.Errorf("configure logger: %w", err)
 	}
 
 	cacheLogger := logger.With(slog.String("agent", "cache_factory"))
-	decisionCache := buildDecisionCache(cacheLogger, cfg.Server.Cache)
+	decisionCache := buildCache(cacheLogger, cfg.Server.Cache)
 	cacheTTL := time.Duration(cfg.Server.Cache.TTLSeconds) * time.Second
 
 	var templateSandbox *templates.Sandbox
@@ -59,8 +103,8 @@ func main() {
 		}
 	}
 
-	promRegistry := prometheus.NewRegistry()
-	metricsRecorder := metrics.NewRecorder(promRegistry)
+	promRegistry := newPromRegistry()
+	metricsRecorder := newMetricsRecorder(promRegistry)
 
 	pipe := runtime.NewPipeline(logger, runtime.PipelineOptions{
 		Cache:              decisionCache,
@@ -83,9 +127,9 @@ func main() {
 		}
 	}()
 
-	var rulesWatcher *config.RulesWatcher
+	var watcher ruleWatcher
 	if cfg.Server.Rules.RulesFile != "" || cfg.Server.Rules.RulesFolder != "" {
-		watcher, err := loader.WatchRules(ctx, cfg, func(bundle config.RuleBundle) {
+		w, err := loader.WatchRules(ctx, cfg, func(bundle config.RuleBundle) {
 			pipe.Reload(ctx, bundle)
 		}, func(err error) {
 			if err != nil {
@@ -95,28 +139,32 @@ func main() {
 		if err != nil {
 			logger.Error("rules watcher setup failed", slog.Any("error", err))
 		} else {
-			rulesWatcher = watcher
-			defer rulesWatcher.Stop()
+			watcher = w
 		}
 	}
+	if watcher != nil {
+		defer watcher.Stop()
+	}
+
 	handler := server.NewPipelineHandler(pipe)
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", metricsRecorder.Handler())
 	mux.Handle("/", handler)
 
-	srv, err := server.New(cfg, logger, mux)
+	srv, err := newHTTPServer(cfg, logger, mux)
 	if err != nil {
 		logger.Error("unable to construct server", slog.Any("error", err))
-		os.Exit(1)
+		return err
 	}
 
 	if err := srv.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		logger.Error("server terminated unexpectedly", slog.Any("error", err))
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		return err
 	}
 
 	logger.Info("server shutdown complete")
+	return nil
 }
 
 func buildDecisionCache(logger *slog.Logger, cfg config.ServerCacheConfig) cache.DecisionCache {

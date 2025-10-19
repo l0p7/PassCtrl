@@ -94,6 +94,17 @@ avoid exposing internal state.
   Go 1.25 toolchain locally (for example with `go toolchain install go1.25.0`) and rebuild `golangci-lint` with that toolchain
   (`go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest`) before running the suite.
 
+## Testing & Linting Stack
+- Execute fast feedback loop commands locally before sending changes for review:
+  ```bash
+  go test ./...
+  mkdir -p .gocache .gomodcache .golangci-lint
+  GOCACHE=$(pwd)/.gocache GOMODCACHE=$(pwd)/.gomodcache GOLANGCI_LINT_CACHE=$(pwd)/.golangci-lint golangci-lint run ./...
+  ```
+- Model scenarios with table-driven `testify` cases and rely on the enabled `testifylint` analyzer to flag assertion misuse.
+- Regenerate interface doubles with `mockery --config .mockery.yml`; mocks live alongside their packages (for example, `cmd/mocks/`, `internal/mocks/cache/`, `internal/mocks/runtime/`, `internal/mocks/server/`) and should be committed.
+- Use `github.com/gavv/httpexpect/v2` for HTTP flows so integration-style checks stay declarative; see `internal/server/router_test.go` for the shared handler helper and `cmd/integration_test.go` for the end-to-end harness.
+
 ## Integration Testing
 PassCtrl ships an opt-in CLI integration test under `cmd/integration_test.go`. The test boots the server via `go run` with a
 temporary configuration, waits for `/auth` readiness, and performs a smoke request. To avoid long-running processes during regular

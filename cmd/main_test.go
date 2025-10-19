@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -86,4 +88,109 @@ func cacheEntry() cache.Entry {
 		StoredAt:  now,
 		ExpiresAt: now.Add(100 * time.Millisecond),
 	}
+}
+
+func TestRunLoaderError(t *testing.T) {
+	overrideConfigLoader(t, func(_, _ string) configLoader {
+		return &fakeLoader{loadErr: errors.New("boom")}
+	})
+
+	err := run(context.Background(), "PASSCTRL", "")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "load configuration")
+}
+
+func TestRunServerConstructorError(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Server.Rules.RulesFolder = ""
+	cfg.Server.Rules.RulesFile = ""
+	cfg.Server.Templates.TemplatesFolder = ""
+
+	overrideConfigLoader(t, func(_, _ string) configLoader {
+		return &fakeLoader{cfg: cfg}
+	})
+
+	overrideHTTPServer(t, func(config.Config, *slog.Logger, http.Handler) (runnableServer, error) {
+		return nil, errors.New("construct failed")
+	})
+
+	err := run(context.Background(), "PASSCTRL", "")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "construct failed")
+}
+
+func TestRunServerRunError(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Server.Rules.RulesFolder = ""
+	cfg.Server.Rules.RulesFile = ""
+	cfg.Server.Templates.TemplatesFolder = ""
+
+	overrideConfigLoader(t, func(_, _ string) configLoader {
+		return &fakeLoader{cfg: cfg}
+	})
+
+	overrideHTTPServer(t, func(config.Config, *slog.Logger, http.Handler) (runnableServer, error) {
+		return &stubServer{err: errors.New("run failed")}, nil
+	})
+
+	err := run(context.Background(), "PASSCTRL", "")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "run failed")
+}
+
+func overrideConfigLoader(t *testing.T, fn func(string, string) configLoader) {
+	original := newConfigLoader
+	newConfigLoader = fn
+	t.Cleanup(func() { newConfigLoader = original })
+}
+
+func overrideHTTPServer(t *testing.T, fn func(config.Config, *slog.Logger, http.Handler) (runnableServer, error)) {
+	original := newHTTPServer
+	newHTTPServer = fn
+	t.Cleanup(func() { newHTTPServer = original })
+}
+
+type fakeLoader struct {
+	cfg       config.Config
+	loadErr   error
+	watchErr  error
+	watcher   ruleWatcher
+	stopped   *bool
+	watchSeen bool
+}
+
+func (f *fakeLoader) Load(context.Context) (config.Config, error) {
+	if f.loadErr != nil {
+		return config.Config{}, f.loadErr
+	}
+	return f.cfg, nil
+}
+
+func (f *fakeLoader) WatchRules(context.Context, config.Config, func(config.RuleBundle), func(error)) (ruleWatcher, error) {
+	f.watchSeen = true
+	if f.watchErr != nil {
+		return nil, f.watchErr
+	}
+	if f.watcher != nil {
+		return f.watcher, nil
+	}
+	return &noOpWatcher{stopped: f.stopped}, nil
+}
+
+type noOpWatcher struct {
+	stopped *bool
+}
+
+func (n *noOpWatcher) Stop() {
+	if n.stopped != nil {
+		*n.stopped = true
+	}
+}
+
+type stubServer struct {
+	err error
+}
+
+func (s *stubServer) Run(context.Context) error {
+	return s.err
 }

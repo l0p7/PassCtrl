@@ -101,6 +101,30 @@ func TestBuildRuleBundle(t *testing.T) {
 				require.Contains(t, skipped.Reason, "invalid rule expressions")
 			},
 		},
+		{
+			name: "skips invalid variable expressions",
+			setup: func(t *testing.T) (map[string]EndpointConfig, map[string]RuleConfig, RulesConfig) {
+				rules := map[string]RuleConfig{
+					"bad-vars": {
+						Variables: RuleVariablesConfig{
+							Rule: map[string]RuleVariableSpec{
+								"user": {From: "!!invalid"},
+							},
+						},
+					},
+				}
+				return nil, rules, RulesConfig{}
+			},
+			assert: func(t *testing.T, bundle RuleBundle, err error) {
+				require.NoError(t, err)
+				require.Empty(t, bundle.Rules)
+				require.Len(t, bundle.Skipped, 1)
+				skipped := bundle.Skipped[0]
+				require.Equal(t, "rule", skipped.Kind)
+				require.Equal(t, "bad-vars", skipped.Name)
+				require.Contains(t, skipped.Reason, "variables.rule[user]")
+			},
+		},
 	}
 
 	for _, tc := range tests {

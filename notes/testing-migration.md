@@ -23,13 +23,21 @@ PassCtrl-5 through PassCtrl-13.
 - ✅ Rule execution agent scenarios use mockery-generated HTTP clients to avoid
   external listeners while validating backend pagination, templating, and
   metadata forwarding.
+- ✅ Runtime instrumentation tests rely on a mockery-generated `pipeline.Agent`
+  to verify delegation, and `cmd/main` exposes a `run` seam so failure-path
+  tests execute without invoking `go run`.
+- ✅ Metrics recorder exposes an interface with mockery support, enabling
+  runtime and result caching tests to assert `Observe` calls without parsing
+  Prometheus metrics.
 
 ### Coverage Snapshot
 
-- `go test ./... -coverprofile=coverage.out` (Oct 2025) reports **71.7%** total
+- `go test ./... -coverprofile=coverage.out` (Oct 2025) reports **67.7%** total
   statement coverage. Runtime subpackages sit between 67–93%; CLI package
   coverage remains low (15.9%) because it primarily exercises integration
-  flows.
+  flows. The opt-in CLI integration harness now covers deny-path failures,
+  endpoint selection, and health/explain responses but continues to execute in
+  a separate process, so it does not influence Go's coverage accounting.
 
 ## Migration Phases
 

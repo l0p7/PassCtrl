@@ -63,6 +63,12 @@ Implementation work should meet the non-functional guidance in [`design/technica
   toolchain (for example via `go toolchain install go1.25.0`) and rebuild `golangci-lint` with that toolchain (`go install
   github.com/golangci/golangci-lint/cmd/golangci-lint@latest`) so the binary can target the module's language version when
   running formatters and analyzers.
+- Reuse the cached lint invocation to avoid permission issues in restricted environments:
+  ```bash
+  mkdir -p .gocache .gomodcache .golangci-lint
+  GOCACHE=$(pwd)/.gocache GOMODCACHE=$(pwd)/.gomodcache GOLANGCI_LINT_CACHE=$(pwd)/.golangci-lint golangci-lint run ./...
+  ```
+- Regenerate interface doubles with `mockery --config .mockery.yml` whenever new seams are introduced. Generated mocks emit to the package-specific `mocks/` folders (for example, `cmd/mocks/`, `internal/mocks/cache/`, `internal/mocks/runtime/`, `internal/mocks/server/`) and must be committed alongside the tests that consume them.
 
 ## Contributing
 1. Review the design documents under `design/` before proposing changes; they establish terminology, control flow, and

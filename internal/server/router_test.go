@@ -2,74 +2,14 @@ package server
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/gavv/httpexpect/v2"
+	servermocks "github.com/l0p7/passctrl/internal/mocks/server"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
-
-type stubPipeline struct {
-	endpoints           map[string]bool
-	serveAuthCalls      int
-	serveHealthCalls    int
-	serveExplainCalls   int
-	hints               []string
-	receivedHintHeaders []string
-	writeErrorCalled    bool
-	writeErrorStatus    int
-	writeErrorMessage   string
-}
-
-func (s *stubPipeline) ServeAuth(w http.ResponseWriter, r *http.Request) {
-	s.serveAuthCalls++
-	s.receivedHintHeaders = append(s.receivedHintHeaders, r.Header.Get("X-Endpoint-Hint"))
-	w.WriteHeader(http.StatusOK)
-}
-
-func (s *stubPipeline) ServeHealth(w http.ResponseWriter, r *http.Request) {
-	s.serveHealthCalls++
-	s.receivedHintHeaders = append(s.receivedHintHeaders, r.Header.Get("X-Endpoint-Hint"))
-	w.WriteHeader(http.StatusOK)
-}
-
-func (s *stubPipeline) ServeExplain(w http.ResponseWriter, r *http.Request) {
-	s.serveExplainCalls++
-	s.receivedHintHeaders = append(s.receivedHintHeaders, r.Header.Get("X-Endpoint-Hint"))
-	w.WriteHeader(http.StatusOK)
-}
-
-func (s *stubPipeline) EndpointExists(name string) bool {
-	if s.endpoints == nil {
-		return false
-	}
-	return s.endpoints[name]
-}
-
-func (s *stubPipeline) RequestWithEndpointHint(r *http.Request, endpoint string) *http.Request {
-	s.hints = append(s.hints, endpoint)
-	cloned := r.Clone(r.Context())
-	cloned.Header.Set("X-Endpoint-Hint", endpoint)
-	return cloned
-}
-
-func (s *stubPipeline) WriteError(w http.ResponseWriter, status int, message string) {
-	s.writeErrorCalled = true
-	s.writeErrorStatus = status
-	s.writeErrorMessage = message
-	w.WriteHeader(status)
-	_, _ = w.Write([]byte(message))
-}
-
-func (s *stubPipeline) reset() {
-	s.serveAuthCalls = 0
-	s.serveHealthCalls = 0
-	s.serveExplainCalls = 0
-	s.hints = nil
-	s.receivedHintHeaders = nil
-	s.writeErrorCalled = false
-	s.writeErrorStatus = 0
-	s.writeErrorMessage = ""
-}
 
 func newPipelineExpect(t *testing.T, handler http.Handler) *httpexpect.Expect {
 	t.Helper()
@@ -120,93 +60,160 @@ func TestNewPipelineHandlerNilPipeline(t *testing.T) {
 }
 
 func TestPipelineHandlerDispatchesRoutes(t *testing.T) {
-	stub := &stubPipeline{endpoints: map[string]bool{"tenant": true}}
-	handler := NewPipelineHandler(stub)
-	expect := newPipelineExpect(t, handler)
-
 	tests := []struct {
-		name             string
-		path             string
-		wantStatus       int
-		wantAuthCalls    int
-		wantHealthCalls  int
-		wantExplainCalls int
-		wantHints        []string
+		name       string
+		path       string
+		wantStatus int
+		setup      func(t *testing.T, m *servermocks.MockPipelineHTTP)
 	}{
 		{
-			name:          "root auth",
-			path:          "/auth",
-			wantStatus:    http.StatusOK,
-			wantAuthCalls: 1,
+			name:       "root auth",
+			path:       "/auth",
+			wantStatus: http.StatusOK,
+			setup: func(t *testing.T, m *servermocks.MockPipelineHTTP) {
+				m.EXPECT().
+					ServeAuth(mock.Anything, requestWithHint(t, "")).
+					Run(func(w http.ResponseWriter, _ *http.Request) {
+						w.WriteHeader(http.StatusOK)
+					}).
+					Once()
+			},
 		},
 		{
-			name:            "root health alias",
-			path:            "/health",
-			wantStatus:      http.StatusOK,
-			wantHealthCalls: 1,
+			name:       "root health alias",
+			path:       "/health",
+			wantStatus: http.StatusOK,
+			setup: func(t *testing.T, m *servermocks.MockPipelineHTTP) {
+				m.EXPECT().
+					ServeHealth(mock.Anything, requestWithHint(t, "")).
+					Run(func(w http.ResponseWriter, _ *http.Request) {
+						w.WriteHeader(http.StatusOK)
+					}).
+					Once()
+			},
 		},
 		{
-			name:          "scoped auth uses hint",
-			path:          "/tenant/auth",
-			wantStatus:    http.StatusOK,
-			wantAuthCalls: 1,
-			wantHints:     []string{"tenant"},
+			name:       "scoped auth uses hint",
+			path:       "/tenant/auth",
+			wantStatus: http.StatusOK,
+			setup: func(t *testing.T, m *servermocks.MockPipelineHTTP) {
+				m.EXPECT().
+					RequestWithEndpointHint(mock.Anything, "tenant").
+					RunAndReturn(cloneWithHint(t, "tenant")).
+					Once()
+				m.EXPECT().
+					ServeAuth(mock.Anything, requestWithHint(t, "tenant")).
+					Run(func(w http.ResponseWriter, _ *http.Request) {
+						w.WriteHeader(http.StatusOK)
+					}).
+					Once()
+			},
 		},
 		{
-			name:            "scoped health uses hint",
-			path:            "/tenant/healthz",
-			wantStatus:      http.StatusOK,
-			wantHealthCalls: 1,
-			wantHints:       []string{"tenant"},
+			name:       "scoped health uses hint",
+			path:       "/tenant/healthz",
+			wantStatus: http.StatusOK,
+			setup: func(t *testing.T, m *servermocks.MockPipelineHTTP) {
+				m.EXPECT().
+					EndpointExists("tenant").
+					Return(true).
+					Once()
+				m.EXPECT().
+					RequestWithEndpointHint(mock.Anything, "tenant").
+					RunAndReturn(cloneWithHint(t, "tenant")).
+					Once()
+				m.EXPECT().
+					ServeHealth(mock.Anything, requestWithHint(t, "tenant")).
+					Run(func(w http.ResponseWriter, _ *http.Request) {
+						w.WriteHeader(http.StatusOK)
+					}).
+					Once()
+			},
 		},
 		{
-			name:             "scoped explain uses hint",
-			path:             "/tenant/explain",
-			wantStatus:       http.StatusOK,
-			wantExplainCalls: 1,
-			wantHints:        []string{"tenant"},
+			name:       "scoped explain uses hint",
+			path:       "/tenant/explain",
+			wantStatus: http.StatusOK,
+			setup: func(t *testing.T, m *servermocks.MockPipelineHTTP) {
+				m.EXPECT().
+					EndpointExists("tenant").
+					Return(true).
+					Once()
+				m.EXPECT().
+					RequestWithEndpointHint(mock.Anything, "tenant").
+					RunAndReturn(cloneWithHint(t, "tenant")).
+					Once()
+				m.EXPECT().
+					ServeExplain(mock.Anything, requestWithHint(t, "tenant")).
+					Run(func(w http.ResponseWriter, _ *http.Request) {
+						w.WriteHeader(http.StatusOK)
+					}).
+					Once()
+			},
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			stub.reset()
+			mockPipeline := servermocks.NewMockPipelineHTTP(t)
+			tc.setup(t, mockPipeline)
 
-			resp := expect.GET(tc.path).Expect()
+			handler := NewPipelineHandler(mockPipeline)
+			resp := newPipelineExpect(t, handler).GET(tc.path).Expect()
 			resp.Status(tc.wantStatus)
-			require.Equal(t, tc.wantAuthCalls, stub.serveAuthCalls)
-			require.Equal(t, tc.wantHealthCalls, stub.serveHealthCalls)
-			require.Equal(t, tc.wantExplainCalls, stub.serveExplainCalls)
-			if len(tc.wantHints) == 0 {
-				require.Empty(t, stub.hints, "expected no endpoint hints")
-			} else {
-				require.Equal(t, tc.wantHints, stub.hints)
-				for i, hint := range tc.wantHints {
-					require.Equalf(t, hint, stub.receivedHintHeaders[i], "request should carry hint header")
-				}
-			}
 		})
 	}
 }
 
 func TestPipelineHandlerMissingEndpoint(t *testing.T) {
-	stub := &stubPipeline{endpoints: map[string]bool{}}
-	handler := NewPipelineHandler(stub)
+	mockPipeline := servermocks.NewMockPipelineHTTP(t)
+	mockPipeline.EXPECT().
+		EndpointExists("missing").
+		Return(false).
+		Once()
+	mockPipeline.EXPECT().
+		WriteError(mock.Anything, http.StatusNotFound, mock.MatchedBy(func(msg string) bool {
+			return strings.Contains(msg, "missing")
+		})).
+		Run(func(w http.ResponseWriter, status int, msg string) {
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(msg))
+		}).
+		Once()
+
+	handler := NewPipelineHandler(mockPipeline)
 
 	resp := newPipelineExpect(t, handler).GET("/missing/health").Expect()
 	resp.Status(http.StatusNotFound)
 	resp.Body().Contains("endpoint \"missing\" not found")
-
-	require.True(t, stub.writeErrorCalled, "expected WriteError to be invoked for unknown endpoint")
-	require.Equal(t, http.StatusNotFound, stub.writeErrorStatus)
-	require.Zero(t, stub.serveHealthCalls, "ServeHealth should not be called on missing endpoint")
 }
 
 func TestPipelineHandlerNotFound(t *testing.T) {
-	stub := &stubPipeline{}
-	handler := NewPipelineHandler(stub)
+	mockPipeline := servermocks.NewMockPipelineHTTP(t)
+	handler := NewPipelineHandler(mockPipeline)
 
 	newPipelineExpect(t, handler).GET("/unsupported/path").Expect().Status(http.StatusNotFound)
 
-	require.Zero(t, stub.serveAuthCalls+stub.serveHealthCalls+stub.serveExplainCalls, "expected no pipeline calls for unsupported route")
+	// no pipeline methods should be invoked for unsupported routes; any unexpected call would fail via mock expectations.
+}
+
+func requestWithHint(t *testing.T, expected string) interface{} {
+	t.Helper()
+	return mock.MatchedBy(func(r *http.Request) bool {
+		t.Helper()
+		if r == nil {
+			return false
+		}
+		return r.Header.Get("X-Endpoint-Hint") == expected
+	})
+}
+
+func cloneWithHint(t *testing.T, expected string) func(*http.Request, string) *http.Request {
+	return func(r *http.Request, endpoint string) *http.Request {
+		t.Helper()
+		require.Equal(t, expected, endpoint)
+		cloned := r.Clone(r.Context())
+		cloned.Header.Set("X-Endpoint-Hint", endpoint)
+		return cloned
+	}
 }

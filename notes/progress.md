@@ -23,6 +23,10 @@
   polls `/auth` with a bearer token, and captures stdout/stderr for debugging when the subprocess fails.
 - Backfilled critical unit coverage across the pipeline lifecycle (`Close`, fallback endpoint wiring), cache invalidation paths,
   rulechain defaults, and renderer metadata helpers to eliminate the remaining uncovered execution paths.
+- Converted router HTTP suites to `httpexpect`-driven table cases, generated a mockery-backed `PipelineHTTP` mock for server tests, and moved runtime rule execution tests onto mockery-generated HTTP clients; validated the refactor with `go test ./...` and `golangci-lint run ./...`.
+- Generated a mockery-backed `pipeline.Agent` mock and refactored runtime instrumentation tests to verify delegation, then added CLI `run` seam tests that cover loader and server failure paths.
+- Promoted the metrics recorder to an interface (with mockery support) and asserted pipeline/result caching metrics via dedicated mocks.
+- Added rule-variable validation coverage via `rules_loader_test.go` and expanded the CLI integration harness to assert endpoint selection, deny-path failures, and aggregate health/explain responses.
 
 ## Configuration Updates
 - Nested template environment controls inside the `server.templates` block, updated defaults, and ensured loader + tests respect the new hierarchy.
@@ -45,6 +49,8 @@
 - Added a new suite of configuration bundles (`examples/suites/*`) covering
   rules folders, Redis-backed caches, and environment-aware templates alongside
   doc updates explaining the CEL activation maps.
+- Documented the unified testing conventions (testify table cases, httpexpect usage, mockery workflow, and validation commands) in AGENTS.md and `design/technical-requirements.md`.
+- Updated README and `docs/index.md` with the cached lint command, mockery regeneration workflow, and pointers to the package-scoped mock directories.
 
 ## Repository Hygiene
 - Renamed the module to `github.com/l0p7/passctrl` and updated all internal imports.

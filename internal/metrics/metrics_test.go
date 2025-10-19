@@ -139,7 +139,7 @@ func TestRecorderHandler(t *testing.T) {
 	})
 }
 
-func gather(t *testing.T, rec *Recorder, names ...string) map[string][]*dto.Metric {
+func gather(t *testing.T, rec Recorder, names ...string) map[string][]*dto.Metric {
 	t.Helper()
 	wanted := make(map[string]bool, len(names))
 	for _, name := range names {

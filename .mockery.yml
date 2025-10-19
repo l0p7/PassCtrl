@@ -36,3 +36,27 @@ packages:
       structname: MockHTTPDoer
     interfaces:
       httpDoer: {}
+  github.com/l0p7/passctrl/internal/server:
+    config:
+      dir: internal/mocks/server
+      filename: pipeline_http_mock.go
+      pkgname: servermocks
+      structname: MockPipelineHTTP
+    interfaces:
+      PipelineHTTP: {}
+  github.com/l0p7/passctrl/internal/runtime/pipeline:
+    config:
+      dir: internal/mocks/pipeline
+      filename: agent_mock.go
+      pkgname: pipelinemocks
+      structname: MockAgent
+    interfaces:
+      Agent: {}
+  github.com/l0p7/passctrl/internal/metrics:
+    config:
+      dir: internal/mocks/metrics
+      filename: recorder_mock.go
+      pkgname: metricsmocks
+      structname: MockRecorder
+    interfaces:
+      Recorder: {}

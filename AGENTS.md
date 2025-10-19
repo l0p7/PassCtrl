@@ -34,6 +34,13 @@ artifacts authoritative, and align code changes with the runtime agents defined 
   mirror the design contracts.
 - Default test scaffolding to the `testify` family: use `testify/require` for fatal checks, `testify/assert` (and adopt the upstream `testify/expect` helpers once our pinned version exposes them) for non-fatal comparisons, `testify/mock` for doubles generated via `mockery v3`, and `testify/suite` when lifecycle hooks simplify setup/teardown. Continue to drive HTTP-facing flows through `httpexpect` so request/response assertions stay declarative.
 
+## Testing Conventions
+- Model scenarios with table-driven cases and descriptive `name` fields so failures pinpoint behavior regressions; prefer `t.Helper()` factories when setup repeats.
+- Lean on `require` for setup/teardown preconditions and reserve `assert` for non-fatal validations inside a case; if expectations need ordering, capture them in subtests.
+- Generate doubles with `mockery --config .mockery.yml` so mocks land under the package `mocks/` folders with expecter APIs; never hand-roll testify mocks.
+- Exercise HTTP surfaces through `httpexpect` helpers (for example `internal/server/router_test.go:newPipelineExpect`) to avoid manual recorder plumbing and keep request/response assertions declarative.
+- Always finish a test-focused change by running `go test ./...` and the cached `golangci-lint run ./...` invocation noted below to ensure formatter, `testifylint`, and analyzers stay green.
+
 ## Library Usage Policy
 - Prefer the Go standard library when it already satisfies the runtime agent contract; introduce third-party dependencies only when they demonstrably simplify the implementation or close a capability gap (e.g., configuration layering, filesystem events).
 - Reuse the packages already adopted in this repository before adding alternatives. If the existing library provides the required behavior, integrate with it instead of reimplementing helpers.

@@ -18,7 +18,7 @@ type Agent struct {
 	cache   cache.DecisionCache
 	ttl     time.Duration
 	logger  *slog.Logger
-	metrics *metrics.Recorder
+	metrics metrics.Recorder
 }
 
 // Config controls the cache behavior for the agent.
@@ -26,7 +26,7 @@ type Config struct {
 	Cache   cache.DecisionCache
 	TTL     time.Duration
 	Logger  *slog.Logger
-	Metrics *metrics.Recorder
+	Metrics metrics.Recorder
 }
 
 // New constructs a result caching agent with the supplied configuration.
