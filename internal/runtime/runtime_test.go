@@ -14,6 +14,7 @@ import (
 	"github.com/l0p7/passctrl/internal/config"
 	"github.com/l0p7/passctrl/internal/runtime/cache"
 	"github.com/l0p7/passctrl/internal/server"
+	"github.com/stretchr/testify/require"
 )
 
 // The /auth response is intentionally near-empty by default; tests should not
@@ -74,20 +75,12 @@ func TestPipelineEndpointSelectionAndRules(t *testing.T) {
 
 		handler.ServeHTTP(rec, req)
 
-		if rec.Code != http.StatusForbidden {
-			t.Fatalf("expected status 403, got %d", rec.Code)
-		}
-		if header := rec.Header().Get("X-Request-ID"); header != "deny-123" {
-			t.Fatalf("expected correlation header to echo request id, got %q", header)
-		}
+		require.Equal(t, http.StatusForbidden, rec.Code)
+		require.Equal(t, "deny-123", rec.Header().Get("X-Request-ID"))
 
 		// Minimal response: only the body when intentionally constructed.
-		if got := strings.TrimSpace(rec.Body.String()); got != "denied by rule" {
-			t.Fatalf("expected minimal body with constructed message, got %q", got)
-		}
-		if header := rec.Header().Get("X-Request-ID"); header != "deny-123" {
-			t.Fatalf("expected correlation header to echo request id, got %q", header)
-		}
+		require.Equal(t, "denied by rule", strings.TrimSpace(rec.Body.String()))
+		require.Equal(t, "deny-123", rec.Header().Get("X-Request-ID"))
 	})
 
 	t.Run("allow endpoint passes when query matches", func(t *testing.T) {
@@ -97,20 +90,12 @@ func TestPipelineEndpointSelectionAndRules(t *testing.T) {
 
 		handler.ServeHTTP(rec, req)
 
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected status 200, got %d", rec.Code)
-		}
-		if header := rec.Header().Get("X-Request-ID"); header == "" {
-			t.Fatalf("expected generated correlation header when request omitted it")
-		}
+		require.Equal(t, http.StatusOK, rec.Code)
+		require.NotEmpty(t, rec.Header().Get("X-Request-ID"), "expected generated correlation header when request omitted it")
 
 		// Default pass has no body unless intentionally constructed.
-		if got := strings.TrimSpace(rec.Body.String()); got != "" {
-			t.Fatalf("expected empty body on pass by default, got %q", got)
-		}
-		if header := rec.Header().Get("X-Request-ID"); header == "" {
-			t.Fatalf("expected generated correlation header when request omitted it")
-		}
+		require.Empty(t, strings.TrimSpace(rec.Body.String()))
+		require.NotEmpty(t, rec.Header().Get("X-Request-ID"))
 	})
 
 	t.Run("missing endpoint requires selector when multiple configured", func(t *testing.T) {
@@ -119,17 +104,11 @@ func TestPipelineEndpointSelectionAndRules(t *testing.T) {
 
 		handler.ServeHTTP(rec, req)
 
-		if rec.Code != http.StatusBadRequest {
-			t.Fatalf("expected status 400, got %d", rec.Code)
-		}
+		require.Equal(t, http.StatusBadRequest, rec.Code)
 
 		var payload map[string]any
-		if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
-			t.Fatalf("failed to decode error payload: %v", err)
-		}
-		if payload["error"] == "" {
-			t.Fatalf("expected error message in payload")
-		}
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload))
+		require.NotEmpty(t, payload["error"])
 	})
 
 	t.Run("unknown endpoint path yields not found", func(t *testing.T) {
@@ -138,9 +117,7 @@ func TestPipelineEndpointSelectionAndRules(t *testing.T) {
 
 		handler.ServeHTTP(rec, req)
 
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("expected status 404, got %d", rec.Code)
-		}
+		require.Equal(t, http.StatusNotFound, rec.Code)
 	})
 
 	t.Run("aggregate health available at canonical path", func(t *testing.T) {
@@ -149,9 +126,7 @@ func TestPipelineEndpointSelectionAndRules(t *testing.T) {
 
 		handler.ServeHTTP(rec, req)
 
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected status 200, got %d", rec.Code)
-		}
+		require.Equal(t, http.StatusOK, rec.Code)
 	})
 
 	t.Run("scoped health requires known endpoint", func(t *testing.T) {
@@ -160,9 +135,7 @@ func TestPipelineEndpointSelectionAndRules(t *testing.T) {
 
 		handler.ServeHTTP(rec, req)
 
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected status 200, got %d", rec.Code)
-		}
+		require.Equal(t, http.StatusOK, rec.Code)
 	})
 
 	t.Run("scoped health accepts health alias", func(t *testing.T) {
@@ -171,9 +144,7 @@ func TestPipelineEndpointSelectionAndRules(t *testing.T) {
 
 		handler.ServeHTTP(rec, req)
 
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected status 200, got %d", rec.Code)
-		}
+		require.Equal(t, http.StatusOK, rec.Code)
 	})
 
 	t.Run("unknown endpoint health returns not found", func(t *testing.T) {
@@ -182,9 +153,7 @@ func TestPipelineEndpointSelectionAndRules(t *testing.T) {
 
 		handler.ServeHTTP(rec, req)
 
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("expected status 404, got %d", rec.Code)
-		}
+		require.Equal(t, http.StatusNotFound, rec.Code)
 	})
 
 	t.Run("unknown endpoint health alias returns not found", func(t *testing.T) {
@@ -193,9 +162,7 @@ func TestPipelineEndpointSelectionAndRules(t *testing.T) {
 
 		handler.ServeHTTP(rec, req)
 
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("expected status 404, got %d", rec.Code)
-		}
+		require.Equal(t, http.StatusNotFound, rec.Code)
 	})
 }
 
@@ -234,9 +201,7 @@ func TestPipelineLogsIncludeCorrelationID(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	lines := strings.Split(strings.TrimSpace(logBuf.String()), "\n")
-	if len(lines) == 0 {
-		t.Fatalf("expected log entries to be recorded")
-	}
+	require.NotEmpty(t, lines, "expected log entries to be recorded")
 
 	foundCorrelation := false
 	for _, line := range lines {
@@ -244,20 +209,14 @@ func TestPipelineLogsIncludeCorrelationID(t *testing.T) {
 			continue
 		}
 		var entry map[string]any
-		if err := json.Unmarshal([]byte(line), &entry); err != nil {
-			t.Fatalf("failed to decode log entry: %v", err)
-		}
+		require.NoError(t, json.Unmarshal([]byte(line), &entry), "failed to decode log entry")
 		if entry["correlation_id"] == "log-correlation" {
 			foundCorrelation = true
-			if _, ok := entry["latency_ms"]; !ok {
-				t.Fatalf("expected latency_ms field in correlation log entry")
-			}
+			require.Contains(t, entry, "latency_ms", "expected latency_ms field in correlation log entry")
 		}
 	}
 
-	if !foundCorrelation {
-		t.Fatalf("expected at least one log entry to include the correlation id")
-	}
+	require.True(t, foundCorrelation, "expected at least one log entry to include the correlation id")
 }
 
 func TestPipelineSingleEndpointDefaults(t *testing.T) {
@@ -289,14 +248,8 @@ func TestPipelineSingleEndpointDefaults(t *testing.T) {
 
 	handler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected status 200, got %d", rec.Code)
-	}
-
-	// Minimal body on pass by default.
-	if got := strings.TrimSpace(rec.Body.String()); got != "" {
-		t.Fatalf("expected empty body on pass by default, got %q", got)
-	}
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Empty(t, strings.TrimSpace(rec.Body.String()), "expected empty body on pass by default")
 }
 
 func TestPipelineExplainReflectsMetadata(t *testing.T) {
@@ -332,26 +285,14 @@ func TestPipelineExplainReflectsMetadata(t *testing.T) {
 
 		handler.ServeHTTP(rec, req)
 
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected status 200, got %d", rec.Code)
-		}
+		require.Equal(t, http.StatusOK, rec.Code)
 
 		var payload explainPayload
-		if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
-			t.Fatalf("failed to decode explain payload: %v", err)
-		}
-		if payload.Status != "degraded" {
-			t.Fatalf("expected degraded status when skips present, got %s", payload.Status)
-		}
-		if len(payload.RuleSources) != 2 {
-			t.Fatalf("expected rule sources to be surfaced, got %v", payload.RuleSources)
-		}
-		if len(payload.SkippedDefinitions) != 1 {
-			t.Fatalf("expected skipped definitions to be included, got %v", payload.SkippedDefinitions)
-		}
-		if len(payload.AvailableEndpoints) == 0 {
-			t.Fatalf("expected available endpoints to be reported")
-		}
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload))
+		require.Equal(t, "degraded", payload.Status)
+		require.Len(t, payload.RuleSources, 2)
+		require.Len(t, payload.SkippedDefinitions, 1)
+		require.NotEmpty(t, payload.AvailableEndpoints)
 	})
 
 	t.Run("scoped explain validates endpoint", func(t *testing.T) {
@@ -360,17 +301,11 @@ func TestPipelineExplainReflectsMetadata(t *testing.T) {
 
 		handler.ServeHTTP(rec, req)
 
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected status 200, got %d", rec.Code)
-		}
+		require.Equal(t, http.StatusOK, rec.Code)
 
 		var payload explainPayload
-		if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
-			t.Fatalf("failed to decode scoped explain: %v", err)
-		}
-		if payload.Endpoint != "solo" {
-			t.Fatalf("expected endpoint hint to be echoed, got %s", payload.Endpoint)
-		}
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload))
+		require.Equal(t, "solo", payload.Endpoint)
 	})
 
 	t.Run("unknown endpoint explain returns not found", func(t *testing.T) {
@@ -379,9 +314,7 @@ func TestPipelineExplainReflectsMetadata(t *testing.T) {
 
 		handler.ServeHTTP(rec, req)
 
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("expected status 404, got %d", rec.Code)
-		}
+		require.Equal(t, http.StatusNotFound, rec.Code)
 	})
 }
 
@@ -416,9 +349,7 @@ func TestPipelineReloadInvalidatesCache(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected initial pass, got %d", rec.Code)
-	}
+	require.Equal(t, http.StatusOK, rec.Code)
 
 	// Reload with a failing rule to ensure cached decision is purged.
 	bundle := config.RuleBundle{
@@ -444,9 +375,7 @@ func TestPipelineReloadInvalidatesCache(t *testing.T) {
 	req.Header.Set("Authorization", "token")
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("expected reload to force fresh evaluation, got %d", rec.Code)
-	}
+	require.Equal(t, http.StatusForbidden, rec.Code)
 
 	// Minimal body; just verify status code reflects fail after reload.
 
@@ -454,16 +383,10 @@ func TestPipelineReloadInvalidatesCache(t *testing.T) {
 	explainReq := httptest.NewRequest(http.MethodGet, "http://example.com/explain", http.NoBody)
 	explainRec := httptest.NewRecorder()
 	handler.ServeHTTP(explainRec, explainReq)
-	if explainRec.Code != http.StatusOK {
-		t.Fatalf("expected explain to succeed after reload, got %d", explainRec.Code)
-	}
+	require.Equal(t, http.StatusOK, explainRec.Code)
 	var explain explainPayload
-	if err := json.Unmarshal(explainRec.Body.Bytes(), &explain); err != nil {
-		t.Fatalf("failed to decode explain payload after reload: %v", err)
-	}
-	if len(explain.RuleSources) != 1 || explain.RuleSources[0] != "updated" {
-		t.Fatalf("expected rule sources to reflect reload, got %v", explain.RuleSources)
-	}
+	require.NoError(t, json.Unmarshal(explainRec.Body.Bytes(), &explain))
+	require.Equal(t, []string{"updated"}, explain.RuleSources)
 }
 
 func TestAuthResponseIsMinimal(t *testing.T) {
@@ -492,12 +415,8 @@ func TestAuthResponseIsMinimal(t *testing.T) {
 	req.Header.Set("X-Request-ID", "minimal-1")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected status 200, got %d", rec.Code)
-	}
-	if got := strings.TrimSpace(rec.Body.String()); got != "" {
-		t.Fatalf("expected empty response body on pass, got %q", got)
-	}
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Empty(t, strings.TrimSpace(rec.Body.String()), "expected empty response body on pass")
 
 	// Fail case in a fresh pipeline to avoid cache influence
 	failOpts := PipelineOptions{
@@ -522,12 +441,8 @@ func TestAuthResponseIsMinimal(t *testing.T) {
 	req.Header.Set("X-Request-ID", "minimal-2")
 	rec = httptest.NewRecorder()
 	failHandler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("expected status 403 on fail, got %d", rec.Code)
-	}
-	if got := strings.TrimSpace(rec.Body.String()); got != "" {
-		t.Fatalf("expected empty response body on fail, got %q", got)
-	}
+	require.Equal(t, http.StatusForbidden, rec.Code)
+	require.Empty(t, strings.TrimSpace(rec.Body.String()), "expected empty response body on fail")
 }
 
 func TestEndpointResponsePolicyBodiesAndHeaders(t *testing.T) {
@@ -564,18 +479,10 @@ func TestEndpointResponsePolicyBodiesAndHeaders(t *testing.T) {
 	req.Header.Set("Authorization", "token")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected status 200, got %d", rec.Code)
-	}
-	if got := strings.TrimSpace(rec.Body.String()); got != "Okay" {
-		t.Fatalf("expected endpoint pass body, got %q", got)
-	}
-	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
-		t.Fatalf("expected response policy content type to be preserved, got %q", ct)
-	}
-	if h := rec.Header().Get("X-Custom"); h != "ep-e" {
-		t.Fatalf("expected custom header rendered with endpoint, got %q", h)
-	}
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, "Okay", strings.TrimSpace(rec.Body.String()))
+	require.Equal(t, "application/json", rec.Header().Get("Content-Type"))
+	require.Equal(t, "ep-e", rec.Header().Get("X-Custom"))
 
 	// Reload rules to force fail outcome
 	bundle := config.RuleBundle{
@@ -588,13 +495,7 @@ func TestEndpointResponsePolicyBodiesAndHeaders(t *testing.T) {
 	req.Header.Set("Authorization", "token")
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("expected status 403, got %d", rec.Code)
-	}
-	if got := strings.TrimSpace(rec.Body.String()); got != "Denied" {
-		t.Fatalf("expected endpoint fail body, got %q", got)
-	}
-	if ct := rec.Header().Get("Content-Type"); ct != "text/plain; charset=utf-8" {
-		t.Fatalf("expected default content type when none configured, got %q", ct)
-	}
+	require.Equal(t, http.StatusForbidden, rec.Code)
+	require.Equal(t, "Denied", strings.TrimSpace(rec.Body.String()))
+	require.Equal(t, "text/plain; charset=utf-8", rec.Header().Get("Content-Type"))
 }

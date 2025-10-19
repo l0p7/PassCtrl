@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewStateInitializesNormalization(t *testing.T) {
@@ -14,50 +16,27 @@ func TestNewStateInitializesNormalization(t *testing.T) {
 
 	state := NewState(req, "demo-endpoint", "cache-key-1", "corr-123")
 
-	if state.Endpoint != "demo-endpoint" {
-		t.Fatalf("expected endpoint to be captured, got %q", state.Endpoint)
-	}
-	if state.Cache.Key != "cache-key-1" {
-		t.Fatalf("expected cache key to be propagated, got %q", state.Cache.Key)
-	}
-	if got := state.Raw.Headers["x-custom"]; got != "primary" {
-		t.Fatalf("expected normalized header to keep first value, got %q", got)
-	}
-	if _, ok := state.Raw.Headers["X-Custom"]; ok {
-		t.Fatalf("expected raw headers to store lowercase keys only")
-	}
-	if got := state.Raw.Query["foo"]; got != "bar" {
-		t.Fatalf("expected query map to use lowercase key, got %q", got)
-	}
-	if _, ok := state.Raw.Query["Foo"]; ok {
-		t.Fatalf("expected query map to store lowercase keys only")
-	}
-	if state.Forward.Headers == nil || state.Forward.Query == nil {
-		t.Fatalf("expected forward maps to be initialized")
-	}
-	if state.Response.Headers == nil {
-		t.Fatalf("expected response headers to be initialized")
-	}
-	if state.Backend.Headers == nil {
-		t.Fatalf("expected backend headers to be initialized")
-	}
+	require.Equal(t, "demo-endpoint", state.Endpoint)
+	require.Equal(t, "cache-key-1", state.Cache.Key)
+	require.Equal(t, "primary", state.Raw.Headers["x-custom"])
+	require.NotContains(t, state.Raw.Headers, "X-Custom")
+	require.Equal(t, "bar", state.Raw.Query["foo"])
+	require.NotContains(t, state.Raw.Query, "Foo")
+	require.NotNil(t, state.Forward.Headers)
+	require.NotNil(t, state.Forward.Query)
+	require.NotNil(t, state.Response.Headers)
+	require.NotNil(t, state.Backend.Headers)
 }
 
 func TestPlanAccessors(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "http://example.com/demo", http.NoBody)
 	state := NewState(req, "demo", "cache-key", "corr")
 
-	if state.Plan() != nil {
-		t.Fatalf("expected initial plan to be nil")
-	}
+	require.Nil(t, state.Plan())
 	state.SetPlan("plan-value")
-	if got := state.Plan(); got != "plan-value" {
-		t.Fatalf("expected plan getter to return stored value, got %#v", got)
-	}
+	require.Equal(t, "plan-value", state.Plan())
 	state.ClearPlan()
-	if state.Plan() != nil {
-		t.Fatalf("expected plan to be cleared")
-	}
+	require.Nil(t, state.Plan())
 }
 
 func TestTemplateContextIncludesStateSnapshot(t *testing.T) {
@@ -71,35 +50,23 @@ func TestTemplateContextIncludesStateSnapshot(t *testing.T) {
 
 	ctx := state.TemplateContext()
 
-	if ctx["endpoint"] != "endpoint-a" {
-		t.Fatalf("expected endpoint in template context, got %#v", ctx["endpoint"])
-	}
-	if ctx["correlationId"] != "corr-id" {
-		t.Fatalf("expected correlation id in template context, got %#v", ctx["correlationId"])
-	}
-	if ctx["state"] != state {
-		t.Fatalf("expected state to be embedded in template context")
-	}
-	if cache, ok := ctx["cache"].(CacheState); !ok || cache.Key != "cache-key" {
-		t.Fatalf("expected cache snapshot with key, got %#v", ctx["cache"])
-	}
+	require.Equal(t, "endpoint-a", ctx["endpoint"])
+	require.Equal(t, "corr-id", ctx["correlationId"])
+	require.Equal(t, state, ctx["state"])
+	cache, ok := ctx["cache"].(CacheState)
+	require.True(t, ok)
+	require.Equal(t, "cache-key", cache.Key)
 }
 
 func TestTemplateContextNilState(t *testing.T) {
 	var state *State
 	ctx := state.TemplateContext()
-	if ctx == nil {
-		t.Fatalf("expected nil state to return empty map, got nil")
-	}
-	if len(ctx) != 0 {
-		t.Fatalf("expected empty context for nil state, got %#v", ctx)
-	}
+	require.NotNil(t, ctx)
+	require.Empty(t, ctx)
 }
 
 func TestStateCacheKeyAccessor(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "http://example.com/demo", http.NoBody)
 	state := NewState(req, "demo", "cache-key-test", "corr")
-	if state.CacheKey() != "cache-key-test" {
-		t.Fatalf("expected cache key accessor to return cache-key-test, got %q", state.CacheKey())
-	}
+	require.Equal(t, "cache-key-test", state.CacheKey())
 }

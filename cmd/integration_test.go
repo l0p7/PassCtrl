@@ -18,7 +18,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gavv/httpexpect/v2"
+	cmdmocks "github.com/l0p7/passctrl/cmd/mocks"
 	"github.com/l0p7/passctrl/internal/config"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 type integrationProcess struct {
@@ -40,11 +44,11 @@ func startServerProcess(t *testing.T, configPath string, env map[string]string) 
 	moduleCache := filepath.Join(cacheRoot, "gomodcache")
 	if err := os.MkdirAll(cacheDir, 0o750); err != nil {
 		cancel()
-		t.Fatalf("failed to create gocache dir: %v", err)
+		require.NoError(t, err, "failed to create gocache dir")
 	}
 	if err := os.MkdirAll(moduleCache, 0o750); err != nil {
 		cancel()
-		t.Fatalf("failed to create gomodcache dir: %v", err)
+		require.NoError(t, err, "failed to create gomodcache dir")
 	}
 	cmd.Env = append(os.Environ(), "GOFLAGS=", "GOCACHE="+cacheDir, "GOMODCACHE="+moduleCache)
 	for k, v := range env {
@@ -58,7 +62,7 @@ func startServerProcess(t *testing.T, configPath string, env map[string]string) 
 
 	if err := cmd.Start(); err != nil {
 		cancel()
-		t.Fatalf("failed to start server process: %v", err)
+		require.NoError(t, err, "failed to start server process")
 	}
 
 	proc := &integrationProcess{cmd: cmd, cancel: cancel, stdout: stdout, stderr: stderr}
@@ -101,43 +105,32 @@ func (p *integrationProcess) stop(t *testing.T) {
 	}
 }
 
-func (p *integrationProcess) logs() (string, string) {
-	if p == nil {
-		return "", ""
-	}
-	return p.stdout.String(), p.stderr.String()
-}
-
-func waitForEndpoint(t *testing.T, client *http.Client, target string, timeout time.Duration, headers map[string]string) {
+func waitForEndpoint(t *testing.T, client httpDoer, target string, timeout time.Duration, headers map[string]string) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, target, nil)
-		if err != nil {
-			t.Fatalf("failed to build probe request: %v", err)
-		}
+		require.NoError(t, err, "failed to build probe request")
 		for k, v := range headers {
 			req.Header.Set(k, v)
 		}
 		resp, err := client.Do(req) // #nosec G107 - test helper for local server
 		if err == nil {
 			status := resp.StatusCode
-			if cerr := resp.Body.Close(); cerr != nil {
-				t.Fatalf("failed to close readiness probe body: %v", cerr)
-			}
+			require.NoError(t, resp.Body.Close(), "failed to close readiness probe body")
 			if status < 500 {
 				return
 			}
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	t.Fatalf("server did not respond successfully within %v", timeout)
+	require.Failf(t, "server readiness", "server did not respond successfully within %v", timeout)
 }
 
 func writeIntegrationConfig(t *testing.T, dir string, port int) string {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o750); err != nil {
-		t.Fatalf("failed to ensure rules folder: %v", err)
+		require.NoError(t, err, "failed to ensure rules folder")
 	}
 	cfg := map[string]any{
 		"server": map[string]any{
@@ -185,13 +178,9 @@ func writeIntegrationConfig(t *testing.T, dir string, port int) string {
 	}
 
 	contents, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		t.Fatalf("failed to marshal config: %v", err)
-	}
+	require.NoError(t, err, "failed to marshal config")
 	path := filepath.Join(dir, "integration-config.json")
-	if err := os.WriteFile(path, contents, 0o600); err != nil {
-		t.Fatalf("failed to write config: %v", err)
-	}
+	require.NoError(t, os.WriteFile(path, contents, 0o600), "failed to write config")
 	return path
 }
 
@@ -199,17 +188,11 @@ func allocatePort(t *testing.T) int {
 	t.Helper()
 	var lc net.ListenConfig
 	l, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("failed to allocate port: %v", err)
-	}
+	require.NoError(t, err, "failed to allocate port")
 	addr, ok := l.Addr().(*net.TCPAddr)
-	if !ok {
-		t.Fatalf("unexpected addr type %T", l.Addr())
-	}
+	require.Truef(t, ok, "unexpected addr type %T", l.Addr())
 	port := addr.Port
-	if cerr := l.Close(); cerr != nil {
-		t.Fatalf("failed to close listener: %v", cerr)
-	}
+	require.NoError(t, l.Close(), "failed to close listener")
 	return port
 }
 
@@ -236,19 +219,9 @@ func TestIntegrationServerStartup(t *testing.T) {
 
 	loader := config.NewLoader("PASSCTRL", configPath)
 	cfg, err := loader.Load(context.Background())
-	if err != nil {
-		t.Fatalf("failed to load integration config: %v", err)
-	}
-	if _, ok := cfg.Endpoints["default"]; !ok {
-		var names []string
-		for name := range cfg.Endpoints {
-			names = append(names, name)
-		}
-		t.Fatalf("expected default endpoint to be configured, got %v", names)
-	}
-	if _, ok := cfg.Rules["allow-all"]; !ok {
-		t.Fatalf("expected allow-all rule to be configured")
-	}
+	require.NoError(t, err, "failed to load integration config")
+	require.Contains(t, cfg.Endpoints, "default", "expected default endpoint to be configured")
+	require.Contains(t, cfg.Rules, "allow-all", "expected allow-all rule to be configured")
 
 	process := startServerProcess(t, configPath, map[string]string{
 		"PASSCTRL_SERVER__LOGGING__LEVEL": "debug",
@@ -256,32 +229,81 @@ func TestIntegrationServerStartup(t *testing.T) {
 	defer process.stop(t)
 
 	client := &http.Client{Timeout: 5 * time.Second}
-	target := integrationURL(port, "/auth")
-	waitForEndpoint(t, client, target, 45*time.Second, map[string]string{
+	waitForEndpoint(t, client, integrationURL(port, "/auth"), 45*time.Second, map[string]string{
 		"Authorization": "Bearer integration",
 	})
 
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, target, nil)
-	if err != nil {
-		t.Fatalf("failed to build auth request: %v", err)
-	}
-	req.Header.Set("Authorization", "Bearer integration")
+	expect := httpexpect.WithConfig(httpexpect.Config{
+		BaseURL:  integrationURL(port, ""),
+		Reporter: httpexpect.NewRequireReporter(t),
+		Client:   client,
+	})
 
-	resp, err := client.Do(req) // #nosec G107 - integration test
-	if err != nil {
-		t.Fatalf("failed to call auth endpoint: %v", err)
-	}
-	body, _ := io.ReadAll(resp.Body)
-	if cerr := resp.Body.Close(); cerr != nil {
-		t.Fatalf("failed to close auth response body: %v", cerr)
+	testCases := []struct {
+		name           string
+		method         string
+		path           string
+		headers        map[string]string
+		expectedStatus int
+		expectedBody   string
+		expectedHeader map[string]string
+	}{
+		{
+			name:           "default endpoint passes authenticated request",
+			method:         http.MethodGet,
+			path:           "/auth",
+			headers:        map[string]string{"Authorization": "Bearer integration"},
+			expectedStatus: http.StatusOK,
+			expectedBody:   "integration ok",
+			expectedHeader: map[string]string{"X-Test": "integration"},
+		},
 	}
 
-	if resp.StatusCode != http.StatusOK {
-		stdout, stderr := process.logs()
-		t.Fatalf("expected 200 OK, got %d\nbody:\n%s\nstdout:\n%s\nstderr:\n%s", resp.StatusCode, string(body), strings.TrimSpace(stdout), strings.TrimSpace(stderr))
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			req := expect.Request(tc.method, tc.path)
+			for k, v := range tc.headers {
+				req = req.WithHeader(k, v)
+			}
+			result := req.Expect()
+			result.Status(tc.expectedStatus)
+			if tc.expectedBody != "" {
+				result.Body().IsEqual(tc.expectedBody)
+			}
+			for header, value := range tc.expectedHeader {
+				result.Header(header).IsEqual(value)
+			}
+		})
 	}
-	if got := resp.Header.Get("X-Test"); got != "integration" {
-		t.Fatalf("expected integration header, got %q", got)
-	}
-	t.Logf("integration server responded from %s", target)
+}
+
+func TestWaitForEndpointRetriesUntilReady(t *testing.T) {
+	t.Parallel()
+
+	client := cmdmocks.NewMockHTTPDoer(t)
+	target := integrationURL(8080, "/healthz")
+
+	client.EXPECT().
+		Do(mock.Anything).
+		Return(nil, context.DeadlineExceeded).
+		Once()
+
+	client.EXPECT().
+		Do(mock.Anything).
+		Return(&http.Response{
+			StatusCode: http.StatusBadGateway,
+			Body:       io.NopCloser(strings.NewReader("bad gateway")),
+		}, nil).
+		Once()
+
+	client.EXPECT().
+		Do(mock.Anything).
+		Return(&http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("ok")),
+		}, nil).
+		Once()
+
+	waitForEndpoint(t, client, target, time.Second, map[string]string{"X-Test": "1"})
 }

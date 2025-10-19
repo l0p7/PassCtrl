@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -10,6 +9,7 @@ import (
 	"time"
 
 	"github.com/l0p7/passctrl/internal/config"
+	"github.com/stretchr/testify/require"
 )
 
 func newTestLogger() *slog.Logger {
@@ -18,9 +18,8 @@ func newTestLogger() *slog.Logger {
 
 func TestNewRequiresHandler(t *testing.T) {
 	cfg := config.DefaultConfig()
-	if _, err := New(cfg, newTestLogger(), nil); err == nil {
-		t.Fatalf("expected error when handler is nil")
-	}
+	_, err := New(cfg, newTestLogger(), nil)
+	require.Error(t, err)
 }
 
 func TestNewUsesConfiguredAddress(t *testing.T) {
@@ -29,13 +28,9 @@ func TestNewUsesConfiguredAddress(t *testing.T) {
 	cfg.Server.Listen.Port = 9090
 
 	srv, err := New(cfg, newTestLogger(), http.NewServeMux())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	require.NoError(t, err)
 	expectedAddr := "127.0.0.1:9090"
-	if srv.httpServer.Addr != expectedAddr {
-		t.Fatalf("expected addr %s, got %s", expectedAddr, srv.httpServer.Addr)
-	}
+	require.Equal(t, expectedAddr, srv.httpServer.Addr)
 }
 
 func TestRunShutsDownWhenContextCancelled(t *testing.T) {
@@ -48,9 +43,7 @@ func TestRunShutsDownWhenContextCancelled(t *testing.T) {
 	})
 
 	srv, err := New(cfg, newTestLogger(), handler)
-	if err != nil {
-		t.Fatalf("unexpected error building server: %v", err)
-	}
+	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -65,10 +58,8 @@ func TestRunShutsDownWhenContextCancelled(t *testing.T) {
 
 	select {
 	case err := <-done:
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("expected context canceled error, got %v", err)
-		}
+		require.ErrorIs(t, err, context.Canceled)
 	case <-time.After(2 * time.Second):
-		t.Fatalf("server did not return after cancellation")
+		require.FailNow(t, "server did not return after cancellation")
 	}
 }

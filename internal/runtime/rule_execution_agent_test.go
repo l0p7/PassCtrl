@@ -4,12 +4,12 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/l0p7/passctrl/internal/runtime/pipeline"
 	"github.com/l0p7/passctrl/internal/runtime/rulechain"
 	"github.com/l0p7/passctrl/internal/templates"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRuleExecutionAgentBackendDefaultFailWhenNotAccepted(t *testing.T) {
@@ -26,15 +26,9 @@ func TestRuleExecutionAgentBackendDefaultFailWhenNotAccepted(t *testing.T) {
 
 	outcome, reason := agent.evaluateRule(context.Background(), def, state)
 
-	if outcome != "fail" {
-		t.Fatalf("expected fail outcome, got %q", outcome)
-	}
-	if state.Backend.Accepted {
-		t.Fatalf("expected backend accepted to be false")
-	}
-	if !strings.Contains(reason, "status 500") {
-		t.Fatalf("expected failure reason to mention backend status, got %q", reason)
-	}
+	require.Equal(t, "fail", outcome)
+	require.False(t, state.Backend.Accepted)
+	require.Contains(t, reason, "status 500")
 }
 
 func TestRuleExecutionAgentBackendDefaultPassWhenAccepted(t *testing.T) {
@@ -51,15 +45,9 @@ func TestRuleExecutionAgentBackendDefaultPassWhenAccepted(t *testing.T) {
 
 	outcome, reason := agent.evaluateRule(context.Background(), def, state)
 
-	if outcome != "pass" {
-		t.Fatalf("expected pass outcome, got %q", outcome)
-	}
-	if !state.Backend.Accepted {
-		t.Fatalf("expected backend accepted to be true")
-	}
-	if reason != "rule evaluated without explicit outcome" {
-		t.Fatalf("unexpected pass reason %q", reason)
-	}
+	require.Equal(t, "pass", outcome)
+	require.True(t, state.Backend.Accepted)
+	require.Equal(t, "rule evaluated without explicit outcome", reason)
 }
 
 func compileBackendOnlyRule(t *testing.T, url string, accepted []int) rulechain.Definition {
@@ -73,11 +61,7 @@ func compileBackendOnlyRule(t *testing.T, url string, accepted []int) rulechain.
 			Accepted: accepted,
 		},
 	}}, renderer)
-	if err != nil {
-		t.Fatalf("compile definitions: %v", err)
-	}
-	if len(defs) != 1 {
-		t.Fatalf("expected 1 definition, got %d", len(defs))
-	}
+	require.NoError(t, err)
+	require.Len(t, defs, 1)
 	return defs[0]
 }

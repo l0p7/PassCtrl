@@ -1,0 +1,30 @@
+all: false
+dir: internal/mocks
+filename: '{{.InterfaceName}}_mock.go'
+force-file-write: true
+formatter: goimports
+include-auto-generated: false
+log-level: info
+pkgname: mocks
+recursive: false
+require-template-schema-exists: true
+structname: Mock{{.InterfaceName}}
+template: testify
+template-schema: '{{.Template}}.schema.json'
+packages:
+  github.com/l0p7/passctrl/internal/runtime/cache:
+    config:
+      dir: internal/mocks/cache
+      filename: decision_cache_mock.go
+      pkgname: cachemocks
+      structname: MockDecisionCache
+    interfaces:
+      DecisionCache: {}
+  github.com/l0p7/passctrl/cmd:
+    config:
+      dir: cmd/mocks
+      filename: http_doer_mock.go
+      pkgname: cmdmocks
+      structname: MockHTTPDoer
+    interfaces:
+      httpDoer: {}

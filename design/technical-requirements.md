@@ -59,5 +59,16 @@ engineering conventions the codebase must follow.
    demonstrate how the documented behaviors (authentication reuse and caching
    semantics) work in practice.
 
+## Testing
+
+1. **Table-driven defaults.** Unit and integration tests should model scenarios via table-driven
+   structures and leverage the `github.com/stretchr/testify` family for assertions (`require`
+   for fatal checks, `assert` for non-fatal comparisons, the forthcoming `expect` helpers once
+   available in the pinned version, and `suite` for lifecycle orchestration).
+2. **Mocks and doubles.** Prefer `testify/mock` for interface doubles; generate new mocks with the
+   `mockery` v3 CLI using the shared configuration (`mockery --config .mockery.yml`).
+3. **HTTP behavior.** Continue using `github.com/gavv/httpexpect/v2` wherever tests exercise the
+   runtime's HTTP surface so request and response expectations remain declarative.
+
 These requirements keep the runtime maintainable, observable, and aligned with the design so teams
 can reason about endpoint behavior without reverse-engineering the code.

@@ -1,17 +1,17 @@
 package expr
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
 
 func TestLookupMapValue(t *testing.T) {
 	env, err := NewEnvironment()
-	if err != nil {
-		t.Fatalf("new environment: %v", err)
-	}
+	require.NoError(t, err)
 
 	program, err := env.Compile(`lookup(forward.headers, "key") == "value"`)
-	if err != nil {
-		t.Fatalf("compile: %v", err)
-	}
+	require.NoError(t, err)
 
 	activation := map[string]any{
 		"forward": map[string]any{
@@ -19,36 +19,22 @@ func TestLookupMapValue(t *testing.T) {
 		},
 	}
 	matched, err := program.EvalBool(activation)
-	if err != nil {
-		t.Fatalf("eval: %v", err)
-	}
-	if !matched {
-		t.Fatalf("expected lookup to match existing key")
-	}
+	require.NoError(t, err)
+	require.True(t, matched, "expected lookup to match existing key")
 
 	missingProgram, err := env.Compile(`lookup(forward.headers, "missing") == "value"`)
-	if err != nil {
-		t.Fatalf("compile missing: %v", err)
-	}
+	require.NoError(t, err)
 	matched, err = missingProgram.EvalBool(activation)
-	if err != nil {
-		t.Fatalf("eval missing: %v", err)
-	}
-	if matched {
-		t.Fatalf("expected lookup to return null for missing key")
-	}
+	require.NoError(t, err)
+	require.False(t, matched, "expected lookup to return null for missing key")
 }
 
 func TestCompileValue(t *testing.T) {
 	env, err := NewEnvironment()
-	if err != nil {
-		t.Fatalf("new environment: %v", err)
-	}
+	require.NoError(t, err)
 
 	program, err := env.CompileValue(`forward.headers["key"]`)
-	if err != nil {
-		t.Fatalf("compile value: %v", err)
-	}
+	require.NoError(t, err)
 
 	activation := map[string]any{
 		"forward": map[string]any{
@@ -57,28 +43,17 @@ func TestCompileValue(t *testing.T) {
 	}
 
 	result, err := program.Eval(activation)
-	if err != nil {
-		t.Fatalf("eval value: %v", err)
-	}
-	if result != "value" {
-		t.Fatalf("expected value result, got %v", result)
-	}
+	require.NoError(t, err)
+	require.Equal(t, "value", result)
 
-	if _, err := program.EvalBool(activation); err == nil {
-		t.Fatalf("expected EvalBool to fail for non-boolean program")
-	}
+	_, err = program.EvalBool(activation)
+	require.Error(t, err, "expected EvalBool to fail for non-boolean program")
 }
 
 func TestProgramSource(t *testing.T) {
 	env, err := NewEnvironment()
-	if err != nil {
-		t.Fatalf("new environment: %v", err)
-	}
+	require.NoError(t, err)
 	program, err := env.Compile(`  true `)
-	if err != nil {
-		t.Fatalf("compile: %v", err)
-	}
-	if got := program.Source(); got != "true" {
-		t.Fatalf("expected trimmed source, got %q", got)
-	}
+	require.NoError(t, err)
+	require.Equal(t, "true", program.Source())
 }

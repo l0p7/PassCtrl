@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/l0p7/passctrl/internal/runtime/pipeline"
+	"github.com/stretchr/testify/require"
 )
 
 func newTestState(req *http.Request) *pipeline.State {
@@ -23,18 +24,10 @@ func TestAgentExecute(t *testing.T) {
 
 		res := agent.Execute(req.Context(), req, state)
 
-		if res.Status != "curated" {
-			t.Fatalf("unexpected status: %s", res.Status)
-		}
-		if _, ok := state.Forward.Headers["x-unrelated"]; ok {
-			t.Fatalf("unexpected header leaked into forward state")
-		}
-		if state.Forward.Headers["authorization"] != "bearer" {
-			t.Fatalf("authorization header missing from curated set")
-		}
-		if state.Forward.Query["allow"] != "true" {
-			t.Fatalf("expected allow toggle to propagate into query state")
-		}
+		require.Equal(t, "curated", res.Status)
+		require.NotContains(t, state.Forward.Headers, "x-unrelated")
+		require.Equal(t, "bearer", state.Forward.Headers["authorization"])
+		require.Equal(t, "true", state.Forward.Query["allow"])
 	})
 
 	t.Run("strips configured headers and query params", func(t *testing.T) {
@@ -56,15 +49,9 @@ func TestAgentExecute(t *testing.T) {
 		agent := New(cfg)
 		agent.Execute(req.Context(), req, state)
 
-		if _, ok := state.Forward.Headers["x-passctrl-deny"]; ok {
-			t.Fatalf("expected strip list to remove deny header")
-		}
-		if _, ok := state.Forward.Query["deny"]; ok {
-			t.Fatalf("expected strip list to remove deny query parameter")
-		}
-		if state.Forward.Headers["authorization"] != "token" {
-			t.Fatalf("authorization header should remain after strip applied")
-		}
+		require.NotContains(t, state.Forward.Headers, "x-passctrl-deny")
+		require.NotContains(t, state.Forward.Query, "deny")
+		require.Equal(t, "token", state.Forward.Headers["authorization"])
 	})
 
 	t.Run("custom entries override curated view", func(t *testing.T) {
@@ -87,15 +74,9 @@ func TestAgentExecute(t *testing.T) {
 		agent := New(cfg)
 		agent.Execute(req.Context(), req, state)
 
-		if state.Forward.Headers["x-static"] != "static-value" {
-			t.Fatalf("expected custom header to be injected")
-		}
-		if _, ok := state.Forward.Headers["x-empty"]; ok {
-			t.Fatalf("blank custom header values should be omitted")
-		}
-		if state.Forward.Query["ticket"] != "12345" {
-			t.Fatalf("expected custom query value to be trimmed")
-		}
+		require.Equal(t, "static-value", state.Forward.Headers["x-static"])
+		require.NotContains(t, state.Forward.Headers, "x-empty")
+		require.Equal(t, "12345", state.Forward.Query["ticket"])
 	})
 
 	t.Run("forward proxy headers when enabled", func(t *testing.T) {
@@ -110,18 +91,10 @@ func TestAgentExecute(t *testing.T) {
 		agent := New(cfg)
 		agent.Execute(req.Context(), req, state)
 
-		if state.Forward.Headers["x-forwarded-for"] != "203.0.113.5" {
-			t.Fatalf("expected forwarded header to be exposed when toggle enabled")
-		}
-		if state.Forward.Headers["x-forwarded-proto"] != "https" {
-			t.Fatalf("expected proto header to be exposed when toggle enabled")
-		}
-		if state.Forward.Headers["x-forwarded-prefix"] != "/edge" {
-			t.Fatalf("expected prefix header to be exposed when toggle enabled")
-		}
-		if state.Forward.Headers["forwarded"] != "for=203.0.113.5;proto=https" {
-			t.Fatalf("expected RFC7239 forwarded header to be exposed when toggle enabled")
-		}
+		require.Equal(t, "203.0.113.5", state.Forward.Headers["x-forwarded-for"])
+		require.Equal(t, "https", state.Forward.Headers["x-forwarded-proto"])
+		require.Equal(t, "/edge", state.Forward.Headers["x-forwarded-prefix"])
+		require.Equal(t, "for=203.0.113.5;proto=https", state.Forward.Headers["forwarded"])
 	})
 
 	t.Run("wildcard allow applies before strips", func(t *testing.T) {
@@ -143,17 +116,9 @@ func TestAgentExecute(t *testing.T) {
 		agent := New(cfg)
 		agent.Execute(req.Context(), req, state)
 
-		if _, ok := state.Forward.Headers["authorization"]; ok {
-			t.Fatalf("strip should remove authorization even when wildcard allow is set")
-		}
-		if state.Forward.Headers["x-custom"] != "value" {
-			t.Fatalf("wildcard allow should forward other headers")
-		}
-		if _, ok := state.Forward.Query["ignore"]; ok {
-			t.Fatalf("strip should remove ignore query parameter")
-		}
-		if state.Forward.Query["keep"] != "true" {
-			t.Fatalf("expected keep query to survive wildcard allow")
-		}
+		require.NotContains(t, state.Forward.Headers, "authorization")
+		require.Equal(t, "value", state.Forward.Headers["x-custom"])
+		require.NotContains(t, state.Forward.Query, "ignore")
+		require.Equal(t, "true", state.Forward.Query["keep"])
 	})
 }

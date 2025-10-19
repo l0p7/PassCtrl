@@ -15,6 +15,12 @@ artifacts authoritative, and align code changes with the runtime agents defined 
 - **Run lint/format checks** when touching Go code. The repo relies on `golangci-lint` (see below) and will reject PRs with
   outstanding lint or formatting issues. Prefer to run it locally before finalizing a change set.
 
+## Tooling Expectations
+- Prefer `bd` to capture discoveries, declare dependencies, and surface ready work so human teammates can stay in sync.
+- Keep the MCP `code-index` server current—call the deep index rebuild whenever files move or large edits land so search stays trustworthy.
+- Route external lookups through the MCP `ref` server; `ref_search_documentation` and `ref_read_url` keep documentation context auditable inside the workspace.
+- Generate interface doubles with `mockery` v3 when tests need `testify/mock` collaborators (run `mockery --config .mockery.yml`; generated mocks live under the package-specific `mocks/` directories (for example, `internal/mocks/`, `cmd/mocks/`) and should be committed).
+
 ## Implementation Heuristics
 - Preserve the separation of concerns outlined in `design/system-agents.md`; avoid leaking responsibilities across packages.
 - Honor configuration precedence (`env > file > default`) and watch for invariants called out in `design/config-structure.md`.
@@ -26,6 +32,7 @@ artifacts authoritative, and align code changes with the runtime agents defined 
   against. Inline noise that merely restates the implementation should be avoided.
 - Pair every behavioral change with tests or explain why coverage is deferred. Favor table-driven or agent-scoped tests that
   mirror the design contracts.
+- Default test scaffolding to the `testify` family: use `testify/require` for fatal checks, `testify/assert` (and adopt the upstream `testify/expect` helpers once our pinned version exposes them) for non-fatal comparisons, `testify/mock` for doubles generated via `mockery v3`, and `testify/suite` when lifecycle hooks simplify setup/teardown. Continue to drive HTTP-facing flows through `httpexpect` so request/response assertions stay declarative.
 
 ## Library Usage Policy
 - Prefer the Go standard library when it already satisfies the runtime agent contract; introduce third-party dependencies only when they demonstrably simplify the implementation or close a capability gap (e.g., configuration layering, filesystem events).
@@ -61,3 +68,4 @@ artifacts authoritative, and align code changes with the runtime agents defined 
 
 Use this document as both a checklist and a reminder that code, tests, and documentation evolve together. Consistent updates keep
 the agentic model trustworthy for future contributors.
+We track work in Beads instead of Markdown (see `bd quickstart`) and lean on the MCP `code-index` and `ref` servers to keep shared context fresh.
