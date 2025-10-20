@@ -12,8 +12,11 @@ import (
 	"time"
 
 	"github.com/l0p7/passctrl/internal/config"
+	"github.com/l0p7/passctrl/internal/metrics"
+	metricsmocks "github.com/l0p7/passctrl/internal/mocks/metrics"
 	"github.com/l0p7/passctrl/internal/runtime/cache"
 	"github.com/l0p7/passctrl/internal/server"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -217,6 +220,44 @@ func TestPipelineLogsIncludeCorrelationID(t *testing.T) {
 	}
 
 	require.True(t, foundCorrelation, "expected at least one log entry to include the correlation id")
+}
+
+func TestPipelineRecordsMetrics(t *testing.T) {
+	metricsMock := metricsmocks.NewMockRecorder(t)
+	metricsMock.EXPECT().ObserveCacheLookup("default", metrics.CacheLookupMiss, mock.AnythingOfType("time.Duration")).Once()
+	metricsMock.EXPECT().ObserveAuth("default", "pass", http.StatusOK, false, mock.AnythingOfType("time.Duration")).Once()
+	metricsMock.EXPECT().ObserveCacheStore("default", metrics.CacheStoreStored, mock.AnythingOfType("time.Duration")).Once()
+
+	opts := PipelineOptions{
+		Cache: cache.NewMemory(1 * time.Minute),
+		Endpoints: map[string]config.EndpointConfig{
+			"default": {
+				ForwardRequestPolicy: config.EndpointForwardRequestPolicyConfig{
+					Query: config.ForwardRuleCategoryConfig{Allow: []string{"allow"}},
+				},
+				Rules: []config.EndpointRuleReference{{Name: "allow-rule"}},
+			},
+		},
+		Rules: map[string]config.RuleConfig{
+			"allow-rule": {
+				Conditions: config.RuleConditionConfig{
+					Pass: []string{`forward.query["allow"] == "true"`},
+				},
+			},
+		},
+		Metrics: metricsMock,
+	}
+
+	pipe := NewPipeline(nil, opts)
+	handler := server.NewPipelineHandler(pipe)
+
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/default/auth?allow=true", http.NoBody)
+	req.Header.Set("Authorization", "token")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
 }
 
 func TestPipelineSingleEndpointDefaults(t *testing.T) {

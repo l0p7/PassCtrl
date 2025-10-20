@@ -43,8 +43,16 @@ const (
 	CacheStoreError CacheStoreOutcome = "error"
 )
 
-// Recorder publishes Prometheus metrics for pipeline activity.
-type Recorder struct {
+// Recorder exposes the metrics surface consumed by runtime agents.
+type Recorder interface {
+	Handler() http.Handler
+	Gatherer() prometheus.Gatherer
+	ObserveAuth(endpoint, outcome string, statusCode int, fromCache bool, duration time.Duration)
+	ObserveCacheLookup(endpoint string, result CacheLookupOutcome, duration time.Duration)
+	ObserveCacheStore(endpoint string, result CacheStoreOutcome, duration time.Duration)
+}
+
+type promRecorder struct {
 	gatherer prometheus.Gatherer
 	handler  http.Handler
 
@@ -55,10 +63,12 @@ type Recorder struct {
 	cacheLatency    *prometheus.HistogramVec
 }
 
+var _ Recorder = (*promRecorder)(nil)
+
 // NewRecorder constructs a Prometheus-backed Recorder. When reg is nil a dedicated
 // registry is created so multiple recorders can coexist without conflicting with
 // the global default registerer.
-func NewRecorder(reg *prometheus.Registry) *Recorder {
+func NewRecorder(reg *prometheus.Registry) Recorder {
 	if reg == nil {
 		reg = prometheus.NewRegistry()
 	}
@@ -102,7 +112,7 @@ func NewRecorder(reg *prometheus.Registry) *Recorder {
 
 	handler := promhttp.HandlerFor(reg, promhttp.HandlerOpts{})
 
-	return &Recorder{
+	return &promRecorder{
 		gatherer:        reg,
 		handler:         handler,
 		authRequests:    authRequests,
@@ -113,7 +123,7 @@ func NewRecorder(reg *prometheus.Registry) *Recorder {
 }
 
 // Handler exposes the Prometheus HTTP handler for the recorder's registry.
-func (r *Recorder) Handler() http.Handler {
+func (r *promRecorder) Handler() http.Handler {
 	if r == nil {
 		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			http.Error(w, "metrics unavailable", http.StatusServiceUnavailable)
@@ -124,7 +134,7 @@ func (r *Recorder) Handler() http.Handler {
 
 // Gatherer returns the underlying Prometheus gatherer for tests and advanced
 // integrations.
-func (r *Recorder) Gatherer() prometheus.Gatherer {
+func (r *promRecorder) Gatherer() prometheus.Gatherer {
 	if r == nil {
 		return prometheus.NewRegistry()
 	}
@@ -132,7 +142,7 @@ func (r *Recorder) Gatherer() prometheus.Gatherer {
 }
 
 // ObserveAuth records the outcome and latency for a completed /auth request.
-func (r *Recorder) ObserveAuth(endpoint, outcome string, statusCode int, fromCache bool, duration time.Duration) {
+func (r *promRecorder) ObserveAuth(endpoint, outcome string, statusCode int, fromCache bool, duration time.Duration) {
 	if r == nil {
 		return
 	}
@@ -151,7 +161,7 @@ func (r *Recorder) ObserveAuth(endpoint, outcome string, statusCode int, fromCac
 }
 
 // ObserveCacheLookup records the result of a cache lookup.
-func (r *Recorder) ObserveCacheLookup(endpoint string, result CacheLookupOutcome, duration time.Duration) {
+func (r *promRecorder) ObserveCacheLookup(endpoint string, result CacheLookupOutcome, duration time.Duration) {
 	if r == nil {
 		return
 	}
@@ -164,7 +174,7 @@ func (r *Recorder) ObserveCacheLookup(endpoint string, result CacheLookupOutcome
 }
 
 // ObserveCacheStore records the result of a cache store attempt.
-func (r *Recorder) ObserveCacheStore(endpoint string, result CacheStoreOutcome, duration time.Duration) {
+func (r *promRecorder) ObserveCacheStore(endpoint string, result CacheStoreOutcome, duration time.Duration) {
 	if r == nil {
 		return
 	}
@@ -176,7 +186,7 @@ func (r *Recorder) ObserveCacheStore(endpoint string, result CacheStoreOutcome, 
 	r.observeCache(endpointLabel, CacheOperationStore, resultLabel, duration)
 }
 
-func (r *Recorder) observeCache(endpoint string, operation CacheOperation, result string, duration time.Duration) {
+func (r *promRecorder) observeCache(endpoint string, operation CacheOperation, result string, duration time.Duration) {
 	opLabel := string(operation)
 	if opLabel == "" {
 		opLabel = string(CacheOperationLookup)

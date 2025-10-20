@@ -167,11 +167,37 @@ func writeIntegrationConfig(t *testing.T, dir string, port int) string {
 					},
 				},
 			},
+			"deny": map[string]any{
+				"forwardRequestPolicy": map[string]any{
+					"query": map[string]any{
+						"allow":  []string{"deny"},
+						"strip":  []string{},
+						"custom": map[string]any{},
+					},
+				},
+				"rules": []map[string]any{
+					{"name": "deny-rule"},
+				},
+				"responsePolicy": map[string]any{
+					"fail": map[string]any{
+						"status": http.StatusForbidden,
+						"body":   "integration denied",
+					},
+					"pass": map[string]any{
+						"body": "deny pass",
+					},
+				},
+			},
 		},
 		"rules": map[string]any{
 			"allow-all": map[string]any{
 				"conditions": map[string]any{
 					"pass": []string{"true"},
+				},
+			},
+			"deny-rule": map[string]any{
+				"conditions": map[string]any{
+					"fail": []string{`lookup(forward.query, "deny") == "true"`},
 				},
 			},
 		},
@@ -229,7 +255,7 @@ func TestIntegrationServerStartup(t *testing.T) {
 	defer process.stop(t)
 
 	client := &http.Client{Timeout: 5 * time.Second}
-	waitForEndpoint(t, client, integrationURL(port, "/auth"), 45*time.Second, map[string]string{
+	waitForEndpoint(t, client, integrationURL(port, "/default/auth"), 45*time.Second, map[string]string{
 		"Authorization": "Bearer integration",
 	})
 
@@ -243,6 +269,7 @@ func TestIntegrationServerStartup(t *testing.T) {
 		name           string
 		method         string
 		path           string
+		query          map[string]string
 		headers        map[string]string
 		expectedStatus int
 		expectedBody   string
@@ -251,11 +278,28 @@ func TestIntegrationServerStartup(t *testing.T) {
 		{
 			name:           "default endpoint passes authenticated request",
 			method:         http.MethodGet,
-			path:           "/auth",
+			path:           "/default/auth",
 			headers:        map[string]string{"Authorization": "Bearer integration"},
 			expectedStatus: http.StatusOK,
 			expectedBody:   "integration ok",
 			expectedHeader: map[string]string{"X-Test": "integration"},
+		},
+		{
+			name:           "deny endpoint rejects flagged request",
+			method:         http.MethodGet,
+			path:           "/deny/auth",
+			query:          map[string]string{"deny": "true"},
+			headers:        map[string]string{"Authorization": "Bearer deny"},
+			expectedStatus: http.StatusForbidden,
+			expectedBody:   "integration denied",
+		},
+		{
+			name:           "deny endpoint passes without flag",
+			method:         http.MethodGet,
+			path:           "/deny/auth",
+			headers:        map[string]string{"Authorization": "Bearer allow"},
+			expectedStatus: http.StatusOK,
+			expectedBody:   "deny pass",
 		},
 	}
 
@@ -263,6 +307,9 @@ func TestIntegrationServerStartup(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			req := expect.Request(tc.method, tc.path)
+			for k, v := range tc.query {
+				req = req.WithQuery(k, v)
+			}
 			for k, v := range tc.headers {
 				req = req.WithHeader(k, v)
 			}
@@ -276,6 +323,29 @@ func TestIntegrationServerStartup(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("root auth without endpoint selection returns bad request", func(t *testing.T) {
+		expect.GET("/auth").
+			WithHeader("Authorization", "Bearer integration").
+			Expect().
+			Status(http.StatusBadRequest)
+	})
+
+	t.Run("aggregate health reports ok status", func(t *testing.T) {
+		result := expect.GET("/healthz").Expect()
+		result.Status(http.StatusOK)
+		result.Header("Content-Type").Contains("application/json")
+		result.JSON().Object().
+			Value("status").String().IsEqual("ok")
+	})
+
+	t.Run("scoped explain surfaces endpoint metadata", func(t *testing.T) {
+		result := expect.GET("/deny/explain").Expect()
+		result.Status(http.StatusOK)
+		payload := result.JSON().Object()
+		payload.Value("endpoint").String().IsEqual("deny")
+		payload.Value("availableEndpoints").Array().ContainsOnly("default", "deny")
+	})
 }
 
 func TestWaitForEndpointRetriesUntilReady(t *testing.T) {

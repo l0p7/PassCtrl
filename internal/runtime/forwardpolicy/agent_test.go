@@ -14,111 +14,131 @@ func newTestState(req *http.Request) *pipeline.State {
 }
 
 func TestAgentExecute(t *testing.T) {
-	t.Run("curates default allow lists", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "http://example.com/auth?allow=true&ignore=nope", http.NoBody)
-		req.Header.Set("Authorization", "bearer")
-		req.Header.Set("X-Unrelated", "value")
-
-		state := newTestState(req)
-		agent := New(DefaultConfig())
-
-		res := agent.Execute(req.Context(), req, state)
-
-		require.Equal(t, "curated", res.Status)
-		require.NotContains(t, state.Forward.Headers, "x-unrelated")
-		require.Equal(t, "bearer", state.Forward.Headers["authorization"])
-		require.Equal(t, "true", state.Forward.Query["allow"])
-	})
-
-	t.Run("strips configured headers and query params", func(t *testing.T) {
-		cfg := Config{
-			Headers: CategoryConfig{
-				Allow: []string{"authorization", "x-passctrl-deny"},
-				Strip: []string{"x-passctrl-deny"},
+	tests := []struct {
+		name   string
+		cfg    Config
+		req    func() *http.Request
+		expect func(t *testing.T, res pipeline.Result, state *pipeline.State)
+	}{
+		{
+			name: "curates default allow lists",
+			cfg:  DefaultConfig(),
+			req: func() *http.Request {
+				req := httptest.NewRequest(http.MethodGet, "http://example.com/auth?allow=true&ignore=nope", http.NoBody)
+				req.Header.Set("Authorization", "bearer")
+				req.Header.Set("X-Unrelated", "value")
+				return req
 			},
-			Query: CategoryConfig{
-				Allow: []string{"allow", "deny"},
-				Strip: []string{"deny"},
+			expect: func(t *testing.T, res pipeline.Result, state *pipeline.State) {
+				require.Equal(t, "curated", res.Status)
+				require.NotContains(t, state.Forward.Headers, "x-unrelated")
+				require.Equal(t, "bearer", state.Forward.Headers["authorization"])
+				require.Equal(t, "true", state.Forward.Query["allow"])
 			},
-		}
-		req := httptest.NewRequest(http.MethodGet, "http://example.com/auth?allow=true&deny=true", http.NoBody)
-		req.Header.Set("Authorization", "token")
-		req.Header.Set("X-PassCtrl-Deny", "true")
-
-		state := newTestState(req)
-		agent := New(cfg)
-		agent.Execute(req.Context(), req, state)
-
-		require.NotContains(t, state.Forward.Headers, "x-passctrl-deny")
-		require.NotContains(t, state.Forward.Query, "deny")
-		require.Equal(t, "token", state.Forward.Headers["authorization"])
-	})
-
-	t.Run("custom entries override curated view", func(t *testing.T) {
-		cfg := Config{
-			Headers: CategoryConfig{
-				Custom: map[string]string{
-					"X-Static": "static-value",
-					"X-Empty":  "   ",
+		},
+		{
+			name: "strips configured headers and query params",
+			cfg: Config{
+				Headers: CategoryConfig{
+					Allow: []string{"authorization", "x-passctrl-deny"},
+					Strip: []string{"x-passctrl-deny"},
+				},
+				Query: CategoryConfig{
+					Allow: []string{"allow", "deny"},
+					Strip: []string{"deny"},
 				},
 			},
-			Query: CategoryConfig{
-				Custom: map[string]string{
-					"ticket": " 12345 ",
+			req: func() *http.Request {
+				req := httptest.NewRequest(http.MethodGet, "http://example.com/auth?allow=true&deny=true", http.NoBody)
+				req.Header.Set("Authorization", "token")
+				req.Header.Set("X-PassCtrl-Deny", "true")
+				return req
+			},
+			expect: func(t *testing.T, _ pipeline.Result, state *pipeline.State) {
+				require.NotContains(t, state.Forward.Headers, "x-passctrl-deny")
+				require.NotContains(t, state.Forward.Query, "deny")
+				require.Equal(t, "token", state.Forward.Headers["authorization"])
+			},
+		},
+		{
+			name: "custom entries override curated view",
+			cfg: Config{
+				Headers: CategoryConfig{
+					Custom: map[string]string{
+						"X-Static": "static-value",
+						"X-Empty":  "   ",
+					},
+				},
+				Query: CategoryConfig{
+					Custom: map[string]string{
+						"ticket": " 12345 ",
+					},
 				},
 			},
-		}
-		req := httptest.NewRequest(http.MethodGet, "http://example.com/auth", http.NoBody)
-
-		state := newTestState(req)
-		agent := New(cfg)
-		agent.Execute(req.Context(), req, state)
-
-		require.Equal(t, "static-value", state.Forward.Headers["x-static"])
-		require.NotContains(t, state.Forward.Headers, "x-empty")
-		require.Equal(t, "12345", state.Forward.Query["ticket"])
-	})
-
-	t.Run("forward proxy headers when enabled", func(t *testing.T) {
-		cfg := Config{ForwardProxyHeaders: true}
-		req := httptest.NewRequest(http.MethodGet, "http://example.com/auth", http.NoBody)
-		req.Header.Set("X-Forwarded-For", "203.0.113.5")
-		req.Header.Set("X-Forwarded-Proto", "https")
-		req.Header.Set("X-Forwarded-Prefix", "/edge")
-		req.Header.Set("Forwarded", "for=203.0.113.5;proto=https")
-
-		state := newTestState(req)
-		agent := New(cfg)
-		agent.Execute(req.Context(), req, state)
-
-		require.Equal(t, "203.0.113.5", state.Forward.Headers["x-forwarded-for"])
-		require.Equal(t, "https", state.Forward.Headers["x-forwarded-proto"])
-		require.Equal(t, "/edge", state.Forward.Headers["x-forwarded-prefix"])
-		require.Equal(t, "for=203.0.113.5;proto=https", state.Forward.Headers["forwarded"])
-	})
-
-	t.Run("wildcard allow applies before strips", func(t *testing.T) {
-		cfg := Config{
-			Headers: CategoryConfig{
-				Allow: []string{"*"},
-				Strip: []string{"authorization"},
+			req: func() *http.Request {
+				return httptest.NewRequest(http.MethodGet, "http://example.com/auth", http.NoBody)
 			},
-			Query: CategoryConfig{
-				Allow: []string{"*"},
-				Strip: []string{"ignore"},
+			expect: func(t *testing.T, _ pipeline.Result, state *pipeline.State) {
+				require.Equal(t, "static-value", state.Forward.Headers["x-static"])
+				require.NotContains(t, state.Forward.Headers, "x-empty")
+				require.Equal(t, "12345", state.Forward.Query["ticket"])
 			},
-		}
-		req := httptest.NewRequest(http.MethodGet, "http://example.com/auth?keep=true&ignore=true", http.NoBody)
-		req.Header.Set("Authorization", "token")
-		req.Header.Set("X-Custom", "value")
+		},
+		{
+			name: "forwards proxy headers when enabled",
+			cfg:  Config{ForwardProxyHeaders: true},
+			req: func() *http.Request {
+				req := httptest.NewRequest(http.MethodGet, "http://example.com/auth", http.NoBody)
+				req.Header.Set("X-Forwarded-For", "203.0.113.5")
+				req.Header.Set("X-Forwarded-Proto", "https")
+				req.Header.Set("X-Forwarded-Prefix", "/edge")
+				req.Header.Set("Forwarded", "for=203.0.113.5;proto=https")
+				return req
+			},
+			expect: func(t *testing.T, _ pipeline.Result, state *pipeline.State) {
+				require.Equal(t, "203.0.113.5", state.Forward.Headers["x-forwarded-for"])
+				require.Equal(t, "https", state.Forward.Headers["x-forwarded-proto"])
+				require.Equal(t, "/edge", state.Forward.Headers["x-forwarded-prefix"])
+				require.Equal(t, "for=203.0.113.5;proto=https", state.Forward.Headers["forwarded"])
+			},
+		},
+		{
+			name: "wildcard allow applies before strips",
+			cfg: Config{
+				Headers: CategoryConfig{
+					Allow: []string{"*"},
+					Strip: []string{"authorization"},
+				},
+				Query: CategoryConfig{
+					Allow: []string{"*"},
+					Strip: []string{"ignore"},
+				},
+			},
+			req: func() *http.Request {
+				req := httptest.NewRequest(http.MethodGet, "http://example.com/auth?keep=true&ignore=true", http.NoBody)
+				req.Header.Set("Authorization", "token")
+				req.Header.Set("X-Custom", "value")
+				return req
+			},
+			expect: func(t *testing.T, _ pipeline.Result, state *pipeline.State) {
+				require.NotContains(t, state.Forward.Headers, "authorization")
+				require.Equal(t, "value", state.Forward.Headers["x-custom"])
+				require.NotContains(t, state.Forward.Query, "ignore")
+				require.Equal(t, "true", state.Forward.Query["keep"])
+			},
+		},
+	}
 
-		state := newTestState(req)
-		agent := New(cfg)
-		agent.Execute(req.Context(), req, state)
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			req := tc.req()
+			state := newTestState(req)
+			agent := New(tc.cfg)
 
-		require.NotContains(t, state.Forward.Headers, "authorization")
-		require.Equal(t, "value", state.Forward.Headers["x-custom"])
-		require.NotContains(t, state.Forward.Query, "ignore")
-		require.Equal(t, "true", state.Forward.Query["keep"])
-	})
+			res := agent.Execute(req.Context(), req, state)
+
+			tc.expect(t, res, state)
+		})
+	}
 }

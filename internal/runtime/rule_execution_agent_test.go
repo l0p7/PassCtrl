@@ -2,26 +2,33 @@ package runtime
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
+	runtimemocks "github.com/l0p7/passctrl/internal/mocks/runtime"
 	"github.com/l0p7/passctrl/internal/runtime/pipeline"
 	"github.com/l0p7/passctrl/internal/runtime/rulechain"
 	"github.com/l0p7/passctrl/internal/templates"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
 func TestRuleExecutionAgentBackendDefaultFailWhenNotAccepted(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-		_, _ = w.Write([]byte(`{"error":"boom"}`))
-	}))
-	t.Cleanup(server.Close)
+	const targetURL = "https://backend.test/fail"
+	mockClient := runtimemocks.NewMockHTTPDoer(t)
+	mockClient.EXPECT().
+		Do(mock.AnythingOfType("*http.Request")).
+		RunAndReturn(func(req *http.Request) (*http.Response, error) {
+			require.Equal(t, targetURL, req.URL.String())
+			return newBackendResponse(http.StatusInternalServerError, `{"error":"boom"}`, map[string]string{"Content-Type": "application/json"}), nil
+		})
 
-	def := compileBackendOnlyRule(t, server.URL, []int{http.StatusOK})
+	def := compileBackendOnlyRule(t, targetURL, []int{http.StatusOK})
 
-	agent := newRuleExecutionAgent(server.Client(), nil, nil)
+	agent := newRuleExecutionAgent(mockClient, nil, nil)
 	state := pipeline.NewState(httptest.NewRequest(http.MethodGet, "http://unit.test/request", nil), "endpoint", "cache-key", "")
 
 	outcome, reason := agent.evaluateRule(context.Background(), def, state)
@@ -32,15 +39,18 @@ func TestRuleExecutionAgentBackendDefaultFailWhenNotAccepted(t *testing.T) {
 }
 
 func TestRuleExecutionAgentBackendDefaultPassWhenAccepted(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"status":"ok"}`))
-	}))
-	t.Cleanup(server.Close)
+	const targetURL = "https://backend.test/pass"
+	mockClient := runtimemocks.NewMockHTTPDoer(t)
+	mockClient.EXPECT().
+		Do(mock.AnythingOfType("*http.Request")).
+		RunAndReturn(func(req *http.Request) (*http.Response, error) {
+			require.Equal(t, targetURL, req.URL.String())
+			return newBackendResponse(http.StatusOK, `{"status":"ok"}`, map[string]string{"Content-Type": "application/json"}), nil
+		})
 
-	def := compileBackendOnlyRule(t, server.URL, []int{http.StatusOK})
+	def := compileBackendOnlyRule(t, targetURL, []int{http.StatusOK})
 
-	agent := newRuleExecutionAgent(server.Client(), nil, nil)
+	agent := newRuleExecutionAgent(mockClient, nil, nil)
 	state := pipeline.NewState(httptest.NewRequest(http.MethodGet, "http://unit.test/request", nil), "endpoint", "cache-key", "")
 
 	outcome, reason := agent.evaluateRule(context.Background(), def, state)
@@ -64,4 +74,16 @@ func compileBackendOnlyRule(t *testing.T, url string, accepted []int) rulechain.
 	require.NoError(t, err)
 	require.Len(t, defs, 1)
 	return defs[0]
+}
+
+func newBackendResponse(status int, body string, headers map[string]string) *http.Response {
+	resp := &http.Response{
+		StatusCode: status,
+		Header:     make(http.Header, len(headers)),
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+	for key, value := range headers {
+		resp.Header.Set(key, value)
+	}
+	return resp
 }

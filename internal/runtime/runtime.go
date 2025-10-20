@@ -47,7 +47,7 @@ type PipelineOptions struct {
 	SkippedDefinitions []config.DefinitionSkip
 	TemplateSandbox    *templates.Sandbox
 	CorrelationHeader  string
-	Metrics            *metrics.Recorder
+	Metrics            metrics.Recorder
 }
 
 type Pipeline struct {
@@ -58,7 +58,7 @@ type Pipeline struct {
 	cacheSalt         []byte
 	cacheNamespace    string
 	correlationHeader string
-	metrics           *metrics.Recorder
+	metrics           metrics.Recorder
 
 	mu sync.RWMutex
 

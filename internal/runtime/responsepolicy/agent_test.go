@@ -12,75 +12,104 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestAgentExecuteCachedResponse(t *testing.T) {
-	state := &pipeline.State{}
-	state.Response.Status = http.StatusAccepted
-	state.Response.Message = "ready"
-
-	agent := New()
-	res := agent.Execute(context.Background(), nil, state)
-
-	require.Equal(t, "cached", res.Status)
-	require.Equal(t, "ready", state.Response.Message)
-}
-
-func TestAgentExecuteOutcomeMapping(t *testing.T) {
-	tests := map[string]struct {
-		outcome       string
-		reason        string
-		wantStatus    int
-		expectedCache bool
+func TestAgentExecute(t *testing.T) {
+	tests := []struct {
+		name           string
+		setup          func() *pipeline.State
+		wantResult     string
+		wantStatusCode int
+		wantMessage    string
+		wantOutcome    string
 	}{
-		"pass": {
-			outcome:    "pass",
-			wantStatus: http.StatusOK,
+		{
+			name: "replays cached response",
+			setup: func() *pipeline.State {
+				state := &pipeline.State{}
+				state.Response.Status = http.StatusAccepted
+				state.Response.Message = "ready"
+				return state
+			},
+			wantResult:     "cached",
+			wantStatusCode: http.StatusAccepted,
+			wantMessage:    "ready",
+			wantOutcome:    "",
 		},
-		"fail with reason": {
-			outcome:    "fail",
-			reason:     "policy rejected",
-			wantStatus: http.StatusForbidden,
+		{
+			name: "renders pass outcome",
+			setup: func() *pipeline.State {
+				state := &pipeline.State{}
+				state.Rule.Outcome = "pass"
+				return state
+			},
+			wantResult:     "rendered",
+			wantStatusCode: http.StatusOK,
+			wantOutcome:    "pass",
 		},
-		"fail default": {
-			outcome:    "fail",
-			wantStatus: http.StatusForbidden,
+		{
+			name: "renders fail outcome with reason",
+			setup: func() *pipeline.State {
+				state := &pipeline.State{}
+				state.Rule.Outcome = "fail"
+				state.Rule.Reason = "policy rejected"
+				return state
+			},
+			wantResult:     "rendered",
+			wantStatusCode: http.StatusForbidden,
+			wantOutcome:    "fail",
 		},
-		"error default": {
-			outcome:    "error",
-			wantStatus: http.StatusBadGateway,
+		{
+			name: "renders fail outcome with header init",
+			setup: func() *pipeline.State {
+				state := &pipeline.State{}
+				state.Rule.Outcome = "fail"
+				state.Response.Headers = nil
+				return state
+			},
+			wantResult:     "rendered",
+			wantStatusCode: http.StatusForbidden,
+			wantOutcome:    "fail",
 		},
-		"unknown": {
-			outcome:    "",
-			wantStatus: http.StatusInternalServerError,
+		{
+			name: "renders error outcome",
+			setup: func() *pipeline.State {
+				state := &pipeline.State{}
+				state.Rule.Outcome = "error"
+				return state
+			},
+			wantResult:     "rendered",
+			wantStatusCode: http.StatusBadGateway,
+			wantOutcome:    "error",
+		},
+		{
+			name: "renders unknown outcome",
+			setup: func() *pipeline.State {
+				return &pipeline.State{}
+			},
+			wantResult:     "rendered",
+			wantStatusCode: http.StatusInternalServerError,
+			wantOutcome:    "",
 		},
 	}
 
-	for name, tc := range tests {
-		t.Run(name, func(t *testing.T) {
-			state := &pipeline.State{}
-			state.Rule.Outcome = tc.outcome
-			state.Rule.Reason = tc.reason
-
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			state := tc.setup()
 			agent := New()
+
 			res := agent.Execute(context.Background(), nil, state)
 
-			require.Equal(t, "rendered", res.Status)
-			require.Equal(t, tc.wantStatus, state.Response.Status)
-			require.Empty(t, state.Response.Message)
-			require.Equal(t, tc.outcome, state.Response.Headers["X-PassCtrl-Outcome"])
+			require.Equal(t, tc.wantResult, res.Status)
+			require.Equal(t, tc.wantStatusCode, state.Response.Status)
+			require.Equal(t, tc.wantMessage, state.Response.Message)
+			if tc.wantResult == "cached" {
+				require.Empty(t, state.Response.Headers)
+			} else {
+				require.NotNil(t, state.Response.Headers)
+				require.Equal(t, tc.wantOutcome, state.Response.Headers["X-PassCtrl-Outcome"])
+			}
 		})
 	}
-}
-
-func TestAgentExecuteInitializesHeaders(t *testing.T) {
-	state := &pipeline.State{}
-	state.Rule.Outcome = "fail"
-	state.Response.Headers = nil
-
-	agent := New()
-	_ = agent.Execute(context.Background(), nil, state)
-
-	require.NotNil(t, state.Response.Headers)
-	require.Equal(t, "fail", state.Response.Headers["X-PassCtrl-Outcome"])
 }
 
 func TestAgentExecuteWithConfigAppliesOverrides(t *testing.T) {
@@ -124,12 +153,47 @@ func TestAgentExecuteWithConfigAppliesOverrides(t *testing.T) {
 }
 
 func TestCloneHeaders(t *testing.T) {
-	require.Nil(t, cloneHeaders(nil))
+	tests := []struct {
+		name      string
+		input     map[string]string
+		mutate    func(map[string]string)
+		wantNil   bool
+		wantValue map[string]string
+	}{
+		{
+			name:    "nil map returns nil",
+			input:   nil,
+			wantNil: true,
+		},
+		{
+			name:  "clones map values",
+			input: map[string]string{"a": "1", "b": "2"},
+			mutate: func(m map[string]string) {
+				m["a"] = "updated"
+			},
+			wantValue: map[string]string{"a": "1", "b": "2"},
+		},
+	}
 
-	original := map[string]string{"a": "1", "b": "2"}
-	clone := cloneHeaders(original)
-	require.Equal(t, "1", clone["a"])
-	require.Equal(t, "2", clone["b"])
-	clone["a"] = "updated"
-	require.Equal(t, "1", original["a"])
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			clone := cloneHeaders(tc.input)
+			if tc.wantNil {
+				require.Nil(t, clone)
+				return
+			}
+
+			require.NotNil(t, clone)
+			require.Equal(t, tc.wantValue, clone)
+			if tc.mutate != nil {
+				tc.mutate(clone)
+			}
+			if tc.input != nil {
+				for key, value := range tc.wantValue {
+					require.Equal(t, value, tc.input[key])
+				}
+			}
+		})
+	}
 }
