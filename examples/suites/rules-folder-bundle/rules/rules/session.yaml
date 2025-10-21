@@ -22,13 +22,13 @@ rules:
       fail:
         - lookup(backend.body, "active") != true
     variables:
-      rule:
+      global:
         user_id:
-          from: "{{ lookup(backend.body, \"userId\") }}"
+          from: backend.body.userId
         tenant_id:
-          from: "{{ lookup(backend.body, \"tenant\") }}"
+          from: backend.body.tenant
         entitlement:
-          from: "{{ lookup(backend.body, \"entitlement\") }}"
+          from: backend.body.entitlement
     cache:
       passTTL: "2m"
       failTTL: "30s"
@@ -37,23 +37,17 @@ rules:
     description: "Allows requests only when the session advertises an allow entitlement."
     conditions:
       pass:
-        - lookup(previousRule.outputs, "entitlement") == "allow"
+        - lookup(vars.global, "entitlement") == "allow"
       fail:
-        - lookup(previousRule.outputs, "entitlement") == "deny"
+        - lookup(vars.global, "entitlement") == "deny"
     responses:
       fail:
         status: 403
         body: |
           {
             "error": "entitlement missing",
-            "tenant": "{{ lookup(previousRule.outputs, \"tenant_id\") }}"
+            "tenant": "{{ index .vars.global \"tenant_id\" }}"
           }
-    variables:
-      global:
-        user_id:
-          from: "{{ lookup(previousRule.outputs, \"user_id\") }}"
-      rule:
-        tenant_id:
-          from: "{{ lookup(previousRule.outputs, \"tenant_id\") }}"
     cache:
-      resultTTL: "0s"
+      passTTL: "0s"
+      failTTL: "0s"

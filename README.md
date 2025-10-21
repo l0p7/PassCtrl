@@ -81,4 +81,4 @@ Implementation work should meet the non-functional guidance in [`design/technica
 Feedback on the design itself is welcome via issues or pull requests that reference the affected documents.
 
 ## Containerization
-See docs/containerization.md for building and running the container image, including support for `TZ`, `PUID`, and `PGID`.
+See [`docs/guides/deploy.md`](docs/guides/deploy.md) for building and running the container image, including support for `TZ`, `PUID`, and `PGID`.

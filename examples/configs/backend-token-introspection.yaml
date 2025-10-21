@@ -1,4 +1,7 @@
-# Bearer token introspection example that calls an upstream API before allowing traffic.
+# Bearer token introspection example that validates inbound requests against an
+# identity service before granting access. This configuration demonstrates
+# forward proxy enforcement, curated request headers, rule-level caching, and
+# CEL-based conditional logic aligned with the staged documentation.
 server:
   listen:
     address: "0.0.0.0"
@@ -13,6 +16,10 @@ server:
     backend: memory
     ttlSeconds: 60
     keySalt: "demo"
+    epoch: 0
+  templates:
+    templatesFolder: "./templates"
+    templatesAllowEnv: false
 
 endpoints:
   introspection:
@@ -30,7 +37,7 @@ endpoints:
         allow: ["x-request-id", "x-forwarded-for", "x-forwarded-proto"]
         strip: ["authorization"]
         custom:
-          authorization: "Bearer {{ .rule.outputs.identity_token }}"
+          x-trace-id: "{{ index .raw.headers \"x-request-id\" }}"
       query:
         allow: ["trace_id"]
         strip: []
@@ -45,8 +52,7 @@ endpoints:
         status: 403
         body: |
           {
-            "error": "access denied",
-            "reason": "{{ .rule.reason }}"
+            "error": "access denied"
           }
       error:
         status: 502
@@ -55,11 +61,16 @@ endpoints:
             "error": "identity service unavailable"
           }
     cache:
-      resultTTL: "30s"
+      resultTTL: "120s"
 
 rules:
   introspect-bearer-token:
     description: "Calls the identity service to validate the inbound bearer token."
+    auth:
+      - type: bearer
+        forwardAs:
+          type: bearer
+          token: "{{ .auth.input.token }}"
     backendApi:
       url: "https://identity.internal/api/v1/introspect"
       method: POST
@@ -77,29 +88,40 @@ rules:
       acceptedStatuses: [200]
     conditions:
       pass:
-        - request.authenticated && lookup(response.body, "active") == true
+        - backend.status == 200 && lookup(backend.body, "active") == true
       fail:
-        - lookup(response.body, "active") == false
+        - backend.status == 200 && lookup(backend.body, "active") == false
+      error:
+        - backend.status >= 500
     variables:
-      rule:
-        identity_token:
-          from: "{{ lookup(response.body, \"token\") }}"
+      global:
+        validated_token:
+          from: backend.body.token
+        subscription_plan:
+          from: backend.body.plan
+        subject:
+          from: backend.body.sub
     cache:
-      resultTTL: "30s"
+      passTTL: "90s"
+      failTTL: "0s"
+      followCacheControl: true
 
   require-active-subscription:
     description: "Ensures the identity API flagged the account as active."
     conditions:
       pass:
-        - lookup(previousRule.outputs, "identity_token") != ""
+        - lookup(vars.global, "validated_token") != "" && lookup(vars.global, "subscription_plan") in ["plus", "enterprise"]
       fail:
-        - lookup(response.body, "plan") == "expired"
+        - lookup(vars.global, "subscription_plan") == "expired"
+        - lookup(vars.global, "validated_token") == ""
     responses:
       fail:
         status: 403
         body: |
           {
-            "error": "subscription expired"
+            "error": "subscription check failed",
+            "plan": "{{ index .vars.global \"subscription_plan\" }}"
           }
     cache:
-      resultTTL: "0s"
+      passTTL: "0s"
+      failTTL: "0s"

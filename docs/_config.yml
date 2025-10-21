@@ -1,0 +1,15 @@
+title: PassCtrl Documentation
+description: Operator and configuration references for the PassCtrl forward-auth runtime.
+baseurl: ""
+url: ""
+markdown: kramdown
+permalink: pretty
+theme: minima
+defaults:
+  - scope:
+      path: ""
+      type: pages
+    values:
+      layout: default
+plugins:
+  - jekyll-relative-links

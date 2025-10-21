@@ -1,0 +1,32 @@
+- key: stage-1
+  short_title: "Stage 1"
+  title: "Stage 1 - Deploy the Runtime"
+  overview_url: "/guides/deploy/"
+  summary: "Install PassCtrl, run it from source or binaries, and package it with Docker using environment overrides."
+  links:
+    - title: "Deploy the PassCtrl server"
+      url: "/guides/deploy/"
+- key: stage-2
+  short_title: "Stage 2"
+  title: "Stage 2 - Configure Endpoints"
+  overview_url: "/configuration/endpoints/"
+  summary: "Establish server-level settings, map endpoints, and understand how request curation impacts upstream services."
+  links:
+    - title: "Endpoint configuration reference"
+      url: "/configuration/endpoints/"
+- key: stage-3
+  short_title: "Stage 3"
+  title: "Stage 3 - Author Rule Chains"
+  overview_url: "/configuration/rules/"
+  summary: "Design rule execution, backend calls, and response policies that determine upstream traffic and caller outcomes."
+  links:
+    - title: "Rule configuration reference"
+      url: "/configuration/rules/"
+- key: stage-4
+  short_title: "Stage 4"
+  title: "Stage 4 - Follow the Flow"
+  overview_url: "/flows/decision-pipeline/"
+  summary: "Review end-to-end request diagrams and worked examples to validate configuration intent and outcomes."
+  links:
+    - title: "Decision pipeline diagrams"
+      url: "/flows/decision-pipeline/"
