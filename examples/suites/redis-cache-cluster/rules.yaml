@@ -10,7 +10,7 @@ endpoints:
         allow: ["authorization", "x-request-id"]
         strip: []
         custom:
-          x-user-id: "{{ .rule.outputs.user_id }}"
+          x-user-segment: "external"
       query:
         allow: ["trace"]
         strip: []
@@ -51,11 +51,11 @@ rules:
         - lookup(backend.body, "active") == false
         - backend.status == 404
     variables:
-      rule:
+      global:
         user_id:
-          from: "{{ lookup(backend.body, \"id\") }}"
+          from: backend.body.id
         plan:
-          from: "{{ lookup(backend.body, \"plan\") }}"
+          from: backend.body.plan
     cache:
       followCacheControl: true
       passTTL: "5m"
@@ -65,16 +65,17 @@ rules:
     description: "Requires a paid subscription level before allowing access."
     conditions:
       pass:
-        - lookup(previousRule.outputs, "plan") in ["plus", "enterprise"]
+        - lookup(vars.global, "plan") in ["plus", "enterprise"]
       fail:
-        - lookup(previousRule.outputs, "plan") == "free"
+        - lookup(vars.global, "plan") == "free"
     responses:
       fail:
         status: 403
         body: |
           {
             "error": "subscription required",
-            "plan": "{{ lookup(previousRule.outputs, \"plan\") }}"
+            "plan": "{{ index .vars.global \"plan\" }}"
           }
     cache:
-      resultTTL: "0s"
+      passTTL: "0s"
+      failTTL: "0s"

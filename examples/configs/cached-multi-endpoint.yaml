@@ -1,4 +1,6 @@
-# Multi-endpoint configuration illustrating cache usage and endpoint selection hints.
+# Multi-endpoint configuration illustrating cache usage, trusted proxies, and
+# endpoint selection hints. The example aligns with the staged documentation
+# for endpoint and rule configuration.
 server:
   listen:
     address: "0.0.0.0"
@@ -27,7 +29,7 @@ endpoints:
         allow: ["x-request-id", "x-session-token"]
         strip: []
         custom:
-          x-authenticated-user: "{{ .rule.outputs.user_id }}"
+          x-session-segment: "browser"
       query:
         allow: ["locale"]
         strip: ["debug"]
@@ -40,6 +42,16 @@ endpoints:
         status: 200
       fail:
         status: 403
+        body: |
+          {
+            "error": "access denied"
+          }
+      error:
+        status: 502
+        body: |
+          {
+            "error": "session lookup unavailable"
+          }
     cache:
       resultTTL: "120s"
 
@@ -58,7 +70,7 @@ endpoints:
         allow: ["x-request-id", "x-forwarded-for", "x-forwarded-proto"]
         strip: []
         custom:
-          x-admin-session: "{{ .auth.input.token }}"
+          x-admin-endpoint: "true"
       query:
         allow: []
         strip: []
@@ -86,38 +98,48 @@ rules:
       acceptedStatuses: [200]
     conditions:
       pass:
-        - lookup(response.body, "active") == true
+        - backend.status == 200 && lookup(backend.body, "active") == true
       fail:
-        - lookup(response.body, "active") == false
+        - backend.status == 200 && lookup(backend.body, "active") == false
+      error:
+        - backend.status >= 500
     variables:
-      rule:
+      global:
         user_id:
-          from: "{{ lookup(response.body, \"userId\") }}"
+          from: backend.body.userId
         tier:
-          from: "{{ lookup(response.body, \"tier\") }}"
+          from: backend.body.tier
     cache:
       passTTL: "5m"
       failTTL: "30s"
+      followCacheControl: true
 
   enforce-customer-tier:
     description: "Denies requests from suspended or free-tier accounts."
     conditions:
       pass:
-        - lookup(previousRule.outputs, "tier") in ["gold", "platinum"]
+        - lookup(vars.global, "tier") in ["gold", "platinum"]
       fail:
-        - lookup(previousRule.outputs, "tier") == "free"
+        - lookup(vars.global, "tier") in ["free", "suspended"]
     responses:
       fail:
         status: 403
         body: |
           {
-            "error": "upgrade required"
+            "error": "upgrade required",
+            "tier": "{{ index .vars.global \"tier\" }}"
           }
     cache:
-      resultTTL: "0s"
+      passTTL: "0s"
+      failTTL: "0s"
 
   audit-token-check:
     description: "Validates admin bearer tokens without caching."
+    auth:
+      - type: bearer
+        forwardAs:
+          type: bearer
+          token: "{{ .auth.input.token }}"
     backendApi:
       url: "https://audit.internal/v1/validate"
       method: POST
@@ -134,8 +156,11 @@ rules:
       acceptedStatuses: [200]
     conditions:
       pass:
-        - lookup(response.body, "valid") == true
+        - backend.status == 200 && lookup(backend.body, "valid") == true
       fail:
-        - lookup(response.body, "valid") != true
+        - backend.status == 200 && lookup(backend.body, "valid") != true
+      error:
+        - backend.status >= 500
     cache:
-      resultTTL: "0s"
+      passTTL: "0s"
+      failTTL: "0s"
