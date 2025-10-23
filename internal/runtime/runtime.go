@@ -186,6 +186,7 @@ func (p *Pipeline) logDebugDecisionSnapshot(ctx context.Context, logger *slog.Lo
 		slog.Bool("admission_authenticated", state.Admission.Authenticated),
 		slog.Bool("admission_trusted_proxy", state.Admission.TrustedProxy),
 		slog.Bool("admission_proxy_stripped", state.Admission.ProxyStripped),
+		slog.Int("admission_credential_count", len(state.Admission.Credentials)),
 		slog.Int("forward_header_count", len(state.Forward.Headers)),
 		slog.Int("forward_query_count", len(state.Forward.Query)),
 		slog.String("rule_outcome", state.Rule.Outcome),
@@ -637,7 +638,12 @@ func (p *Pipeline) installFallbackEndpoint() {
 	trusted := defaultTrustedNetworks()
 	agents := []pipeline.Agent{
 		&serverAgent{},
-		admission.New(trusted, false),
+		admission.New(trusted, false, admission.Config{
+			Required: false,
+			Allow: admission.AllowConfig{
+				Authorization: []string{"basic", "bearer"},
+			},
+		}),
 		forwardpolicy.New(forwardpolicy.DefaultConfig()),
 		rulechain.NewAgent(rulechain.DefaultDefinitions(p.templateRenderer)),
 		newRuleExecutionAgent(nil, ruleExecutionLogger, p.templateRenderer),
@@ -721,7 +727,7 @@ func (p *Pipeline) buildEndpointRuntime(name string, cfg config.EndpointConfig, 
 	trusted := append(defaultTrustedNetworks(), admission.ParseCIDRs(cfg.ForwardProxyPolicy.TrustedProxyIPs)...)
 	agents := []pipeline.Agent{
 		&serverAgent{},
-		admission.New(trusted, cfg.ForwardProxyPolicy.DevelopmentMode),
+		admission.New(trusted, cfg.ForwardProxyPolicy.DevelopmentMode, admissionConfigFromEndpoint(cfg.Authentication)),
 		forwardpolicy.New(forwardPolicyFromConfig(cfg.ForwardRequestPolicy)),
 		rulechain.NewAgent(ruleDefs),
 		newRuleExecutionAgent(nil, p.logger.With(slog.String("agent", "rule_execution"), slog.String("endpoint", trimmed)), p.templateRenderer),
@@ -863,6 +869,7 @@ func compileConfiguredRules(rules map[string]config.RuleConfig, renderer *templa
 		specs := []rulechain.DefinitionSpec{{
 			Name:        trimmedName,
 			Description: cfg.Description,
+			Auth:        buildRuleAuthSpec(cfg.Auth),
 			Conditions: rulechain.ConditionSpec{
 				Pass:  append([]string{}, cfg.Conditions.Pass...),
 				Fail:  append([]string{}, cfg.Conditions.Fail...),
@@ -905,4 +912,43 @@ func compileConfiguredRules(rules map[string]config.RuleConfig, renderer *templa
 		compiled[trimmedName] = defs[0]
 	}
 	return compiled, nil
+}
+
+func buildRuleAuthSpec(directives []config.RuleAuthDirective) []rulechain.AuthDirectiveSpec {
+	if len(directives) == 0 {
+		return nil
+	}
+	specs := make([]rulechain.AuthDirectiveSpec, 0, len(directives))
+	for _, directive := range directives {
+		specs = append(specs, rulechain.AuthDirectiveSpec{
+			Type: strings.TrimSpace(directive.Type),
+			Name: strings.TrimSpace(directive.Name),
+			Forward: rulechain.AuthForwardSpec{
+				Type:     strings.TrimSpace(directive.ForwardAs.Type),
+				Name:     directive.ForwardAs.Name,
+				Value:    directive.ForwardAs.Value,
+				Token:    directive.ForwardAs.Token,
+				User:     directive.ForwardAs.User,
+				Password: directive.ForwardAs.Password,
+			},
+		})
+	}
+	return specs
+}
+
+func admissionConfigFromEndpoint(cfg config.EndpointAuthenticationConfig) admission.Config {
+	return admission.Config{
+		Required: cfg.Required,
+		Allow: admission.AllowConfig{
+			Authorization: cloneStringSlice(cfg.Allow.Authorization),
+			Header:        cloneStringSlice(cfg.Allow.Header),
+			Query:         cloneStringSlice(cfg.Allow.Query),
+			None:          cfg.Allow.None,
+		},
+		Challenge: admission.ChallengeConfig{
+			Type:    cfg.Challenge.Type,
+			Realm:   cfg.Challenge.Realm,
+			Charset: cfg.Challenge.Charset,
+		},
+	}
 }

@@ -73,14 +73,17 @@ endpoints:
   <endpoint-name>:
     description: ""                    # optional — human-readable summary
     authentication:                    # optional — omit when anonymous access is permitted
-      required: false                  # optional — when false, credentials are optional
-      allow: []                        # optional — e.g., ["basic", "bearer", "header"]
-      challenge: ""                    # optional — WWW-Authenticate value for failures
-      basic:                           # optional — customize Basic challenge
-        realm: ""                      # optional — realm shown to clients
-        charset: "UTF-8"              # optional — charset in the challenge
-      header: []                       # optional — header names inspected for tokens
-      query: []                        # optional — query parameter names for tokens
+      required: false                  # optional — credentials must satisfy an allow entry when true
+      allow:                           # required when authentication is declared; at least one provider must be enabled
+        basic: false                   # optional — accept Authorization: Basic credentials
+        bearer: true                   # optional — accept Authorization: Bearer credentials
+        header: []                     # optional — header names inspected for tokens
+        query: []                      # optional — query parameter names for tokens
+        none: false                    # optional — allow anonymous requests to proceed
+      challenge:                       # optional — WWW-Authenticate response for failures
+        type: bearer                   # optional — basic|bearer (controls header syntax)
+        realm: ""                      # optional — realm advertised to clients
+        charset: "UTF-8"               # optional — only valid for basic challenges
     forwardProxyPolicy:                # optional — omit to trust only the direct client IP
       trustedProxyIPs: []              # optional — list of CIDRs that may set X-Forwarded-*
       developmentMode: false           # optional — strip instead of reject on untrusted peers
@@ -232,6 +235,9 @@ rules:
   - `header` expects a `name` and optional `value` template (defaulting to the matched credential for pass-through).
   - `query` expects a `name` and optional `value` template (also defaulting to the matched credential).
   - `none` emits no downstream credential, allowing rules to consume input without forwarding anything.
+- Authentication directives are evaluated sequentially; the first directive that matches a captured credential wins. If nothing
+  matches and no directive specifies `type: none`, the rule fails before invoking the backend. The credential projected to the
+  backend (whether forwarded as-is or via `forwardAs`) is exposed to templates as `.auth.forward.*`.
 - CEL conditions execute against the activation assembled in `internal/runtime/rule_execution_agent.go`.
   Expressions should reference the documented maps (`raw`, `admission`, `forward`,
   `backend`, `vars`, `now`) instead of the early `request.*` identifiers so

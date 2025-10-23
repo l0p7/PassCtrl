@@ -106,17 +106,20 @@ type EndpointConfig struct {
 }
 
 type EndpointAuthenticationConfig struct {
-	Required bool     `koanf:"required"`
-	Allow    []string `koanf:"allow"`
-	// Challenge advertises the value returned in WWW-Authenticate headers when
-	// admission fails for this endpoint.
-	Challenge string                  `koanf:"challenge"`
-	Basic     EndpointBasicAuthConfig `koanf:"basic"`
-	Header    []string                `koanf:"header"`
-	Query     []string                `koanf:"query"`
+	Required  bool                        `koanf:"required"`
+	Allow     EndpointAuthAllowConfig     `koanf:"allow"`
+	Challenge EndpointAuthChallengeConfig `koanf:"challenge"`
 }
 
-type EndpointBasicAuthConfig struct {
+type EndpointAuthAllowConfig struct {
+	Authorization []string `koanf:"authorization"`
+	Header        []string `koanf:"header"`
+	Query         []string `koanf:"query"`
+	None          bool     `koanf:"none"`
+}
+
+type EndpointAuthChallengeConfig struct {
+	Type    string `koanf:"type"`
 	Realm   string `koanf:"realm"`
 	Charset string `koanf:"charset"`
 }
@@ -265,6 +268,11 @@ func (c *Config) Validate() error {
 	default:
 		return fmt.Errorf("config: server.cache.backend unsupported: %s", c.Server.Cache.Backend)
 	}
+	for name, endpoint := range c.Endpoints {
+		if err := validateEndpointAuthentication(name, endpoint.Authentication); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -295,4 +303,50 @@ func DefaultConfig() Config {
 			},
 		},
 	}
+}
+
+func validateEndpointAuthentication(name string, auth EndpointAuthenticationConfig) error {
+	authorizationConfigured := false
+	for i, provider := range auth.Allow.Authorization {
+		trimmed := strings.TrimSpace(strings.ToLower(provider))
+		if trimmed == "" {
+			return fmt.Errorf("config: endpoint %q authentication.allow.authorization[%d] empty", name, i)
+		}
+		switch trimmed {
+		case "basic", "bearer":
+			authorizationConfigured = true
+		default:
+			return fmt.Errorf("config: endpoint %q authentication.allow.authorization[%d] unsupported: %s", name, i, provider)
+		}
+		auth.Allow.Authorization[i] = trimmed
+	}
+	allowConfigured := authorizationConfigured || len(auth.Allow.Header) > 0 || len(auth.Allow.Query) > 0 || auth.Allow.None
+	if !allowConfigured {
+		return fmt.Errorf("config: endpoint %q authentication allow block requires at least one provider", name)
+	}
+	for i, header := range auth.Allow.Header {
+		if strings.TrimSpace(header) == "" {
+			return fmt.Errorf("config: endpoint %q authentication.allow.header[%d] empty", name, i)
+		}
+	}
+	for i, query := range auth.Allow.Query {
+		if strings.TrimSpace(query) == "" {
+			return fmt.Errorf("config: endpoint %q authentication.allow.query[%d] empty", name, i)
+		}
+	}
+	challengeType := strings.TrimSpace(strings.ToLower(auth.Challenge.Type))
+	if challengeType != "" {
+		switch challengeType {
+		case "basic", "bearer":
+		default:
+			return fmt.Errorf("config: endpoint %q authentication.challenge.type unsupported: %s", name, auth.Challenge.Type)
+		}
+		if strings.TrimSpace(auth.Challenge.Realm) == "" {
+			return fmt.Errorf("config: endpoint %q authentication.challenge.realm required when type is %s", name, auth.Challenge.Type)
+		}
+		if challengeType == "bearer" && strings.TrimSpace(auth.Challenge.Charset) != "" {
+			return fmt.Errorf("config: endpoint %q authentication.challenge.charset only supported for basic challenges", name)
+		}
+	}
+	return nil
 }

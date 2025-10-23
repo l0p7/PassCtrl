@@ -18,6 +18,7 @@ import (
 type DefinitionSpec struct {
 	Name         string
 	Description  string
+	Auth         []AuthDirectiveSpec
 	Conditions   ConditionSpec
 	Backend      BackendDefinitionSpec
 	PassMessage  string
@@ -64,6 +65,7 @@ type ConditionPrograms struct {
 type Definition struct {
 	Name          string
 	Description   string
+	Auth          []AuthDirective
 	Conditions    ConditionPrograms
 	Backend       BackendDefinition
 	PassMessage   string
@@ -197,18 +199,25 @@ func CompileDefinitions(specs []DefinitionSpec, renderer *templates.Renderer) ([
 }
 
 func compileDefinition(env *expr.Environment, spec DefinitionSpec, renderer *templates.Renderer) (Definition, error) {
+	name := strings.TrimSpace(spec.Name)
+
 	programs, err := compileConditionPrograms(env, spec.Conditions)
 	if err != nil {
 		return Definition{}, err
 	}
+
+	auth, err := compileAuthDirectives(name, spec.Auth, renderer)
+	if err != nil {
+		return Definition{}, err
+	}
 	backend := buildBackendDefinition(spec.Backend)
-	name := strings.TrimSpace(spec.Name)
 	if name == "" {
 		name = "rule"
 	}
 	def := Definition{
 		Name:         strings.TrimSpace(spec.Name),
 		Description:  strings.TrimSpace(spec.Description),
+		Auth:         auth,
 		Conditions:   programs,
 		Backend:      backend,
 		PassMessage:  strings.TrimSpace(spec.PassMessage),

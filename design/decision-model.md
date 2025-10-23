@@ -12,7 +12,8 @@ previous one and emits a typed result that downstream stages can reference.
   header families.
 - Extract the original URL from the `X-Forwarded-*` family (or RFC7239 `Forwarded` header), normalize headers/query parameters, and capture the immutable raw
   request snapshot (`rawState`).
-- Evaluate endpoint-level authentication requirements before any rule logic runs; failure exits through the response policy’s
+- Evaluate endpoint-level authentication requirements by walking the ordered `authentication.allow` providers (basic, bearer, header, query, none);
+  capture every credential that matches and surface them to later stages. Failure exits through the response policy’s
   `fail` branch with the configured challenge.
 
 ## Stage 2: Forward Request Policy
@@ -27,11 +28,12 @@ previous one and emits a typed result that downstream stages can reference.
 - Each rule may include:
   - **auth** — an ordered list of accepted credential directives. Each entry names a source `type`
     (`basic`, `bearer`, `header`, `query`, or `none`), optional selector attributes such as `name`, and an inline `forwardAs`
-    block when the credential should be transformed before reaching the backend. Omitting `forwardAs` forwards the credential in
-    its original shape (e.g., Basic remains Basic). When present, `forwardAs` may declare a new credential `type` and populate
-    fields such as `token`, `user`, `password`, `name`, or `value` using Go templates (with Sprig helpers). The matched
-    credential is surfaced to templates as `.auth.input.*`, enabling rewrites like converting a Basic password into a Bearer
-    token or prefixing a captured header value.
+    block when the credential should be transformed before reaching the backend. Entries are evaluated sequentially; the first
+    directive that matches a captured credential is used. Omitting `forwardAs` forwards the credential in its original shape
+    (e.g., Basic remains Basic). When present, `forwardAs` may declare a new credential `type` and populate fields such as
+    `token`, `user`, `password`, `name`, or `value` using Go templates (with Sprig helpers). The matched credential is surfaced
+    to templates and CEL as `.auth.input.*`, and the synthesized outbound credential appears under `.auth.forward.*`. If no entry
+    matches and no directive specifies `type: none`, the rule fails before any backend call occurs.
   - **backendApi** — the target URL, HTTP method, accepted response status codes, pagination behavior, and the same
     allow/strip/custom controls for headers and query parameters used by the forward policy. Header and query names are literal,
     while request bodies and custom values are rendered via Go templates (with Sprig helpers).

@@ -99,11 +99,11 @@ func TestLoader(t *testing.T) {
 			setup: func(t *testing.T) []string {
 				dir := t.TempDir()
 				rulesPath := filepath.Join(dir, "rules.yaml")
-				ruleContents := "endpoints:\n  file-endpoint:\n    description: from file\n    rules:\n      - name: file-rule\nrules:\n  file-rule:\n    description: from file\n"
+				ruleContents := "endpoints:\n  file-endpoint:\n    description: from file\n    authentication:\n      allow:\n        authorization:\n          - bearer\n    rules:\n      - name: file-rule\nrules:\n  file-rule:\n    description: from file\n"
 				require.NoError(t, os.WriteFile(rulesPath, []byte(ruleContents), 0o600))
 
 				serverPath := filepath.Join(dir, "server.yaml")
-				serverContents := "server:\n  rules:\n    rulesFolder: \"\"\n    rulesFile: %s\nendpoints:\n  inline-endpoint:\n    description: inline\n    rules:\n      - name: inline-rule\nrules:\n  inline-rule:\n    description: inline\n"
+				serverContents := "server:\n  rules:\n    rulesFolder: \"\"\n    rulesFile: %s\nendpoints:\n  inline-endpoint:\n    description: inline\n    authentication:\n      allow:\n        authorization:\n          - bearer\n    rules:\n      - name: inline-rule\nrules:\n  inline-rule:\n    description: inline\n"
 				require.NoError(t, os.WriteFile(serverPath, []byte(fmt.Sprintf(serverContents, rulesPath)), 0o600))
 				return []string{serverPath}
 			},

@@ -42,17 +42,19 @@ type RawState struct {
 
 // AdmissionState records authentication and proxy policy decisions.
 type AdmissionState struct {
-	Authenticated bool           `json:"authenticated"`
-	Reason        string         `json:"reason,omitempty"`
-	CapturedAt    time.Time      `json:"capturedAt"`
-	ClientIP      string         `json:"clientIp,omitempty"`
-	TrustedProxy  bool           `json:"trustedProxy"`
-	ProxyStripped bool           `json:"proxyStripped"`
-	ForwardedFor  string         `json:"forwardedFor,omitempty"`
-	Forwarded     string         `json:"forwarded,omitempty"`
-	ProxyNote     string         `json:"proxyNote,omitempty"`
-	Decision      string         `json:"decision"`
-	Snapshot      map[string]any `json:"snapshot,omitempty"`
+	Authenticated bool                  `json:"authenticated"`
+	Reason        string                `json:"reason,omitempty"`
+	CapturedAt    time.Time             `json:"capturedAt"`
+	ClientIP      string                `json:"clientIp,omitempty"`
+	TrustedProxy  bool                  `json:"trustedProxy"`
+	ProxyStripped bool                  `json:"proxyStripped"`
+	ForwardedFor  string                `json:"forwardedFor,omitempty"`
+	Forwarded     string                `json:"forwarded,omitempty"`
+	ProxyNote     string                `json:"proxyNote,omitempty"`
+	Decision      string                `json:"decision"`
+	Snapshot      map[string]any        `json:"snapshot,omitempty"`
+	Allow         AdmissionAllow        `json:"allow"`
+	Credentials   []AdmissionCredential `json:"credentials,omitempty"`
 }
 
 // ForwardState exposes the curated headers and query parameters the forward
@@ -71,6 +73,7 @@ type RuleState struct {
 	EvaluatedAt   time.Time          `json:"evaluatedAt"`
 	ShouldExecute bool               `json:"-"`
 	History       []RuleHistoryEntry `json:"history,omitempty"`
+	Auth          RuleAuthState      `json:"auth"`
 }
 
 // RuleHistoryEntry records the result of a single rule within the chain.
@@ -79,6 +82,14 @@ type RuleHistoryEntry struct {
 	Outcome  string        `json:"outcome"`
 	Reason   string        `json:"reason,omitempty"`
 	Duration time.Duration `json:"duration"`
+}
+
+// RuleAuthState surfaces the matched authentication directive and forwarding
+// metadata for templates and observability.
+type RuleAuthState struct {
+	Selected string         `json:"selected"`
+	Input    map[string]any `json:"input"`
+	Forward  map[string]any `json:"forward,omitempty"`
 }
 
 // ResponseState is the HTTP response composed for the caller.
@@ -140,6 +151,26 @@ type State struct {
 	Backend   BackendState   `json:"backend"`
 }
 
+// AdmissionAllow mirrors the endpoint authentication configuration so rules can
+// reason about permitted credential sources.
+type AdmissionAllow struct {
+	Authorization []string `json:"authorization"`
+	Header        []string `json:"header"`
+	Query         []string `json:"query"`
+	None          bool     `json:"none"`
+}
+
+// AdmissionCredential records a credential that satisfied the admission policy.
+type AdmissionCredential struct {
+	Type     string `json:"type"`
+	Name     string `json:"name,omitempty"`
+	Value    string `json:"value,omitempty"`
+	Token    string `json:"token,omitempty"`
+	Username string `json:"username,omitempty"`
+	Password string `json:"password,omitempty"`
+	Source   string `json:"source,omitempty"`
+}
+
 // NewState captures the inbound request metadata and initializes the shared
 // state for a pipeline evaluation.
 func NewState(r *http.Request, endpoint, cacheKey, correlationID string) *State {
@@ -179,6 +210,12 @@ func NewState(r *http.Request, endpoint, cacheKey, correlationID string) *State 
 		Backend: BackendState{
 			Headers: make(map[string]string),
 		},
+		Rule: RuleState{
+			Auth: RuleAuthState{
+				Input:   make(map[string]any),
+				Forward: make(map[string]any),
+			},
+		},
 	}
 }
 
@@ -212,6 +249,23 @@ func (s *State) TemplateContext() map[string]any {
 		"cache":         s.Cache,
 		"backend":       s.Backend,
 	}
+	ctx["auth"] = s.Rule.Auth.templateContext()
 	ctx["state"] = s
 	return ctx
+}
+
+func (a RuleAuthState) templateContext() map[string]any {
+	input := a.Input
+	if input == nil {
+		input = map[string]any{}
+	}
+	forward := a.Forward
+	if forward == nil {
+		forward = map[string]any{}
+	}
+	return map[string]any{
+		"selected": a.Selected,
+		"input":    input,
+		"forward":  forward,
+	}
 }

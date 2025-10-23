@@ -17,10 +17,10 @@ func TestWatchRulesFileReloads(t *testing.T) {
 
 	dir := t.TempDir()
 	rulesFile := filepath.Join(dir, "rules.yaml")
-	require.NoError(t, os.WriteFile(rulesFile, []byte("endpoints:\n  file-endpoint:\n    description: v1\n    rules:\n      - name: file-rule\nrules:\n  file-rule:\n    description: v1\n"), 0o600))
+	require.NoError(t, os.WriteFile(rulesFile, []byte("endpoints:\n  file-endpoint:\n    description: v1\n    authentication:\n      allow:\n        authorization:\n          - bearer\n    rules:\n      - name: file-rule\nrules:\n  file-rule:\n    description: v1\n"), 0o600))
 
 	serverCfg := filepath.Join(dir, "server.yaml")
-	configContents := "server:\n  rules:\n    rulesFolder: \"\"\n    rulesFile: %s\nendpoints:\n  inline-endpoint:\n    description: inline\n    rules:\n      - name: inline-rule\nrules:\n  inline-rule:\n    description: inline\n"
+	configContents := "server:\n  rules:\n    rulesFolder: \"\"\n    rulesFile: %s\nendpoints:\n  inline-endpoint:\n    description: inline\n    authentication:\n      allow:\n        authorization:\n          - bearer\n    rules:\n      - name: inline-rule\nrules:\n  inline-rule:\n    description: inline\n"
 	require.NoError(t, os.WriteFile(serverCfg, []byte(fmt.Sprintf(configContents, rulesFile)), 0o600))
 
 	loader := NewLoader("PASSCTRL", serverCfg)
@@ -50,7 +50,7 @@ func TestWatchRulesFileReloads(t *testing.T) {
 		require.FailNow(t, "timeout waiting for initial change event")
 	}
 
-	require.NoError(t, os.WriteFile(rulesFile, []byte("endpoints:\n  file-endpoint:\n    description: v2\n    rules:\n      - name: file-rule\nrules:\n  file-rule:\n    description: v2\n"), 0o600))
+	require.NoError(t, os.WriteFile(rulesFile, []byte("endpoints:\n  file-endpoint:\n    description: v2\n    authentication:\n      allow:\n        authorization:\n          - bearer\n    rules:\n      - name: file-rule\nrules:\n  file-rule:\n    description: v2\n"), 0o600))
 
 	select {
 	case bundle := <-changeCh:
@@ -74,7 +74,7 @@ func TestWatchRulesFolderReloads(t *testing.T) {
 	require.NoError(t, os.MkdirAll(rulesDir, 0o750))
 
 	serverCfg := filepath.Join(dir, "server.yaml")
-	configContents := "server:\n  rules:\n    rulesFolder: %s\nendpoints:\n  inline-endpoint:\n    description: inline\n    rules:\n      - name: inline-rule\nrules:\n  inline-rule:\n    description: inline\n"
+	configContents := "server:\n  rules:\n    rulesFolder: %s\nendpoints:\n  inline-endpoint:\n    description: inline\n    authentication:\n      allow:\n        authorization:\n          - bearer\n    rules:\n      - name: inline-rule\nrules:\n  inline-rule:\n    description: inline\n"
 	require.NoError(t, os.WriteFile(serverCfg, []byte(fmt.Sprintf(configContents, rulesDir)), 0o600))
 
 	loader := NewLoader("PASSCTRL", serverCfg)
@@ -102,7 +102,7 @@ func TestWatchRulesFolderReloads(t *testing.T) {
 	}
 
 	rulePath := filepath.Join(rulesDir, "file.yaml")
-	require.NoError(t, os.WriteFile(rulePath, []byte("endpoints:\n  folder-endpoint:\n    description: folder\n    rules:\n      - name: folder-rule\nrules:\n  folder-rule:\n    description: folder\n"), 0o600))
+	require.NoError(t, os.WriteFile(rulePath, []byte("endpoints:\n  folder-endpoint:\n    description: folder\n    authentication:\n      allow:\n        authorization:\n          - bearer\n    rules:\n      - name: folder-rule\nrules:\n  folder-rule:\n    description: folder\n"), 0o600))
 
 	select {
 	case bundle := <-changeCh:

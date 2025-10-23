@@ -3,6 +3,7 @@ package runtime
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,6 +22,21 @@ import (
 
 type httpDoer interface {
 	Do(*http.Request) (*http.Response, error)
+}
+
+type ruleAuthSelection struct {
+	directive  rulechain.AuthDirective
+	credential pipeline.AdmissionCredential
+	forward    ruleAuthForward
+}
+
+type ruleAuthForward struct {
+	Type     string
+	Name     string
+	Value    string
+	Token    string
+	User     string
+	Password string
 }
 
 type ruleExecutionAgent struct {
@@ -107,9 +123,27 @@ func (a *ruleExecutionAgent) Execute(ctx context.Context, _ *http.Request, state
 
 func (a *ruleExecutionAgent) evaluateRule(ctx context.Context, def rulechain.Definition, state *pipeline.State) (string, string) {
 	resetBackendState(&state.Backend)
+	state.Rule.Auth = pipeline.RuleAuthState{
+		Input:   make(map[string]any),
+		Forward: make(map[string]any),
+	}
+
+	selection, authStatus, authReason := a.prepareRuleAuth(def.Auth, state)
+	if authStatus != "" {
+		switch authStatus {
+		case "fail":
+			reason := a.ruleMessage(def.FailTemplate, def.FailMessage, authReason, state)
+			return "fail", reason
+		case "error":
+			reason := a.ruleMessage(def.ErrorTemplate, def.ErrorMessage, authReason, state)
+			return "error", reason
+		default:
+			return authStatus, authReason
+		}
+	}
 
 	if def.Backend.IsConfigured() {
-		if err := a.invokeBackend(ctx, def.Backend, state); err != nil {
+		if err := a.invokeBackend(ctx, def.Backend, selection, state); err != nil {
 			state.Backend.Error = err.Error()
 			reason := a.ruleMessage(def.ErrorTemplate, def.ErrorMessage, fmt.Sprintf("backend request failed: %v", err), state)
 			return "error", reason
@@ -185,7 +219,7 @@ func (a *ruleExecutionAgent) ruleMessage(tmpl *templates.Template, message, fall
 	return fallback
 }
 
-func (a *ruleExecutionAgent) invokeBackend(ctx context.Context, backend rulechain.BackendDefinition, state *pipeline.State) error {
+func (a *ruleExecutionAgent) invokeBackend(ctx context.Context, backend rulechain.BackendDefinition, authSel *ruleAuthSelection, state *pipeline.State) error {
 	if a.client == nil {
 		return errors.New("rule execution agent: http client missing")
 	}
@@ -264,6 +298,10 @@ func (a *ruleExecutionAgent) invokeBackend(ctx context.Context, backend rulechai
 		backend.ApplyHeaders(req, state)
 		backend.ApplyQuery(req, state)
 
+		if err := applyRuleAuthSelection(req, authSel); err != nil {
+			return fmt.Errorf("apply rule authentication: %w", err)
+		}
+
 		resp, err := a.client.Do(req)
 		if err != nil {
 			return fmt.Errorf("backend request: %w", err)
@@ -330,6 +368,284 @@ func (a *ruleExecutionAgent) invokeBackend(ctx context.Context, backend rulechai
 	return nil
 }
 
+func (a *ruleExecutionAgent) prepareRuleAuth(directives []rulechain.AuthDirective, state *pipeline.State) (*ruleAuthSelection, string, string) {
+	state.Rule.Auth.Input = make(map[string]any)
+	state.Rule.Auth.Forward = make(map[string]any)
+	state.Rule.Auth.Selected = ""
+
+	if len(directives) == 0 {
+		return nil, "", ""
+	}
+
+	creds := state.Admission.Credentials
+
+	for _, directive := range directives {
+		if directive.Type == "none" {
+			state.Rule.Auth.Selected = directive.Type
+			state.Rule.Auth.Input["type"] = directive.Type
+			forward, err := a.buildForwardAuth(directive, pipeline.AdmissionCredential{}, state)
+			if err != nil {
+				return nil, "error", fmt.Sprintf("rule authentication forward failed: %v", err)
+			}
+			state.Rule.Auth.Forward = forward.toMap()
+			return &ruleAuthSelection{directive: directive, forward: forward}, "", ""
+		}
+
+		cred, ok := matchAuthCredential(directive, creds)
+		if !ok {
+			continue
+		}
+
+		state.Rule.Auth.Selected = directive.Type
+		state.Rule.Auth.Input = buildAuthInput(directive.Type, cred)
+		forward, err := a.buildForwardAuth(directive, cred, state)
+		if err != nil {
+			return nil, "error", fmt.Sprintf("rule authentication forward failed: %v", err)
+		}
+		state.Rule.Auth.Forward = forward.toMap()
+
+		return &ruleAuthSelection{directive: directive, credential: cred, forward: forward}, "", ""
+	}
+
+	state.Rule.Auth.Input["type"] = "unmatched"
+	return nil, "fail", "rule authentication did not match any credential"
+}
+
+func matchAuthCredential(directive rulechain.AuthDirective, creds []pipeline.AdmissionCredential) (pipeline.AdmissionCredential, bool) {
+	for _, cred := range creds {
+		switch directive.Type {
+		case "basic":
+			if cred.Type == "basic" {
+				return cred, true
+			}
+		case "bearer":
+			if cred.Type == "bearer" {
+				return cred, true
+			}
+		case "header":
+			if cred.Type == "header" && strings.EqualFold(cred.Name, directive.Name) {
+				return cred, true
+			}
+		case "query":
+			if cred.Type == "query" && strings.EqualFold(cred.Name, directive.Name) {
+				return cred, true
+			}
+		}
+	}
+	return pipeline.AdmissionCredential{}, false
+}
+
+func buildAuthInput(kind string, cred pipeline.AdmissionCredential) map[string]any {
+	input := map[string]any{
+		"type":   kind,
+		"source": cred.Source,
+	}
+	switch kind {
+	case "basic":
+		if cred.Username != "" {
+			input["username"] = cred.Username
+		}
+		if cred.Password != "" {
+			input["password"] = cred.Password
+		}
+	case "bearer":
+		if cred.Token != "" {
+			input["token"] = cred.Token
+		}
+	case "header":
+		if cred.Name != "" {
+			input["name"] = cred.Name
+		}
+		if cred.Value != "" {
+			input["value"] = cred.Value
+			input["header"] = cred.Value
+		}
+	case "query":
+		if cred.Name != "" {
+			input["name"] = cred.Name
+		}
+		if cred.Value != "" {
+			input["value"] = cred.Value
+			input["query"] = cred.Value
+		}
+	case "none":
+		input["type"] = "none"
+	}
+	return input
+}
+
+func (a *ruleExecutionAgent) buildForwardAuth(directive rulechain.AuthDirective, cred pipeline.AdmissionCredential, state *pipeline.State) (ruleAuthForward, error) {
+	forwardsType := directive.Forward.Type
+	if strings.TrimSpace(forwardsType) == "" {
+		forwardsType = directive.Type
+	}
+	forwardType := strings.ToLower(strings.TrimSpace(forwardsType))
+
+	forward := ruleAuthForward{Type: forwardType}
+	ctx := state.TemplateContext()
+
+	renderValue := func(tmpl *templates.Template, literal string) (string, error) {
+		if tmpl != nil {
+			rendered, err := tmpl.Render(ctx)
+			if err != nil {
+				return "", err
+			}
+			return strings.TrimSpace(rendered), nil
+		}
+		return strings.TrimSpace(literal), nil
+	}
+
+	switch forwardType {
+	case "", "none":
+		return forward, nil
+	case "basic":
+		user, err := renderValue(directive.Forward.UserTemplate, directive.Forward.User)
+		if err != nil {
+			return ruleAuthForward{}, err
+		}
+		pass, err := renderValue(directive.Forward.PasswordTemplate, directive.Forward.Password)
+		if err != nil {
+			return ruleAuthForward{}, err
+		}
+		if user == "" {
+			user = cred.Username
+		}
+		if pass == "" {
+			pass = cred.Password
+		}
+		if user == "" || pass == "" {
+			return ruleAuthForward{}, fmt.Errorf("basic credential requires user and password")
+		}
+		forward.User = user
+		forward.Password = pass
+	case "bearer":
+		token, err := renderValue(directive.Forward.TokenTemplate, directive.Forward.Token)
+		if err != nil {
+			return ruleAuthForward{}, err
+		}
+		if token == "" {
+			token = cred.Token
+		}
+		if token == "" {
+			return ruleAuthForward{}, fmt.Errorf("bearer credential requires token")
+		}
+		forward.Token = token
+	case "header":
+		name, err := renderValue(directive.Forward.NameTemplate, directive.Forward.Name)
+		if err != nil {
+			return ruleAuthForward{}, err
+		}
+		value, err := renderValue(directive.Forward.ValueTemplate, directive.Forward.Value)
+		if err != nil {
+			return ruleAuthForward{}, err
+		}
+		if name == "" {
+			if cred.Name != "" {
+				name = cred.Name
+			} else {
+				name = directive.Name
+			}
+		}
+		if value == "" {
+			value = cred.Value
+		}
+		if name == "" || value == "" {
+			return ruleAuthForward{}, fmt.Errorf("header credential requires name and value")
+		}
+		forward.Name = name
+		forward.Value = value
+	case "query":
+		name, err := renderValue(directive.Forward.NameTemplate, directive.Forward.Name)
+		if err != nil {
+			return ruleAuthForward{}, err
+		}
+		value, err := renderValue(directive.Forward.ValueTemplate, directive.Forward.Value)
+		if err != nil {
+			return ruleAuthForward{}, err
+		}
+		if name == "" {
+			if cred.Name != "" {
+				name = cred.Name
+			} else {
+				name = directive.Name
+			}
+		}
+		if value == "" {
+			value = cred.Value
+		}
+		if name == "" {
+			return ruleAuthForward{}, fmt.Errorf("query credential requires name")
+		}
+		forward.Name = name
+		forward.Value = value
+	default:
+		return ruleAuthForward{}, fmt.Errorf("unsupported forward type %s", forwardType)
+	}
+
+	return forward, nil
+}
+
+func applyRuleAuthSelection(req *http.Request, sel *ruleAuthSelection) error {
+	if sel == nil {
+		return nil
+	}
+
+	switch sel.forward.Type {
+	case "", "none":
+		return nil
+	case "basic":
+		if sel.forward.User == "" || sel.forward.Password == "" {
+			return fmt.Errorf("basic credential missing user or password")
+		}
+		credential := base64.StdEncoding.EncodeToString([]byte(sel.forward.User + ":" + sel.forward.Password))
+		req.Header.Set("Authorization", "Basic "+credential)
+	case "bearer":
+		if sel.forward.Token == "" {
+			return fmt.Errorf("bearer credential missing token")
+		}
+		req.Header.Set("Authorization", "Bearer "+sel.forward.Token)
+	case "header":
+		if sel.forward.Name == "" {
+			return fmt.Errorf("header credential missing name")
+		}
+		req.Header.Set(sel.forward.Name, sel.forward.Value)
+	case "query":
+		if sel.forward.Name == "" {
+			return fmt.Errorf("query credential missing name")
+		}
+		values := req.URL.Query()
+		values.Set(sel.forward.Name, sel.forward.Value)
+		req.URL.RawQuery = values.Encode()
+	default:
+		return fmt.Errorf("unsupported credential forward type %s", sel.forward.Type)
+	}
+
+	return nil
+}
+
+func (f ruleAuthForward) toMap() map[string]any {
+	out := make(map[string]any)
+	if f.Type != "" {
+		out["type"] = f.Type
+	}
+	if f.Name != "" {
+		out["name"] = f.Name
+	}
+	if f.Value != "" {
+		out["value"] = f.Value
+	}
+	if f.Token != "" {
+		out["token"] = f.Token
+	}
+	if f.User != "" {
+		out["user"] = f.User
+	}
+	if f.Password != "" {
+		out["password"] = f.Password
+	}
+	return out
+}
+
 func evaluateProgramList(programs []expr.Program, activation map[string]any, requireAll bool) (bool, string, error) {
 	if requireAll {
 		if len(programs) == 0 {
@@ -385,6 +701,11 @@ func buildActivation(state *pipeline.State) map[string]any {
 		"forward": map[string]any{
 			"headers": toAnyMap(state.Forward.Headers),
 			"query":   toAnyMap(state.Forward.Query),
+		},
+		"auth": map[string]any{
+			"selected": state.Rule.Auth.Selected,
+			"input":    cloneAnyMap(state.Rule.Auth.Input),
+			"forward":  cloneAnyMap(state.Rule.Auth.Forward),
 		},
 		"backend": map[string]any{
 			"requested": state.Backend.Requested,
@@ -464,6 +785,17 @@ func cloneHeaders(in map[string]string) map[string]string {
 		return nil
 	}
 	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func cloneAnyMap(in map[string]any) map[string]any {
+	if len(in) == 0 {
+		return map[string]any{}
+	}
+	out := make(map[string]any, len(in))
 	for k, v := range in {
 		out[k] = v
 	}

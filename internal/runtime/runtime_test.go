@@ -37,12 +37,18 @@ func TestPipelineEndpointSelectionAndRules(t *testing.T) {
 		Cache: cache.NewMemory(1 * time.Minute),
 		Endpoints: map[string]config.EndpointConfig{
 			"allow": {
+				Authentication: config.EndpointAuthenticationConfig{
+					Allow: config.EndpointAuthAllowConfig{Authorization: []string{"bearer"}},
+				},
 				ForwardRequestPolicy: config.EndpointForwardRequestPolicyConfig{
 					Query: config.ForwardRuleCategoryConfig{Allow: []string{"allow"}},
 				},
 				Rules: []config.EndpointRuleReference{{Name: "allow-rule"}},
 			},
 			"deny": {
+				Authentication: config.EndpointAuthenticationConfig{
+					Allow: config.EndpointAuthAllowConfig{Authorization: []string{"bearer"}},
+				},
 				ForwardRequestPolicy: config.EndpointForwardRequestPolicyConfig{
 					Query: config.ForwardRuleCategoryConfig{Allow: []string{"deny"}},
 				},
@@ -72,7 +78,7 @@ func TestPipelineEndpointSelectionAndRules(t *testing.T) {
 
 	t.Run("deny endpoint applies fail condition", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "http://example.com/deny/auth?deny=true", http.NoBody)
-		req.Header.Set("Authorization", "token")
+		req.Header.Set("Authorization", "Bearer token")
 		req.Header.Set("X-Request-ID", "deny-123")
 		rec := httptest.NewRecorder()
 
@@ -88,7 +94,7 @@ func TestPipelineEndpointSelectionAndRules(t *testing.T) {
 
 	t.Run("allow endpoint passes when query matches", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "http://example.com/allow/auth?allow=true", http.NoBody)
-		req.Header.Set("Authorization", "token")
+		req.Header.Set("Authorization", "Bearer token")
 		rec := httptest.NewRecorder()
 
 		handler.ServeHTTP(rec, req)
@@ -177,6 +183,9 @@ func TestPipelineLogsIncludeCorrelationID(t *testing.T) {
 		Cache: cache.NewMemory(1 * time.Minute),
 		Endpoints: map[string]config.EndpointConfig{
 			"default": {
+				Authentication: config.EndpointAuthenticationConfig{
+					Allow: config.EndpointAuthAllowConfig{Authorization: []string{"bearer"}},
+				},
 				ForwardRequestPolicy: config.EndpointForwardRequestPolicyConfig{
 					Query: config.ForwardRuleCategoryConfig{Allow: []string{"allow"}},
 				},
@@ -197,7 +206,7 @@ func TestPipelineLogsIncludeCorrelationID(t *testing.T) {
 	handler := server.NewPipelineHandler(pipe)
 
 	req := httptest.NewRequest(http.MethodGet, "http://example.com/default/auth?allow=true", http.NoBody)
-	req.Header.Set("Authorization", "token")
+	req.Header.Set("Authorization", "Bearer token")
 	req.Header.Set("X-Request-ID", "log-correlation")
 	rec := httptest.NewRecorder()
 
@@ -232,6 +241,9 @@ func TestPipelineRecordsMetrics(t *testing.T) {
 		Cache: cache.NewMemory(1 * time.Minute),
 		Endpoints: map[string]config.EndpointConfig{
 			"default": {
+				Authentication: config.EndpointAuthenticationConfig{
+					Allow: config.EndpointAuthAllowConfig{Authorization: []string{"bearer"}},
+				},
 				ForwardRequestPolicy: config.EndpointForwardRequestPolicyConfig{
 					Query: config.ForwardRuleCategoryConfig{Allow: []string{"allow"}},
 				},
@@ -252,7 +264,7 @@ func TestPipelineRecordsMetrics(t *testing.T) {
 	handler := server.NewPipelineHandler(pipe)
 
 	req := httptest.NewRequest(http.MethodGet, "http://example.com/default/auth?allow=true", http.NoBody)
-	req.Header.Set("Authorization", "token")
+	req.Header.Set("Authorization", "Bearer token")
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -265,6 +277,9 @@ func TestPipelineSingleEndpointDefaults(t *testing.T) {
 		Cache: cache.NewMemory(1 * time.Minute),
 		Endpoints: map[string]config.EndpointConfig{
 			"solo": {
+				Authentication: config.EndpointAuthenticationConfig{
+					Allow: config.EndpointAuthAllowConfig{Authorization: []string{"bearer"}},
+				},
 				ForwardRequestPolicy: config.EndpointForwardRequestPolicyConfig{
 					Query: config.ForwardRuleCategoryConfig{Allow: []string{"allow"}},
 				},
@@ -284,7 +299,7 @@ func TestPipelineSingleEndpointDefaults(t *testing.T) {
 	handler := server.NewPipelineHandler(pipe)
 
 	req := httptest.NewRequest(http.MethodGet, "http://example.com/solo/auth?allow=true", http.NoBody)
-	req.Header.Set("Authorization", "token")
+	req.Header.Set("Authorization", "Bearer token")
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -366,6 +381,9 @@ func TestPipelineReloadInvalidatesCache(t *testing.T) {
 		Cache: cacheBackend,
 		Endpoints: map[string]config.EndpointConfig{
 			"solo": {
+				Authentication: config.EndpointAuthenticationConfig{
+					Allow: config.EndpointAuthAllowConfig{Authorization: []string{"bearer"}},
+				},
 				Rules: []config.EndpointRuleReference{{Name: "solo-rule"}},
 			},
 		},
@@ -386,7 +404,7 @@ func TestPipelineReloadInvalidatesCache(t *testing.T) {
 	handler := server.NewPipelineHandler(pipe)
 
 	req := httptest.NewRequest(http.MethodGet, "http://example.com/solo/auth", http.NoBody)
-	req.Header.Set("Authorization", "token")
+	req.Header.Set("Authorization", "Bearer token")
 
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -395,7 +413,12 @@ func TestPipelineReloadInvalidatesCache(t *testing.T) {
 	// Reload with a failing rule to ensure cached decision is purged.
 	bundle := config.RuleBundle{
 		Endpoints: map[string]config.EndpointConfig{
-			"solo": {Rules: []config.EndpointRuleReference{{Name: "solo-rule"}}},
+			"solo": {
+				Authentication: config.EndpointAuthenticationConfig{
+					Allow: config.EndpointAuthAllowConfig{Authorization: []string{"bearer"}},
+				},
+				Rules: []config.EndpointRuleReference{{Name: "solo-rule"}},
+			},
 		},
 		Rules: map[string]config.RuleConfig{
 			"solo-rule": {
@@ -413,7 +436,7 @@ func TestPipelineReloadInvalidatesCache(t *testing.T) {
 	pipe.Reload(ctx, bundle)
 
 	req = httptest.NewRequest(http.MethodGet, "http://example.com/solo/auth", http.NoBody)
-	req.Header.Set("Authorization", "token")
+	req.Header.Set("Authorization", "Bearer token")
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusForbidden, rec.Code)
@@ -435,6 +458,9 @@ func TestAuthResponseIsMinimal(t *testing.T) {
 		Cache: cache.NewMemory(1 * time.Minute),
 		Endpoints: map[string]config.EndpointConfig{
 			"solo": {
+				Authentication: config.EndpointAuthenticationConfig{
+					Allow: config.EndpointAuthAllowConfig{Authorization: []string{"bearer"}},
+				},
 				ForwardRequestPolicy: config.EndpointForwardRequestPolicyConfig{
 					Query: config.ForwardRuleCategoryConfig{Allow: []string{"allow"}},
 				},
@@ -452,7 +478,7 @@ func TestAuthResponseIsMinimal(t *testing.T) {
 
 	// Pass case
 	req := httptest.NewRequest(http.MethodGet, "http://example.com/solo/auth?allow=true", http.NoBody)
-	req.Header.Set("Authorization", "token")
+	req.Header.Set("Authorization", "Bearer token")
 	req.Header.Set("X-Request-ID", "minimal-1")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -464,6 +490,9 @@ func TestAuthResponseIsMinimal(t *testing.T) {
 		Cache: cache.NewMemory(1 * time.Minute),
 		Endpoints: map[string]config.EndpointConfig{
 			"solo": {
+				Authentication: config.EndpointAuthenticationConfig{
+					Allow: config.EndpointAuthAllowConfig{Authorization: []string{"bearer"}},
+				},
 				ForwardRequestPolicy: config.EndpointForwardRequestPolicyConfig{
 					Query: config.ForwardRuleCategoryConfig{Allow: []string{"deny"}},
 				},
@@ -478,7 +507,7 @@ func TestAuthResponseIsMinimal(t *testing.T) {
 	failPipe := NewPipeline(nil, failOpts)
 	failHandler := server.NewPipelineHandler(failPipe)
 	req = httptest.NewRequest(http.MethodGet, "http://example.com/solo/auth?deny=true", http.NoBody)
-	req.Header.Set("Authorization", "token")
+	req.Header.Set("Authorization", "Bearer token")
 	req.Header.Set("X-Request-ID", "minimal-2")
 	rec = httptest.NewRecorder()
 	failHandler.ServeHTTP(rec, req)
@@ -492,6 +521,9 @@ func TestEndpointResponsePolicyBodiesAndHeaders(t *testing.T) {
 		Cache: cache.NewMemory(1 * time.Minute),
 		Endpoints: map[string]config.EndpointConfig{
 			"e": {
+				Authentication: config.EndpointAuthenticationConfig{
+					Allow: config.EndpointAuthAllowConfig{Authorization: []string{"bearer"}},
+				},
 				ResponsePolicy: config.EndpointResponsePolicyConfig{
 					Pass: config.EndpointResponseConfig{
 						Body: "Okay",
@@ -517,7 +549,7 @@ func TestEndpointResponsePolicyBodiesAndHeaders(t *testing.T) {
 
 	// Pass path returns configured body and header
 	req := httptest.NewRequest(http.MethodGet, "http://example.com/e/auth", http.NoBody)
-	req.Header.Set("Authorization", "token")
+	req.Header.Set("Authorization", "Bearer token")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -527,13 +559,19 @@ func TestEndpointResponsePolicyBodiesAndHeaders(t *testing.T) {
 
 	// Reload rules to force fail outcome
 	bundle := config.RuleBundle{
-		Endpoints: map[string]config.EndpointConfig{"e": {ResponsePolicy: opts.Endpoints["e"].ResponsePolicy, Rules: []config.EndpointRuleReference{{Name: "r"}}}},
-		Rules:     map[string]config.RuleConfig{"r": {Conditions: config.RuleConditionConfig{Fail: []string{"true"}}}},
+		Endpoints: map[string]config.EndpointConfig{
+			"e": {
+				Authentication: opts.Endpoints["e"].Authentication,
+				ResponsePolicy: opts.Endpoints["e"].ResponsePolicy,
+				Rules:          []config.EndpointRuleReference{{Name: "r"}},
+			},
+		},
+		Rules: map[string]config.RuleConfig{"r": {Conditions: config.RuleConditionConfig{Fail: []string{"true"}}}},
 	}
 	pipe.Reload(context.Background(), bundle)
 
 	req = httptest.NewRequest(http.MethodGet, "http://example.com/e/auth", http.NoBody)
-	req.Header.Set("Authorization", "token")
+	req.Header.Set("Authorization", "Bearer token")
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusForbidden, rec.Code)
