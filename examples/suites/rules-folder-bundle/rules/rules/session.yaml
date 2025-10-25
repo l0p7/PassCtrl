@@ -42,12 +42,10 @@ rules:
         - lookup(vars.global, "entitlement") == "deny"
     responses:
       fail:
-        status: 403
-        body: |
-          {
-            "error": "entitlement missing",
-            "tenant": "{{ index .vars.global \"tenant_id\" }}"
-          }
+        headers:
+          custom:
+            X-Entitlement: "denied"
+            X-Tenant-Id: "{{ index .vars.global \"tenant_id\" }}"
     cache:
       passTTL: "0s"
       failTTL: "0s"

@@ -70,12 +70,9 @@ rules:
         - lookup(vars.global, "plan") == "free"
     responses:
       fail:
-        status: 403
-        body: |
-          {
-            "error": "subscription required",
-            "plan": "{{ index .vars.global \"plan\" }}"
-          }
+        headers:
+          custom:
+            X-PassCtrl-Plan: "{{ index .vars.global \"plan\" }}"
     cache:
       passTTL: "0s"
       failTTL: "0s"

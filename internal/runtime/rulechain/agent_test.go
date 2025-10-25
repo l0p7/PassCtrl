@@ -109,6 +109,27 @@ func TestCompileDefinitionsTemplateError(t *testing.T) {
 	require.Contains(t, err.Error(), "pass message template")
 }
 
+func TestCompileDefinitionsRejectsRuleResponseStatusAndBody(t *testing.T) {
+	renderer := templates.NewRenderer(nil)
+	_, err := CompileDefinitions([]DefinitionSpec{{
+		Name: "reject-status",
+		Responses: ResponsesSpec{
+			Pass: ResponseSpec{Status: 201},
+		},
+	}}, renderer)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "status overrides")
+
+	_, err = CompileDefinitions([]DefinitionSpec{{
+		Name: "reject-body",
+		Responses: ResponsesSpec{
+			Fail: ResponseSpec{Body: "not allowed"},
+		},
+	}}, renderer)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "body overrides")
+}
+
 func TestCompileConditionProgramsErrorWrapping(t *testing.T) {
 	env, err := expr.NewEnvironment()
 	require.NoError(t, err)

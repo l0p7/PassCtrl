@@ -249,12 +249,16 @@ func summarizeRuleHistory(entries []pipeline.RuleHistoryEntry) []map[string]any 
 	}
 	summary := make([]map[string]any, 0, len(entries))
 	for _, entry := range entries {
-		summary = append(summary, map[string]any{
+		item := map[string]any{
 			"name":        entry.Name,
 			"outcome":     entry.Outcome,
 			"reason":      entry.Reason,
 			"duration_ms": float64(entry.Duration) / float64(time.Millisecond),
-		})
+		}
+		if len(entry.Variables) > 0 {
+			item["variables"] = cloneInterfaceMap(entry.Variables)
+		}
+		summary = append(summary, item)
 	}
 	return summary
 }
@@ -821,6 +825,17 @@ func cloneStringMap(in map[string]string) map[string]string {
 	return out
 }
 
+func cloneInterfaceMap(in map[string]any) map[string]any {
+	if len(in) == 0 {
+		return map[string]any{}
+	}
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
 func cloneStringSlice(in []string) []string {
 	if len(in) == 0 {
 		return nil
@@ -900,6 +915,8 @@ func compileConfiguredRules(rules map[string]config.RuleConfig, renderer *templa
 			PassMessage:  strings.TrimSpace(cfg.Responses.Pass.Body),
 			FailMessage:  strings.TrimSpace(cfg.Responses.Fail.Body),
 			ErrorMessage: strings.TrimSpace(cfg.Responses.Error.Body),
+			Responses:    buildRuleResponsesSpec(cfg.Responses),
+			Variables:    buildRuleVariablesSpec(cfg.Variables),
 		}}
 
 		defs, err := rulechain.CompileDefinitions(specs, renderer)
@@ -934,6 +951,46 @@ func buildRuleAuthSpec(directives []config.RuleAuthDirective) []rulechain.AuthDi
 		})
 	}
 	return specs
+}
+
+func buildRuleResponsesSpec(cfg config.RuleResponsesConfig) rulechain.ResponsesSpec {
+	return rulechain.ResponsesSpec{
+		Pass:  buildRuleResponseSpec(cfg.Pass),
+		Fail:  buildRuleResponseSpec(cfg.Fail),
+		Error: buildRuleResponseSpec(cfg.Error),
+	}
+}
+
+func buildRuleResponseSpec(cfg config.RuleResponseConfig) rulechain.ResponseSpec {
+	return rulechain.ResponseSpec{
+		Status:   cfg.Status,
+		Body:     cfg.Body,
+		BodyFile: cfg.BodyFile,
+		Headers: forwardpolicy.CategoryConfig{
+			Allow:  append([]string{}, cfg.Headers.Allow...),
+			Strip:  append([]string{}, cfg.Headers.Strip...),
+			Custom: cloneStringMap(cfg.Headers.Custom),
+		},
+	}
+}
+
+func buildRuleVariablesSpec(cfg config.RuleVariablesConfig) rulechain.VariablesSpec {
+	return rulechain.VariablesSpec{
+		Global: buildRuleVariableMap(cfg.Global),
+		Rule:   buildRuleVariableMap(cfg.Rule),
+		Local:  buildRuleVariableMap(cfg.Local),
+	}
+}
+
+func buildRuleVariableMap(cfg map[string]config.RuleVariableSpec) map[string]rulechain.VariableSpec {
+	if len(cfg) == 0 {
+		return nil
+	}
+	out := make(map[string]rulechain.VariableSpec, len(cfg))
+	for name, spec := range cfg {
+		out[name] = rulechain.VariableSpec{From: spec.From}
+	}
+	return out
 }
 
 func admissionConfigFromEndpoint(cfg config.EndpointAuthenticationConfig) admission.Config {

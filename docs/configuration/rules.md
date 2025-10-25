@@ -96,15 +96,13 @@ CEL expressions evaluate against a rich activation so you can interrogate admiss
 
 ## Rule-Level Responses
 
-The `responses` block overrides endpoint defaults when the rule is decisive. If omitted, the endpoint’s response policy runs.
+The `responses` block overrides endpoint defaults when the rule is decisive. Pass, fail, and error directives short-circuit the endpoint response policy for headers only—the endpoint still controls status codes and bodies. Multiple pass directives in the chain are cumulative—the caller sees the union of headers emitted by every pass rule that executed. If omitted, the endpoint’s response policy runs.
 
 | Field | Description | Upstream Impact | Caller Response Impact |
 | --- | --- | --- | --- |
-| `responses.pass.status` | HTTP status for pass outcomes. | None. | Sets caller status when this rule is decisive. |
-| `responses.pass.headers.allow` / `strip` | Start from backend headers, then strip. | None. | Controls which backend headers the caller receives. |
-| `responses.pass.headers.custom` | Template-rendered headers (e.g., `X-Permission-Level`). | None upstream; uses rule context only. | Adds headers to caller responses. |
-| `responses.pass.body` / `bodyFile` | Inline or file template for the response body. | None. | Renders custom bodies for pass decisions. |
-| `responses.fail.*`, `responses.error.*` | Same structure for deny/error outcomes. | None. | Provide detailed deny/error payloads without leaking backend bodies. |
+| `responses.pass.headers.allow` / `strip` | Start from backend/endpoint headers, then strip/apply allow rules. | None. | Controls which headers survive the pass response. |
+| `responses.pass.headers.custom` | Template-rendered headers (e.g., `X-Permission-Level`). | None upstream; uses rule context only. | Adds headers to the caller response. |
+| `responses.fail.headers.*` / `responses.error.headers.*` | Same header controls for deny/error outcomes. | None. | Lets a decisive rule annotate deny/error responses without changing status/body. |
 
 Templates receive:
 
@@ -135,6 +133,8 @@ Rules project structured data into named scopes via the `variables` block.
 | `variables.global` | Persist across the endpoint execution (and cached entries). | Affects downstream rules and future cached responses. | Values appear in response templates and `/explain`. |
 | `variables.rule` | Scoped to this rule’s execution. | Available to later rules in the same chain during the same request. | Exposed to templating if this rule is decisive. |
 | `variables.local` | Cleared after each rule execution (per page when paginating). | Useful for intermediate computations without leaking across rules. | Not visible to responses unless copied into `global` or `rule`. |
+
+When evaluating templates, previously exported rule variables are also available under `rules.<ruleName>.variables.<key>`, allowing later rules and response policies to reference scoped data without promoting it to the global namespace.
 
 Each variable maps a key to a CEL expression via `from`. Example: `variables.global.user_id.from: backend.body.user.id`.
 

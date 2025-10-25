@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -37,6 +38,11 @@ type ruleAuthForward struct {
 	Token    string
 	User     string
 	Password string
+}
+
+type ruleResponseApplication struct {
+	ruleName string
+	response rulechain.ResponseDefinition
 }
 
 type ruleExecutionAgent struct {
@@ -81,22 +87,52 @@ func (a *ruleExecutionAgent) Execute(ctx context.Context, _ *http.Request, state
 	history := make([]pipeline.RuleHistoryEntry, 0, len(plan.Rules))
 	var finalOutcome string
 	var finalReason string
+	passResponses := make([]ruleResponseApplication, 0, len(plan.Rules))
 
 	for _, def := range plan.Rules {
 		start := time.Now()
-		outcome, reason := a.evaluateRule(ctx, def, state)
-		history = append(history, pipeline.RuleHistoryEntry{
-			Name:     def.Name,
-			Outcome:  outcome,
-			Reason:   reason,
-			Duration: time.Since(start),
-		})
+		outcome, reason, response := a.evaluateRule(ctx, def, state)
+		entry := pipeline.RuleHistoryEntry{
+			Name:      def.Name,
+			Outcome:   outcome,
+			Reason:    reason,
+			Duration:  time.Since(start),
+			Variables: cloneAnyMap(state.Rule.Variables.Rule),
+		}
+		history = append(history, entry)
 
 		finalOutcome = outcome
 		finalReason = reason
+		state.Rule.Outcome = outcome
+		state.Rule.Reason = reason
 
-		if outcome != "pass" {
-			break
+		if outcome == "pass" {
+			if response != nil && responseHasOverrides(*response) {
+				passResponses = append(passResponses, ruleResponseApplication{
+					ruleName: def.Name,
+					response: *response,
+				})
+			}
+			continue
+		}
+
+		if response != nil && responseHasOverrides(*response) {
+			a.applyRuleResponse(def.Name, *response, state)
+		}
+		break
+	}
+
+	if finalOutcome == "pass" && len(passResponses) > 0 {
+		// Apply pass responses in declaration order so headers accumulate across the chain.
+		for _, resp := range passResponses {
+			a.applyRuleResponse(resp.ruleName, resp.response, state)
+		}
+	}
+
+	if finalOutcome == "" && len(history) == 0 {
+		finalOutcome = "error"
+		if finalReason == "" {
+			finalReason = "no rules evaluated"
 		}
 	}
 
@@ -121,24 +157,26 @@ func (a *ruleExecutionAgent) Execute(ctx context.Context, _ *http.Request, state
 	}
 }
 
-func (a *ruleExecutionAgent) evaluateRule(ctx context.Context, def rulechain.Definition, state *pipeline.State) (string, string) {
+func (a *ruleExecutionAgent) evaluateRule(ctx context.Context, def rulechain.Definition, state *pipeline.State) (string, string, *rulechain.ResponseDefinition) {
 	resetBackendState(&state.Backend)
 	state.Rule.Auth = pipeline.RuleAuthState{
 		Input:   make(map[string]any),
 		Forward: make(map[string]any),
 	}
+	state.Rule.Variables.Rule = make(map[string]any)
+	state.Rule.Variables.Local = make(map[string]any)
 
 	selection, authStatus, authReason := a.prepareRuleAuth(def.Auth, state)
 	if authStatus != "" {
 		switch authStatus {
 		case "fail":
 			reason := a.ruleMessage(def.FailTemplate, def.FailMessage, authReason, state)
-			return "fail", reason
+			return "fail", reason, selectRuleResponse(def, "fail")
 		case "error":
 			reason := a.ruleMessage(def.ErrorTemplate, def.ErrorMessage, authReason, state)
-			return "error", reason
+			return "error", reason, selectRuleResponse(def, "error")
 		default:
-			return authStatus, authReason
+			return authStatus, authReason, selectRuleResponse(def, authStatus)
 		}
 	}
 
@@ -146,37 +184,42 @@ func (a *ruleExecutionAgent) evaluateRule(ctx context.Context, def rulechain.Def
 		if err := a.invokeBackend(ctx, def.Backend, selection, state); err != nil {
 			state.Backend.Error = err.Error()
 			reason := a.ruleMessage(def.ErrorTemplate, def.ErrorMessage, fmt.Sprintf("backend request failed: %v", err), state)
-			return "error", reason
+			return "error", reason, selectRuleResponse(def, "error")
 		}
 	} else {
 		state.Backend.Accepted = true
 	}
 
+	if err := a.evaluateRuleVariables(def, state); err != nil {
+		reason := a.ruleMessage(def.ErrorTemplate, def.ErrorMessage, fmt.Sprintf("variable extraction failed: %v", err), state)
+		return "error", reason, selectRuleResponse(def, "error")
+	}
+
 	activation := buildActivation(state)
 
 	if matched, source, err := evaluateProgramList(def.Conditions.Error, activation, false); err != nil {
-		return "error", fmt.Sprintf("error condition %s evaluation failed: %v", source, err)
+		return "error", fmt.Sprintf("error condition %s evaluation failed: %v", source, err), selectRuleResponse(def, "error")
 	} else if matched {
 		reason := a.ruleMessage(def.ErrorTemplate, def.ErrorMessage, fmt.Sprintf("error condition matched: %s", source), state)
-		return "error", reason
+		return "error", reason, selectRuleResponse(def, "error")
 	}
 
 	if matched, source, err := evaluateProgramList(def.Conditions.Fail, activation, false); err != nil {
-		return "error", fmt.Sprintf("fail condition %s evaluation failed: %v", source, err)
+		return "error", fmt.Sprintf("fail condition %s evaluation failed: %v", source, err), selectRuleResponse(def, "error")
 	} else if matched {
 		reason := a.ruleMessage(def.FailTemplate, def.FailMessage, fmt.Sprintf("fail condition matched: %s", source), state)
-		return "fail", reason
+		return "fail", reason, selectRuleResponse(def, "fail")
 	}
 
 	if matched, source, err := evaluateProgramList(def.Conditions.Pass, activation, true); err != nil {
-		return "error", fmt.Sprintf("pass condition %s evaluation failed: %v", source, err)
+		return "error", fmt.Sprintf("pass condition %s evaluation failed: %v", source, err), selectRuleResponse(def, "error")
 	} else if matched {
 		reason := a.ruleMessage(def.PassTemplate, def.PassMessage, fmt.Sprintf("pass conditions satisfied: %s", source), state)
-		return "pass", reason
+		return "pass", reason, selectRuleResponse(def, "pass")
 	}
 
 	if len(def.Conditions.Pass) > 0 {
-		return "fail", a.ruleMessage(def.FailTemplate, def.FailMessage, "required pass condition not satisfied", state)
+		return "fail", a.ruleMessage(def.FailTemplate, def.FailMessage, "required pass condition not satisfied", state), selectRuleResponse(def, "fail")
 	}
 
 	if def.Backend.IsConfigured() && !state.Backend.Accepted {
@@ -184,10 +227,10 @@ func (a *ruleExecutionAgent) evaluateRule(ctx context.Context, def rulechain.Def
 		if state.Backend.Status != 0 {
 			fallback = fmt.Sprintf("backend response not accepted: status %d", state.Backend.Status)
 		}
-		return "fail", a.ruleMessage(def.FailTemplate, def.FailMessage, fallback, state)
+		return "fail", a.ruleMessage(def.FailTemplate, def.FailMessage, fallback, state), selectRuleResponse(def, "fail")
 	}
 
-	return "pass", a.ruleMessage(def.PassTemplate, def.PassMessage, "rule evaluated without explicit outcome", state)
+	return "pass", a.ruleMessage(def.PassTemplate, def.PassMessage, "rule evaluated without explicit outcome", state), selectRuleResponse(def, "pass")
 }
 
 func (a *ruleExecutionAgent) ruleMessage(tmpl *templates.Template, message, fallback string, state *pipeline.State) string {
@@ -717,7 +760,7 @@ func buildActivation(state *pipeline.State) map[string]any {
 			"accepted":  state.Backend.Accepted,
 			"pages":     backendPagesActivation(state.Backend.Pages),
 		},
-		"vars": map[string]any{},
+		"vars": state.VariablesContext(),
 		"now":  time.Now().UTC(),
 	}
 	return activation
@@ -750,6 +793,245 @@ func toAnyMap(in map[string]string) map[string]any {
 		out[k] = v
 	}
 	return out
+}
+
+func selectRuleResponse(def rulechain.Definition, outcome string) *rulechain.ResponseDefinition {
+	switch outcome {
+	case "pass":
+		resp := def.Responses.Pass
+		return &resp
+	case "fail":
+		resp := def.Responses.Fail
+		return &resp
+	case "error":
+		resp := def.Responses.Error
+		return &resp
+	default:
+		return nil
+	}
+}
+
+func responseHasOverrides(resp rulechain.ResponseDefinition) bool {
+	if len(resp.Headers.Allow) > 0 || len(resp.Headers.Strip) > 0 || len(resp.Headers.Custom) > 0 {
+		return true
+	}
+	return false
+}
+
+func (a *ruleExecutionAgent) evaluateRuleVariables(def rulechain.Definition, state *pipeline.State) error {
+	vars := def.Variables
+	if len(vars.Global) == 0 && len(vars.Rule) == 0 && len(vars.Local) == 0 {
+		return nil
+	}
+
+	if state.Variables.Global == nil {
+		state.Variables.Global = make(map[string]any)
+	}
+	if state.Variables.Rules == nil {
+		state.Variables.Rules = make(map[string]map[string]any)
+	}
+	if state.Rule.Variables.Rule == nil {
+		state.Rule.Variables.Rule = make(map[string]any)
+	} else {
+		for k := range state.Rule.Variables.Rule {
+			delete(state.Rule.Variables.Rule, k)
+		}
+	}
+	if state.Rule.Variables.Local == nil {
+		state.Rule.Variables.Local = make(map[string]any)
+	} else {
+		for k := range state.Rule.Variables.Local {
+			delete(state.Rule.Variables.Local, k)
+		}
+	}
+
+	evaluateScope := func(scope string, defs map[string]rulechain.VariableDefinition, assign func(string, any)) error {
+		if len(defs) == 0 {
+			return nil
+		}
+		keys := make([]string, 0, len(defs))
+		for name := range defs {
+			keys = append(keys, name)
+		}
+		sort.Strings(keys)
+		for _, name := range keys {
+			defn := defs[name]
+			activation := buildActivation(state)
+			value, err := defn.Program.Eval(activation)
+			if err != nil {
+				return fmt.Errorf("%s.%s: %w", scope, name, err)
+			}
+			assign(name, value)
+		}
+		return nil
+	}
+
+	if err := evaluateScope("global", vars.Global, func(name string, value any) {
+		state.Variables.Global[name] = value
+	}); err != nil {
+		return err
+	}
+
+	if err := evaluateScope("rule", vars.Rule, func(name string, value any) {
+		state.Rule.Variables.Rule[name] = value
+	}); err != nil {
+		return err
+	}
+
+	if trimmed := strings.TrimSpace(def.Name); trimmed != "" {
+		if len(state.Rule.Variables.Rule) > 0 {
+			state.Variables.Rules[trimmed] = cloneAnyMap(state.Rule.Variables.Rule)
+		} else {
+			delete(state.Variables.Rules, trimmed)
+		}
+	}
+
+	if err := evaluateScope("local", vars.Local, func(name string, value any) {
+		state.Rule.Variables.Local[name] = value
+	}); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (a *ruleExecutionAgent) applyRuleResponse(ruleName string, resp rulechain.ResponseDefinition, state *pipeline.State) {
+	if state == nil {
+		return
+	}
+	if !responseHasOverrides(resp) {
+		return
+	}
+
+	if state.Response.Headers == nil {
+		state.Response.Headers = make(map[string]string)
+	}
+
+	headers := make(map[string]string)
+	keyMap := make(map[string]string)
+
+	mergeHeaders := func(source map[string]string, overwrite bool) {
+		for key, value := range source {
+			trimmedKey := strings.TrimSpace(key)
+			trimmedValue := strings.TrimSpace(value)
+			if trimmedKey == "" {
+				continue
+			}
+			lower := strings.ToLower(trimmedKey)
+			if !overwrite {
+				if _, ok := headers[lower]; ok {
+					continue
+				}
+			}
+			headers[lower] = trimmedValue
+			keyMap[lower] = trimmedKey
+		}
+	}
+
+	mergeHeaders(state.Backend.Headers, false)
+	mergeHeaders(state.Response.Headers, true)
+
+	if len(resp.Headers.Allow) > 0 {
+		allowed := make(map[string]string)
+		allowedKeys := make(map[string]string)
+		for _, name := range resp.Headers.Allow {
+			trimmed := strings.TrimSpace(name)
+			if trimmed == "" {
+				continue
+			}
+			if trimmed == "*" {
+				allowed = headers
+				allowedKeys = keyMap
+				break
+			}
+			lower := strings.ToLower(trimmed)
+			if value, ok := headers[lower]; ok {
+				allowed[lower] = value
+				allowedKeys[lower] = keyMap[lower]
+			}
+		}
+		headers = allowed
+		keyMap = allowedKeys
+	}
+
+	if len(resp.Headers.Strip) > 0 {
+		for _, name := range resp.Headers.Strip {
+			lower := strings.ToLower(strings.TrimSpace(name))
+			if lower == "" {
+				continue
+			}
+			delete(headers, lower)
+			delete(keyMap, lower)
+		}
+	}
+
+	if len(resp.Headers.Custom) > 0 {
+		keys := make([]string, 0, len(resp.Headers.Custom))
+		for name := range resp.Headers.Custom {
+			keys = append(keys, name)
+		}
+		sort.Strings(keys)
+		for _, name := range keys {
+			trimmedName := strings.TrimSpace(name)
+			if trimmedName == "" {
+				continue
+			}
+			lower := strings.ToLower(trimmedName)
+			value := strings.TrimSpace(resp.Headers.Custom[name])
+			tmpl := resp.HeaderTemplates[name]
+			if tmpl != nil {
+				rendered, err := tmpl.Render(state.TemplateContext())
+				if err != nil {
+					a.logTemplateError("rule response header template rendering failed", ruleName, trimmedName, err, state)
+					continue
+				}
+				if candidate := strings.TrimSpace(rendered); candidate != "" {
+					value = candidate
+				}
+			}
+			if value == "" {
+				delete(headers, lower)
+				delete(keyMap, lower)
+				continue
+			}
+			headers[lower] = value
+			keyMap[lower] = trimmedName
+		}
+	}
+
+	finalHeaders := make(map[string]string, len(headers)+1)
+	for lower, value := range headers {
+		key := keyMap[lower]
+		if key == "" {
+			key = lower
+		}
+		finalHeaders[key] = value
+	}
+	finalHeaders["X-PassCtrl-Outcome"] = state.Rule.Outcome
+	state.Response.Headers = finalHeaders
+}
+
+func (a *ruleExecutionAgent) logTemplateError(message, ruleName, key string, err error, state *pipeline.State) {
+	logger := a.logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger = logger.With(slog.String("agent", a.Name()))
+	if state != nil {
+		if state.Endpoint != "" {
+			logger = logger.With(slog.String("endpoint", state.Endpoint))
+		}
+		if state.CorrelationID != "" {
+			logger = logger.With(slog.String("correlation_id", state.CorrelationID))
+		}
+	}
+	if ruleName != "" {
+		logger = logger.With(slog.String("rule", ruleName))
+	}
+	if key != "" {
+		logger = logger.With(slog.String("key", key))
+	}
+	logger.Warn(message, slog.Any("error", err))
 }
 
 func resetBackendState(state *pipeline.BackendState) {

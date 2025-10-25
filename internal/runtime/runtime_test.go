@@ -52,6 +52,9 @@ func TestPipelineEndpointSelectionAndRules(t *testing.T) {
 				ForwardRequestPolicy: config.EndpointForwardRequestPolicyConfig{
 					Query: config.ForwardRuleCategoryConfig{Allow: []string{"deny"}},
 				},
+				ResponsePolicy: config.EndpointResponsePolicyConfig{
+					Fail: config.EndpointResponseConfig{Body: "denied by rule"},
+				},
 				Rules: []config.EndpointRuleReference{{Name: "deny-rule"}},
 			},
 		},
@@ -64,9 +67,6 @@ func TestPipelineEndpointSelectionAndRules(t *testing.T) {
 			"deny-rule": {
 				Conditions: config.RuleConditionConfig{
 					Fail: []string{`forward.query["deny"] == "true"`},
-				},
-				Responses: config.RuleResponsesConfig{
-					Fail: config.RuleResponseConfig{Body: "denied by rule"},
 				},
 			},
 		},
@@ -392,9 +392,6 @@ func TestPipelineReloadInvalidatesCache(t *testing.T) {
 				Conditions: config.RuleConditionConfig{
 					Pass: []string{"true"},
 				},
-				Responses: config.RuleResponsesConfig{
-					Pass: config.RuleResponseConfig{Body: "allowed"},
-				},
 			},
 		},
 		RuleSources: []string{"initial"},
@@ -424,9 +421,6 @@ func TestPipelineReloadInvalidatesCache(t *testing.T) {
 			"solo-rule": {
 				Conditions: config.RuleConditionConfig{
 					Fail: []string{"true"},
-				},
-				Responses: config.RuleResponsesConfig{
-					Fail: config.RuleResponseConfig{Body: "denied"},
 				},
 			},
 		},
