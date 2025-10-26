@@ -41,7 +41,7 @@ previous one and emits a typed result that downstream stages can reference.
     CEL programs that inspect response headers/bodies to override outcomes. Helper functions such as `lookup(map, key)` return
     `null` for missing entries so conditions can probe optional headers, query parameters, or backend payloads without raising
     evaluation errors.
-  - **responses** — pass/fail/error response descriptors containing status codes, header directives, and bodies. Header values and bodies may use Go templates (with Sprig helpers) independent of the rule-condition pipeline.
+  - **responses** — pass/fail/error response descriptors containing header directives only. Header values may use Go templates (with Sprig helpers) independent of the rule-condition pipeline.
   - **variables** — extractions scoped as `global`, `rule`, or `local` for sharing data between rules. Each `from` directive is a CEL program evaluated against the rule context.
 - Variable scopes behave as follows:
   - `global` variables are visible to all rules as `.variables.<name>` (or `variables.<name>`) and may be overwritten by later
@@ -59,8 +59,8 @@ previous one and emits a typed result that downstream stages can reference.
   errors.
 - Within each category, allow templates to read the original raw request snapshot plus any variables emitted by rules.
 - Provide `allowHeaders` / `stripHeaders` / `customHeaders` tooling and `body`/`bodyFile` templating to construct the final HTTP
-  response, starting from the backend status code and header set captured from the decisive rule unless explicitly overridden.
-  Header overrides may use Go templates (with Sprig) or JMESPath expressions.
+  response. Endpoint response policy owns status codes and bodies, while rule responses may layer additional headers via their
+  `responses.*.headers` directives. Header overrides may use Go templates (with Sprig) or JMESPath expressions.
 - Default behavior, when a category is unspecified, returns the canonical forward-auth statuses (200 on pass, 401/403 on fail,
   5xx on error). The `/auth` response body remains minimal (outcome, message, endpoint, correlation ID, cache flag) to avoid
   exposing internal state; use `/explain` and logs for detailed diagnostics.

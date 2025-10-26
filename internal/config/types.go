@@ -219,10 +219,7 @@ type RuleResponsesConfig struct {
 }
 
 type RuleResponseConfig struct {
-	Status   int                       `koanf:"status"`
-	Body     string                    `koanf:"body"`
-	BodyFile string                    `koanf:"bodyFile"`
-	Headers  ForwardRuleCategoryConfig `koanf:"headers"`
+	Headers ForwardRuleCategoryConfig `koanf:"headers"`
 }
 
 type RuleVariablesConfig struct {

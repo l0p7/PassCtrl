@@ -183,29 +183,20 @@ rules:
       pass: []                         # optional — CEL predicates overriding pass; compiled at load and executed against the rule activation
       fail: []                         # optional — CEL predicates overriding fail; compiled at load and executed against the rule activation
       error: []                        # optional — CEL predicates overriding error; compiled at load and executed against the rule activation
-    responses:                         # optional — defaults to standard statuses
+    responses:                         # optional — defaults to endpoint headers
       pass:
-        status: 200                    # optional — defaults to backend status
-        body: ""                       # optional — templated body for `/auth`
-        bodyFile: ""                   # optional — render body from template file
         headers:
-          allow: []                    # optional — start from backend headers before stripping (literal names)
+          allow: []                    # optional — start from backend/endpoint headers before stripping (literal names)
           strip: []                    # optional
           custom: {}                   # optional — values may be templates/JMESPath
       fail:
-        status: 403                    # optional — override default deny status
-        body: ""                       # optional — templated body for `/auth`
-        bodyFile: ""                   # optional — render body from template file
         headers:
-          allow: []                    # optional — start from backend headers before stripping (literal names)
+          allow: []                    # optional — start from backend/endpoint headers before stripping (literal names)
           strip: []                    # optional
           custom: {}                   # optional — values rendered via templates
       error:
-        status: 502                    # optional — defaults to backend status when available
-        body: ""                       # optional — templated body for `/auth`
-        bodyFile: ""                   # optional — render body from template file
         headers:
-          allow: []                    # optional — start from backend headers before stripping (literal names)
+          allow: []                    # optional — start from backend/endpoint headers before stripping (literal names)
           strip: []                    # optional
           custom: {}                   # optional — values rendered via templates
     variables:                         # optional — share data between rules

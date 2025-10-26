@@ -57,7 +57,7 @@ Rule conditions replace implicit status-based decisions with explicit CEL expres
 
 | Condition Block | Purpose | Upstream Impact | Caller Response Impact |
 | --- | --- | --- | --- |
-| `conditions.pass[]` | List of CEL expressions that produce a pass outcome when true. | None; evaluates after backend call. | Pass responses (status/headers/body) render from rule or endpoint defaults. |
+| `conditions.pass[]` | List of CEL expressions that produce a pass outcome when true. | None; evaluates after backend call. | Pass responses reuse endpoint status/body while merging any rule-defined headers. |
 | `conditions.fail[]` | Force a fail outcome when any predicate returns true. | None. | Triggers `fail` response block. |
 | `conditions.error[]` | Force an error outcome (bypasses cache). | None. | Triggers `error` response block; avoids caching. |
 

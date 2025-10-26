@@ -912,9 +912,9 @@ func compileConfiguredRules(rules map[string]config.RuleConfig, renderer *templa
 					MaxPages: cfg.BackendAPI.Pagination.MaxPages,
 				},
 			},
-			PassMessage:  strings.TrimSpace(cfg.Responses.Pass.Body),
-			FailMessage:  strings.TrimSpace(cfg.Responses.Fail.Body),
-			ErrorMessage: strings.TrimSpace(cfg.Responses.Error.Body),
+			PassMessage:  "",
+			FailMessage:  "",
+			ErrorMessage: "",
 			Responses:    buildRuleResponsesSpec(cfg.Responses),
 			Variables:    buildRuleVariablesSpec(cfg.Variables),
 		}}
@@ -963,9 +963,6 @@ func buildRuleResponsesSpec(cfg config.RuleResponsesConfig) rulechain.ResponsesS
 
 func buildRuleResponseSpec(cfg config.RuleResponseConfig) rulechain.ResponseSpec {
 	return rulechain.ResponseSpec{
-		Status:   cfg.Status,
-		Body:     cfg.Body,
-		BodyFile: cfg.BodyFile,
 		Headers: forwardpolicy.CategoryConfig{
 			Allow:  append([]string{}, cfg.Headers.Allow...),
 			Strip:  append([]string{}, cfg.Headers.Strip...),
