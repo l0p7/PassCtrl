@@ -1005,6 +1005,7 @@ func buildRuleResponseSpec(cfg config.RuleResponseConfig) rulechain.ResponseSpec
 			Strip:  append([]string{}, cfg.Headers.Strip...),
 			Custom: cloneStringMap(cfg.Headers.Custom),
 		},
+		Variables: cloneStringMap(cfg.Variables),
 	}
 }
 

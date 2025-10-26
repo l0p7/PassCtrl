@@ -409,3 +409,134 @@ func newBackendResponse(status int, body string, headers map[string]string) *htt
 	}
 	return resp
 }
+
+func TestRuleExecutionAgentExportedVariables(t *testing.T) {
+	renderer := templates.NewRenderer(nil)
+	mockClient := runtimemocks.NewMockHTTPDoer(t)
+	mockClient.EXPECT().
+		Do(mock.AnythingOfType("*http.Request")).
+		RunAndReturn(func(req *http.Request) (*http.Response, error) {
+			headers := map[string]string{"Content-Type": "application/json"}
+			return newBackendResponse(200, `{"userId":"123","email":"TEST@EXAMPLE.COM","tier":"premium"}`, headers), nil
+		})
+	agent := newRuleExecutionAgent(mockClient, nil, renderer)
+
+	def, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{
+		{
+			Name: "test-rule",
+			Backend: rulechain.BackendDefinitionSpec{
+				URL:      "http://backend/validate",
+				Method:   "GET",
+				Accepted: []int{200},
+			},
+			Variables: rulechain.VariablesSpec{
+				LocalV2: map[string]string{
+					"raw_id":    "backend.body.userId",
+					"raw_email": "backend.body.email",
+				},
+			},
+			Responses: rulechain.ResponsesSpec{
+				Pass: rulechain.ResponseSpec{
+					Variables: map[string]string{
+						"user_id": "variables.raw_id",
+						"email":   "{{ .variables.raw_email | lower }}",
+						"tier":    "backend.body.tier",
+					},
+				},
+			},
+			Conditions: rulechain.ConditionSpec{
+				Pass: []string{"backend.status == 200"},
+			},
+		},
+	}, renderer)
+	require.NoError(t, err)
+	require.Len(t, def, 1)
+
+	req := httptest.NewRequest(http.MethodGet, "http://unit.test/request", nil)
+	state := pipeline.NewState(req, "test", "cache-key", "corr-123")
+	state.Admission.Authenticated = true
+	state.Rule.ShouldExecute = true
+	state.SetPlan(rulechain.ExecutionPlan{Rules: def})
+
+	ctx := context.Background()
+	result := agent.Execute(ctx, req, state)
+
+	require.Equal(t, "pass", result.Status, "Outcome: %s, Reason: %s", state.Rule.Outcome, state.Rule.Reason)
+	require.Equal(t, "pass", state.Rule.Outcome)
+
+	// Check exported variables were evaluated
+	require.NotNil(t, state.Rule.Variables.Exported)
+	require.Equal(t, "123", state.Rule.Variables.Exported["user_id"])
+	require.Equal(t, "test@example.com", state.Rule.Variables.Exported["email"]) // Lowercased via template
+	require.Equal(t, "premium", state.Rule.Variables.Exported["tier"])
+
+	// Check exported variables are available in state.Variables.Rules
+	require.NotNil(t, state.Variables.Rules)
+	require.NotNil(t, state.Variables.Rules["test-rule"])
+	require.Equal(t, "123", state.Variables.Rules["test-rule"]["user_id"])
+	require.Equal(t, "test@example.com", state.Variables.Rules["test-rule"]["email"])
+	require.Equal(t, "premium", state.Variables.Rules["test-rule"]["tier"])
+}
+
+func TestRuleExecutionAgentExportedVariablesOnFail(t *testing.T) {
+	renderer := templates.NewRenderer(nil)
+	mockClient := runtimemocks.NewMockHTTPDoer(t)
+	mockClient.EXPECT().
+		Do(mock.AnythingOfType("*http.Request")).
+		RunAndReturn(func(req *http.Request) (*http.Response, error) {
+			headers := map[string]string{"Content-Type": "application/json"}
+			return newBackendResponse(403, `{"error":"forbidden"}`, headers), nil
+		})
+	agent := newRuleExecutionAgent(mockClient, nil, renderer)
+
+	def, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{
+		{
+			Name: "test-rule",
+			Backend: rulechain.BackendDefinitionSpec{
+				URL:      "http://backend/validate",
+				Method:   "GET",
+				Accepted: []int{200},
+			},
+			Responses: rulechain.ResponsesSpec{
+				Pass: rulechain.ResponseSpec{
+					Variables: map[string]string{
+						"status": "\"success\"",
+					},
+				},
+				Fail: rulechain.ResponseSpec{
+					Variables: map[string]string{
+						"error_code": "backend.status",
+						"error_msg":  "{{ .backend.body.error | upper }}",
+					},
+				},
+			},
+			Conditions: rulechain.ConditionSpec{
+				Pass: []string{"backend.status == 200"},
+			},
+		},
+	}, renderer)
+	require.NoError(t, err)
+	require.Len(t, def, 1)
+
+	req := httptest.NewRequest(http.MethodGet, "http://unit.test/request", nil)
+	state := pipeline.NewState(req, "test", "cache-key", "corr-123")
+	state.Admission.Authenticated = true
+	state.Rule.ShouldExecute = true
+	state.SetPlan(rulechain.ExecutionPlan{Rules: def})
+
+	ctx := context.Background()
+	result := agent.Execute(ctx, req, state)
+
+	require.Equal(t, "fail", result.Status)
+	require.Equal(t, "fail", state.Rule.Outcome)
+
+	// Only fail outcome variables should be exported (not pass)
+	require.NotNil(t, state.Rule.Variables.Exported)
+	require.Equal(t, int64(403), state.Rule.Variables.Exported["error_code"])
+	require.Equal(t, "FORBIDDEN", state.Rule.Variables.Exported["error_msg"])
+	require.NotContains(t, state.Rule.Variables.Exported, "status") // Pass variable not exported
+
+	// Check in state.Variables.Rules
+	require.Equal(t, int64(403), state.Variables.Rules["test-rule"]["error_code"])
+	require.Equal(t, "FORBIDDEN", state.Variables.Rules["test-rule"]["error_msg"])
+}

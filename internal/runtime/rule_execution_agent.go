@@ -171,6 +171,21 @@ func (a *ruleExecutionAgent) Execute(ctx context.Context, _ *http.Request, state
 	}
 }
 
+// finishRule evaluates exported variables and returns the outcome
+func (a *ruleExecutionAgent) finishRule(def rulechain.Definition, outcome, reason string, state *pipeline.State) (string, string, *rulechain.ResponseDefinition) {
+	resp := selectRuleResponse(def, outcome)
+	if err := a.evaluateExportedVariables(def.Name, resp, state); err != nil {
+		// Log error but don't fail the rule - exported variable evaluation is best-effort
+		if a.logger != nil {
+			a.logger.Warn("failed to evaluate exported variables",
+				slog.String("rule", def.Name),
+				slog.String("outcome", outcome),
+				slog.Any("error", err))
+		}
+	}
+	return outcome, reason, resp
+}
+
 func (a *ruleExecutionAgent) evaluateRule(ctx context.Context, def rulechain.Definition, state *pipeline.State) (string, string, *rulechain.ResponseDefinition) {
 	resetBackendState(&state.Backend)
 	state.Rule.Auth = pipeline.RuleAuthState{
@@ -179,18 +194,19 @@ func (a *ruleExecutionAgent) evaluateRule(ctx context.Context, def rulechain.Def
 	}
 	state.Rule.Variables.Rule = make(map[string]any)
 	state.Rule.Variables.Local = make(map[string]any)
+	state.Rule.Variables.Exported = make(map[string]any)
 
 	selection, authStatus, authReason := a.prepareRuleAuth(def.Auth, state)
 	if authStatus != "" {
 		switch authStatus {
 		case "fail":
 			reason := a.ruleMessage(def.FailTemplate, def.FailMessage, authReason, state)
-			return "fail", reason, selectRuleResponse(def, "fail")
+			return a.finishRule(def, "fail", reason, state)
 		case "error":
 			reason := a.ruleMessage(def.ErrorTemplate, def.ErrorMessage, authReason, state)
-			return "error", reason, selectRuleResponse(def, "error")
+			return a.finishRule(def, "error", reason, state)
 		default:
-			return authStatus, authReason, selectRuleResponse(def, authStatus)
+			return a.finishRule(def, authStatus, authReason, state)
 		}
 	}
 
@@ -198,7 +214,7 @@ func (a *ruleExecutionAgent) evaluateRule(ctx context.Context, def rulechain.Def
 		if err := a.invokeBackend(ctx, def.Backend, selection, state); err != nil {
 			state.Backend.Error = err.Error()
 			reason := a.ruleMessage(def.ErrorTemplate, def.ErrorMessage, fmt.Sprintf("backend request failed: %v", err), state)
-			return "error", reason, selectRuleResponse(def, "error")
+			return a.finishRule(def, "error", reason, state)
 		}
 	} else {
 		state.Backend.Accepted = true
@@ -206,34 +222,34 @@ func (a *ruleExecutionAgent) evaluateRule(ctx context.Context, def rulechain.Def
 
 	if err := a.evaluateRuleVariables(def, state); err != nil {
 		reason := a.ruleMessage(def.ErrorTemplate, def.ErrorMessage, fmt.Sprintf("variable extraction failed: %v", err), state)
-		return "error", reason, selectRuleResponse(def, "error")
+		return a.finishRule(def, "error", reason, state)
 	}
 
 	activation := buildActivation(state)
 
 	if matched, source, err := evaluateProgramList(def.Conditions.Error, activation, false); err != nil {
-		return "error", fmt.Sprintf("error condition %s evaluation failed: %v", source, err), selectRuleResponse(def, "error")
+		return a.finishRule(def, "error", fmt.Sprintf("error condition %s evaluation failed: %v", source, err), state)
 	} else if matched {
 		reason := a.ruleMessage(def.ErrorTemplate, def.ErrorMessage, fmt.Sprintf("error condition matched: %s", source), state)
-		return "error", reason, selectRuleResponse(def, "error")
+		return a.finishRule(def, "error", reason, state)
 	}
 
 	if matched, source, err := evaluateProgramList(def.Conditions.Fail, activation, false); err != nil {
-		return "error", fmt.Sprintf("fail condition %s evaluation failed: %v", source, err), selectRuleResponse(def, "error")
+		return a.finishRule(def, "error", fmt.Sprintf("fail condition %s evaluation failed: %v", source, err), state)
 	} else if matched {
 		reason := a.ruleMessage(def.FailTemplate, def.FailMessage, fmt.Sprintf("fail condition matched: %s", source), state)
-		return "fail", reason, selectRuleResponse(def, "fail")
+		return a.finishRule(def, "fail", reason, state)
 	}
 
 	if matched, source, err := evaluateProgramList(def.Conditions.Pass, activation, true); err != nil {
-		return "error", fmt.Sprintf("pass condition %s evaluation failed: %v", source, err), selectRuleResponse(def, "error")
+		return a.finishRule(def, "error", fmt.Sprintf("pass condition %s evaluation failed: %v", source, err), state)
 	} else if matched {
 		reason := a.ruleMessage(def.PassTemplate, def.PassMessage, fmt.Sprintf("pass conditions satisfied: %s", source), state)
-		return "pass", reason, selectRuleResponse(def, "pass")
+		return a.finishRule(def, "pass", reason, state)
 	}
 
 	if len(def.Conditions.Pass) > 0 {
-		return "fail", a.ruleMessage(def.FailTemplate, def.FailMessage, "required pass condition not satisfied", state), selectRuleResponse(def, "fail")
+		return a.finishRule(def, "fail", a.ruleMessage(def.FailTemplate, def.FailMessage, "required pass condition not satisfied", state), state)
 	}
 
 	if def.Backend.IsConfigured() && !state.Backend.Accepted {
@@ -241,10 +257,10 @@ func (a *ruleExecutionAgent) evaluateRule(ctx context.Context, def rulechain.Def
 		if state.Backend.Status != 0 {
 			fallback = fmt.Sprintf("backend response not accepted: status %d", state.Backend.Status)
 		}
-		return "fail", a.ruleMessage(def.FailTemplate, def.FailMessage, fallback, state), selectRuleResponse(def, "fail")
+		return a.finishRule(def, "fail", a.ruleMessage(def.FailTemplate, def.FailMessage, fallback, state), state)
 	}
 
-	return "pass", a.ruleMessage(def.PassTemplate, def.PassMessage, "rule evaluated without explicit outcome", state), selectRuleResponse(def, "pass")
+	return a.finishRule(def, "pass", a.ruleMessage(def.PassTemplate, def.PassMessage, "rule evaluated without explicit outcome", state), state)
 }
 
 func (a *ruleExecutionAgent) ruleMessage(tmpl *templates.Template, message, fallback string, state *pipeline.State) string {
@@ -996,6 +1012,49 @@ func buildRuleContext(state *pipeline.State) map[string]any {
 		"request":   request,
 		"variables": variables,
 	}
+}
+
+// evaluateExportedVariables evaluates exported variables from the winning outcome
+// and makes them available to subsequent rules as .rules.<rule-name>.variables.*
+func (a *ruleExecutionAgent) evaluateExportedVariables(ruleName string, resp *rulechain.ResponseDefinition, state *pipeline.State) error {
+	if resp == nil || len(resp.ExportedVariables) == 0 {
+		return nil
+	}
+
+	if a.ruleEvaluator == nil {
+		return fmt.Errorf("rule evaluator not initialized")
+	}
+
+	// Build rule context for evaluation (same as local variables)
+	ctx := buildRuleContext(state)
+
+	// Evaluate variables in sorted order for determinism
+	names := make([]string, 0, len(resp.ExportedVariables))
+	for name := range resp.ExportedVariables {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	exported := make(map[string]any, len(names))
+	for _, name := range names {
+		expression := resp.ExportedVariables[name]
+		value, err := a.ruleEvaluator.Evaluate(expression, ctx)
+		if err != nil {
+			return fmt.Errorf("exported variable %s: %w", name, err)
+		}
+		exported[name] = value
+	}
+
+	// Store exported variables for current rule
+	state.Rule.Variables.Exported = exported
+
+	// Store in state.Variables.Rules for access by subsequent rules
+	if state.Variables.Rules == nil {
+		state.Variables.Rules = make(map[string]map[string]any)
+	}
+	state.Variables.Rules[ruleName] = exported
+
+	return nil
 }
 
 func (a *ruleExecutionAgent) applyRuleResponse(ruleName string, resp rulechain.ResponseDefinition, state *pipeline.State) {

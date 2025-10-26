@@ -96,8 +96,9 @@ type RuleAuthState struct {
 
 // RuleVariableState captures the rule and local variable scopes for the active rule.
 type RuleVariableState struct {
-	Rule  map[string]any `json:"rule"`
-	Local map[string]any `json:"local"`
+	Rule     map[string]any `json:"rule"`
+	Local    map[string]any `json:"local"`
+	Exported map[string]any `json:"exported"`
 }
 
 // ResponseState is the HTTP response composed for the caller.

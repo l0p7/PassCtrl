@@ -65,10 +65,11 @@ type ConditionPrograms struct {
 
 // ResponseSpec captures templating controls for rule-level response overrides.
 type ResponseSpec struct {
-	Status   int
-	Body     string
-	BodyFile string
-	Headers  forwardpolicy.CategoryConfig
+	Status    int
+	Body      string
+	BodyFile  string
+	Headers   forwardpolicy.CategoryConfig
+	Variables map[string]string
 }
 
 // ResponsesSpec groups the rule-level response overrides per outcome.
@@ -96,6 +97,9 @@ type VariableSpec struct {
 type ResponseDefinition struct {
 	Headers         forwardpolicy.CategoryConfig
 	HeaderTemplates map[string]*templates.Template
+	// ExportedVariables holds variable expressions to evaluate after outcome is determined
+	// Evaluated with hybrid CEL/Template evaluator, accessible to subsequent rules
+	ExportedVariables map[string]string
 }
 
 // ResponsesDefinition groups compiled response overrides per outcome.
@@ -399,7 +403,8 @@ func compileResponseDefinition(ruleName, category string, spec ResponseSpec, ren
 			Strip:  append([]string{}, spec.Headers.Strip...),
 			Custom: cloneStringMap(spec.Headers.Custom),
 		},
-		HeaderTemplates: map[string]*templates.Template{},
+		HeaderTemplates:   map[string]*templates.Template{},
+		ExportedVariables: cloneStringMap(spec.Variables),
 	}
 
 	if renderer == nil {
