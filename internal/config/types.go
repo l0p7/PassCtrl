@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // Config holds every server-level option plus nested endpoint artifacts once they are loaded.
@@ -97,6 +98,7 @@ type DefinitionSkip struct {
 // consistent representation even while their execution logic is still landing.
 type EndpointConfig struct {
 	Description          string                             `koanf:"description"`
+	Variables            map[string]string                  `koanf:"variables"`
 	Authentication       EndpointAuthenticationConfig       `koanf:"authentication"`
 	ForwardProxyPolicy   EndpointForwardProxyPolicyConfig   `koanf:"forwardProxyPolicy"`
 	ForwardRequestPolicy EndpointForwardRequestPolicyConfig `koanf:"forwardRequestPolicy"`
@@ -219,23 +221,67 @@ type RuleResponsesConfig struct {
 }
 
 type RuleResponseConfig struct {
-	Headers ForwardRuleCategoryConfig `koanf:"headers"`
+	Headers   ForwardRuleCategoryConfig `koanf:"headers"`
+	Variables map[string]string         `koanf:"variables"`
 }
 
-type RuleVariablesConfig struct {
-	Global map[string]RuleVariableSpec `koanf:"global"`
-	Rule   map[string]RuleVariableSpec `koanf:"rule"`
-	Local  map[string]RuleVariableSpec `koanf:"local"`
-}
+// RuleVariablesConfig defines local variables scoped to the rule.
+// Variables are either CEL expressions or Go templates (detected by presence of {{).
+// Local variables are available within the rule for conditions and exported variables,
+// but are not exported to other rules or cached.
+type RuleVariablesConfig map[string]string
 
 type RuleVariableSpec struct {
 	From string `koanf:"from"`
 }
 
 type RuleCacheConfig struct {
-	FollowCacheControl bool   `koanf:"followCacheControl"`
-	PassTTL            string `koanf:"passTTL"`
-	FailTTL            string `koanf:"failTTL"`
+	FollowCacheControl bool              `koanf:"followCacheControl"`
+	TTL                RuleCacheTTLConfig `koanf:"ttl"`
+	Strict             *bool             `koanf:"strict"` // nil = true (default)
+}
+
+type RuleCacheTTLConfig struct {
+	Pass  string `koanf:"pass"`  // Duration: "5m", "30s", etc.
+	Fail  string `koanf:"fail"`  // Duration: "30s", "1m", etc.
+	Error string `koanf:"error"` // Always "0s" - errors never cached
+}
+
+// IsStrict returns true if the cache key should include upstream variable hashes.
+// Defaults to true (safe mode) if not explicitly set.
+func (c RuleCacheConfig) IsStrict() bool {
+	if c.Strict == nil {
+		return true
+	}
+	return *c.Strict
+}
+
+// GetTTL returns the configured TTL for the given outcome.
+// Error outcomes always return 0 (never cached).
+func (c RuleCacheConfig) GetTTL(outcome string) time.Duration {
+	if outcome == "error" {
+		return 0
+	}
+
+	var durationStr string
+	switch outcome {
+	case "pass":
+		durationStr = c.TTL.Pass
+	case "fail":
+		durationStr = c.TTL.Fail
+	default:
+		return 0
+	}
+
+	if durationStr == "" {
+		return 0
+	}
+
+	duration, err := time.ParseDuration(durationStr)
+	if err != nil {
+		return 0
+	}
+	return duration
 }
 
 // Validate enforces invariants that keep the runtime predictable before serving traffic.

@@ -30,7 +30,7 @@ var bearerOnlyAdmission = admission.Config{
 }
 
 func newTestPipelineState(req *http.Request) *pipeline.State {
-	return pipeline.NewState(req, "test", cacheKeyFromRequest(req, "test"), "")
+	return pipeline.NewState(req, "test", cacheKeyFromRequest(req, "test", &bearerOnlyAdmission), "")
 }
 
 func TestNewPipelineState(t *testing.T) {
@@ -40,7 +40,7 @@ func TestNewPipelineState(t *testing.T) {
 
 	state := newTestPipelineState(req)
 
-	require.Equal(t, "bearer-token|test|/v1/auth", state.CacheKey())
+	require.Equal(t, "auth:bearer-token|test|/v1/auth", state.CacheKey())
 	require.Equal(t, http.MethodPost, state.Raw.Method)
 	require.Equal(t, "bearer-token", state.Raw.Headers["authorization"])
 	require.NotNil(t, state.Response.Headers)

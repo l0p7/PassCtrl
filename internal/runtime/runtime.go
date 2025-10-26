@@ -22,6 +22,7 @@ import (
 	"github.com/l0p7/passctrl/internal/metrics"
 	"github.com/l0p7/passctrl/internal/runtime/admission"
 	"github.com/l0p7/passctrl/internal/runtime/cache"
+	"github.com/l0p7/passctrl/internal/runtime/endpointvars"
 	"github.com/l0p7/passctrl/internal/runtime/forwardpolicy"
 	"github.com/l0p7/passctrl/internal/runtime/pipeline"
 	"github.com/l0p7/passctrl/internal/runtime/responsepolicy"
@@ -71,8 +72,9 @@ type Pipeline struct {
 }
 
 type endpointRuntime struct {
-	name   string
-	agents []pipeline.Agent
+	name       string
+	authConfig admission.Config
+	agents     []pipeline.Agent
 }
 
 type endpointContextKey struct{}
@@ -347,7 +349,7 @@ func (p *Pipeline) ServeAuth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	correlationID := p.requestCorrelationID(r)
-	cacheKey := p.deriveCacheKey(r, endpointName)
+	cacheKey := p.deriveCacheKey(r, endpointRuntime)
 	state := pipeline.NewState(r, endpointName, cacheKey, correlationID)
 
 	reqLogger := p.logger.With(
@@ -357,27 +359,30 @@ func (p *Pipeline) ServeAuth(w http.ResponseWriter, r *http.Request) {
 
 	p.logDebugRequestSnapshot(r, reqLogger, state)
 
-	lookupStart := time.Now()
-	entry, ok, err := p.cache.Lookup(r.Context(), cacheKey)
-	if p.metrics != nil {
-		result := metrics.CacheLookupMiss
-		if err != nil {
-			result = metrics.CacheLookupError
-		} else if ok {
-			result = metrics.CacheLookupHit
+	// Skip cache lookup if cacheKey is empty (e.g., none: true endpoints)
+	if cacheKey != "" {
+		lookupStart := time.Now()
+		entry, ok, err := p.cache.Lookup(r.Context(), cacheKey)
+		if p.metrics != nil {
+			result := metrics.CacheLookupMiss
+			if err != nil {
+				result = metrics.CacheLookupError
+			} else if ok {
+				result = metrics.CacheLookupHit
+			}
+			p.metrics.ObserveCacheLookup(endpointName, result, time.Since(lookupStart))
 		}
-		p.metrics.ObserveCacheLookup(endpointName, result, time.Since(lookupStart))
-	}
-	if err != nil {
-		reqLogger.Error("cache lookup failed", slog.Any("error", err), slog.String("cache_key", cacheKey))
-	} else if ok {
-		state.Cache.Hit = true
-		state.Cache.Decision = entry.Decision
-		state.Cache.Stored = true
-		state.Cache.StoredAt = entry.StoredAt
-		state.Cache.ExpiresAt = entry.ExpiresAt
-		state.Response = resultcaching.ResponseFromCache(entry.Response)
-		state.Rule.Outcome = entry.Decision
+		if err != nil {
+			reqLogger.Error("cache lookup failed", slog.Any("error", err), slog.String("cache_key", cacheKey))
+		} else if ok {
+			state.Cache.Hit = true
+			state.Cache.Decision = entry.Decision
+			state.Cache.Stored = true
+			state.Cache.StoredAt = entry.StoredAt
+			state.Cache.ExpiresAt = entry.ExpiresAt
+			state.Response = resultcaching.ResponseFromCache(entry.Response)
+			state.Rule.Outcome = entry.Decision
+		}
 	}
 
 	for _, ag := range endpointRuntime.agents {
@@ -534,8 +539,14 @@ func (p *Pipeline) ServeExplain(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (p *Pipeline) deriveCacheKey(r *http.Request, endpoint string) string {
-	raw := cacheKeyFromRequest(r, endpoint)
+func (p *Pipeline) deriveCacheKey(r *http.Request, ep *endpointRuntime) string {
+	// Disable caching for endpoints that allow anonymous authentication
+	// to prevent cache poisoning when rules use request-specific data
+	if ep.authConfig.Allow.None {
+		return ""
+	}
+
+	raw := cacheKeyFromRequest(r, ep.name, &ep.authConfig)
 	sum := sha256.Sum256(append(p.cacheSalt, []byte(raw)...))
 	encoded := base64.RawURLEncoding.EncodeToString(sum[:])
 	return fmt.Sprintf("%s:%d:%s", p.cacheNamespace, p.cacheEpoch, encoded)
@@ -640,14 +651,15 @@ func (p *Pipeline) installFallbackEndpoint() {
 		slog.String("endpoint", "default"),
 	)
 	trusted := defaultTrustedNetworks()
+	defaultAuthConfig := admission.Config{
+		Required: false,
+		Allow: admission.AllowConfig{
+			Authorization: []string{"basic", "bearer"},
+		},
+	}
 	agents := []pipeline.Agent{
 		&serverAgent{},
-		admission.New(trusted, false, admission.Config{
-			Required: false,
-			Allow: admission.AllowConfig{
-				Authorization: []string{"basic", "bearer"},
-			},
-		}),
+		admission.New(trusted, false, defaultAuthConfig),
 		forwardpolicy.New(forwardpolicy.DefaultConfig()),
 		rulechain.NewAgent(rulechain.DefaultDefinitions(p.templateRenderer)),
 		newRuleExecutionAgent(nil, ruleExecutionLogger, p.templateRenderer),
@@ -660,8 +672,9 @@ func (p *Pipeline) installFallbackEndpoint() {
 		}),
 	}
 	runtime := &endpointRuntime{
-		name:   "default",
-		agents: p.instrumentAgents("default", agents),
+		name:       "default",
+		authConfig: defaultAuthConfig,
+		agents:     p.instrumentAgents("default", agents),
 	}
 	p.endpoints[strings.ToLower(runtime.name)] = runtime
 	p.defaultEndpoint = runtime
@@ -729,10 +742,30 @@ func (p *Pipeline) buildEndpointRuntime(name string, cfg config.EndpointConfig, 
 	}
 
 	trusted := append(defaultTrustedNetworks(), admission.ParseCIDRs(cfg.ForwardProxyPolicy.TrustedProxyIPs)...)
+	authConfig := admissionConfigFromEndpoint(cfg.Authentication)
+
+	// Build endpoint variables agent (evaluates endpoint.variables before rules)
+	var endpointVarsAgent pipeline.Agent
+	if len(cfg.Variables) > 0 {
+		evAgent, err := endpointvars.New(cfg.Variables, p.templateRenderer, p.logger.With(slog.String("agent", "endpoint_variables"), slog.String("endpoint", trimmed)))
+		if err != nil {
+			return nil, fmt.Errorf("build endpoint variables agent: %w", err)
+		}
+		endpointVarsAgent = evAgent
+	}
+
 	agents := []pipeline.Agent{
 		&serverAgent{},
-		admission.New(trusted, cfg.ForwardProxyPolicy.DevelopmentMode, admissionConfigFromEndpoint(cfg.Authentication)),
+		admission.New(trusted, cfg.ForwardProxyPolicy.DevelopmentMode, authConfig),
 		forwardpolicy.New(forwardPolicyFromConfig(cfg.ForwardRequestPolicy)),
+	}
+
+	// Add endpoint variables agent if configured
+	if endpointVarsAgent != nil {
+		agents = append(agents, endpointVarsAgent)
+	}
+
+	agents = append(agents,
 		rulechain.NewAgent(ruleDefs),
 		newRuleExecutionAgent(nil, p.logger.With(slog.String("agent", "rule_execution"), slog.String("endpoint", trimmed)), p.templateRenderer),
 		responsepolicy.NewWithConfig(responsepolicy.Config{
@@ -775,9 +808,13 @@ func (p *Pipeline) buildEndpointRuntime(name string, cfg config.EndpointConfig, 
 			Logger:  p.logger.With(slog.String("agent", "result_caching"), slog.String("endpoint", trimmed)),
 			Metrics: p.metrics,
 		}),
-	}
+	)
 
-	runtime := &endpointRuntime{name: trimmed, agents: p.instrumentAgents(trimmed, agents)}
+	runtime := &endpointRuntime{
+		name:       trimmed,
+		authConfig: authConfig,
+		agents:     p.instrumentAgents(trimmed, agents),
+	}
 	if p.defaultEndpoint == nil {
 		p.defaultEndpoint = runtime
 	}
@@ -972,11 +1009,10 @@ func buildRuleResponseSpec(cfg config.RuleResponseConfig) rulechain.ResponseSpec
 }
 
 func buildRuleVariablesSpec(cfg config.RuleVariablesConfig) rulechain.VariablesSpec {
-	return rulechain.VariablesSpec{
-		Global: buildRuleVariableMap(cfg.Global),
-		Rule:   buildRuleVariableMap(cfg.Rule),
-		Local:  buildRuleVariableMap(cfg.Local),
-	}
+	// TODO(PassCtrl-40): Implement local variable handling with v2 schema
+	// cfg is now map[string]string for local variables only
+	// This will be updated when implementing hybrid CEL/Template evaluation for rules
+	return rulechain.VariablesSpec{}
 }
 
 func buildRuleVariableMap(cfg map[string]config.RuleVariableSpec) map[string]rulechain.VariableSpec {

@@ -58,6 +58,15 @@ func (a *Agent) Execute(ctx context.Context, _ *http.Request, state *pipeline.St
 		}
 	}
 
+	// Skip caching if cache key is empty (e.g., none: true endpoints)
+	if state.CacheKey() == "" {
+		return pipeline.Result{
+			Name:    a.Name(),
+			Status:  "bypassed",
+			Details: "caching disabled for this endpoint",
+		}
+	}
+
 	storedAt := time.Now().UTC()
 	ttl := a.ttl
 	if ttl <= 0 {
