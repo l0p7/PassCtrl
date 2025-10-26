@@ -25,7 +25,8 @@ import (
 )
 
 var bearerOnlyAdmission = admission.Config{
-	Allow: admission.AllowConfig{Authorization: []string{"bearer"}},
+	Required: true,
+	Allow:    admission.AllowConfig{Authorization: []string{"bearer"}},
 }
 
 func newTestPipelineState(req *http.Request) *pipeline.State {

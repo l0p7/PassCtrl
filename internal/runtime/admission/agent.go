@@ -99,19 +99,24 @@ func (a *Agent) Execute(_ context.Context, r *http.Request, state *pipeline.Stat
 		state.Admission.Authenticated = true
 		state.Admission.Reason = annotateReason("authentication requirements satisfied", state.Admission.ProxyNote)
 	} else {
-		state.Admission.Authenticated = false
-		state.Admission.Reason = annotateReason("no allowed credentials present", state.Admission.ProxyNote)
-		if header := a.challengeHeader(); header != "" {
-			if state.Response.Headers == nil {
-				state.Response.Headers = make(map[string]string)
+		if a.cfg.Required {
+			state.Admission.Authenticated = false
+			state.Admission.Reason = annotateReason("no allowed credentials present", state.Admission.ProxyNote)
+			if header := a.challengeHeader(); header != "" {
+				if state.Response.Headers == nil {
+					state.Response.Headers = make(map[string]string)
+				}
+				state.Response.Headers["WWW-Authenticate"] = header
+				if state.Response.Status == 0 {
+					state.Response.Status = http.StatusUnauthorized
+				}
+				if strings.TrimSpace(state.Response.Message) == "" {
+					state.Response.Message = "authentication required"
+				}
 			}
-			state.Response.Headers["WWW-Authenticate"] = header
-			if state.Response.Status == 0 {
-				state.Response.Status = http.StatusUnauthorized
-			}
-			if strings.TrimSpace(state.Response.Message) == "" {
-				state.Response.Message = "authentication required"
-			}
+		} else {
+			state.Admission.Authenticated = true
+			state.Admission.Reason = annotateReason("optional authentication not provided", state.Admission.ProxyNote)
 		}
 	}
 

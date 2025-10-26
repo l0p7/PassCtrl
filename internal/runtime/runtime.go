@@ -991,8 +991,12 @@ func buildRuleVariableMap(cfg map[string]config.RuleVariableSpec) map[string]rul
 }
 
 func admissionConfigFromEndpoint(cfg config.EndpointAuthenticationConfig) admission.Config {
+	required := true
+	if cfg.Required != nil {
+		required = *cfg.Required
+	}
 	return admission.Config{
-		Required: cfg.Required,
+		Required: required,
 		Allow: admission.AllowConfig{
 			Authorization: cloneStringSlice(cfg.Allow.Authorization),
 			Header:        cloneStringSlice(cfg.Allow.Header),

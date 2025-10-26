@@ -47,7 +47,7 @@ Endpoints live under the `endpoints` key. Each endpoint wires together admission
 | Field | Description | Upstream Impact | Response Impact |
 | --- | --- | --- | --- |
 | `description` | Optional operator-facing summary. | None. | None. |
-| `authentication.required` | Whether admission must succeed before rule execution. | If `false`, endpoint may continue with anonymous callers. | Failed admission triggers `responsePolicy.fail`. |
+| `authentication.required` | Whether admission must succeed before rule execution (defaults to `true`). | If `false`, endpoint may continue with anonymous callers; captured credentials may be empty. | When `true`, failed admission triggers `responsePolicy.fail`; when `false`, rules must handle missing credentials (e.g., via `auth.type: none`). |
 | `authentication.allow` | Accepted authentication mechanisms (`basic`, `bearer`, `header`, `query`). | Determines which credentials can seed rule execution. | Drives the `WWW-Authenticate` hint when admission fails. |
 | `authentication.challenge` | Value placed in the `WWW-Authenticate` header on failure. | None. | Advertises authentication expectations to callers. |
 | `forwardProxyPolicy.trustedProxyIPs` | CIDR list of trusted proxies. | Determines whether proxy headers are honored. | Admission failures occur when requests originate from untrusted hops. |

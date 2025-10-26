@@ -173,6 +173,7 @@ func TestAgentEmitsChallengeWhenUnauthenticated(t *testing.T) {
 	req.RemoteAddr = "203.0.113.5:443"
 
 	cfg := Config{
+		Required: true,
 		Allow: AllowConfig{
 			Header: []string{"X-Api-Key"},
 		},
@@ -191,6 +192,26 @@ func TestAgentEmitsChallengeWhenUnauthenticated(t *testing.T) {
 	require.Equal(t, http.StatusUnauthorized, state.Response.Status)
 	assert.Equal(t, `Basic realm="passctrl"`, state.Response.Headers["WWW-Authenticate"])
 	assert.NotEmpty(t, state.Response.Message)
+}
+
+func TestAgentAllowsOptionalAuthenticationWithoutCredentials(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/auth", nil)
+	req.RemoteAddr = "203.0.113.5:443"
+
+	cfg := Config{
+		Required: false,
+		Allow: AllowConfig{
+			Authorization: []string{"bearer"},
+		},
+	}
+
+	agent := New(nil, false, cfg)
+	state := pipeline.NewState(req, "endpoint", "cache", "corr")
+
+	res := agent.Execute(context.Background(), req, state)
+	require.Equal(t, "pass", res.Status)
+	require.True(t, state.Admission.Authenticated, "optional endpoints should treat missing credentials as acceptable")
+	require.Empty(t, state.Response.Headers["WWW-Authenticate"])
 }
 
 func TestPrepareForwardedMetadata(t *testing.T) {

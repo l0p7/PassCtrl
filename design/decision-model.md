@@ -13,8 +13,9 @@ previous one and emits a typed result that downstream stages can reference.
 - Extract the original URL from the `X-Forwarded-*` family (or RFC7239 `Forwarded` header), normalize headers/query parameters, and capture the immutable raw
   request snapshot (`rawState`).
 - Evaluate endpoint-level authentication requirements by walking the ordered `authentication.allow` providers (basic, bearer, header, query, none);
-  capture every credential that matches and surface them to later stages. Failure exits through the response policy’s
-  `fail` branch with the configured challenge.
+  capture every credential that matches and surface them to later stages. When `authentication.required` is `true` (default), failure exits through the
+  response policy’s `fail` branch with the configured challenge. When `false`, the pipeline records an unauthenticated admission but continues, leaving
+  rules to decide how to treat missing credentials.
 
 ## Stage 2: Forward Request Policy
 - Start with the raw request snapshot and determine which headers and query parameters rules may see.

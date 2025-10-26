@@ -106,7 +106,7 @@ type EndpointConfig struct {
 }
 
 type EndpointAuthenticationConfig struct {
-	Required  bool                        `koanf:"required"`
+	Required  *bool                       `koanf:"required"`
 	Allow     EndpointAuthAllowConfig     `koanf:"allow"`
 	Challenge EndpointAuthChallengeConfig `koanf:"challenge"`
 }
