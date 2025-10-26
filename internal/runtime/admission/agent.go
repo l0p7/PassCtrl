@@ -2,7 +2,9 @@ package admission
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/netip"
@@ -12,13 +14,40 @@ import (
 	"github.com/l0p7/passctrl/internal/runtime/pipeline"
 )
 
+// Config describes the admission rules for an endpoint.
+type Config struct {
+	Required  bool
+	Allow     AllowConfig
+	Challenge ChallengeConfig
+}
+
+// AllowConfig lists the credential providers accepted by the endpoint.
+type AllowConfig struct {
+	Authorization []string
+	Header        []string
+	Query         []string
+	None          bool
+}
+
+// ChallengeConfig controls the WWW-Authenticate response emitted on failure.
+type ChallengeConfig struct {
+	Type    string
+	Realm   string
+	Charset string
+}
+
 type Agent struct {
 	trustedNetworks []netip.Prefix
 	developmentMode bool
+	cfg             Config
 }
 
-func New(trusted []netip.Prefix, development bool) *Agent {
-	return &Agent{trustedNetworks: trusted, developmentMode: development}
+func New(trusted []netip.Prefix, development bool, cfg Config) *Agent {
+	return &Agent{
+		trustedNetworks: trusted,
+		developmentMode: development,
+		cfg:             sanitizeConfig(cfg),
+	}
 }
 
 func (a *Agent) Name() string { return "admission" }
@@ -33,6 +62,8 @@ func (a *Agent) Execute(_ context.Context, r *http.Request, state *pipeline.Stat
 	state.Admission.ClientIP = remoteHost(r.RemoteAddr)
 	state.Admission.Decision = ""
 	state.Admission.Snapshot = nil
+	state.Admission.Allow = admissionAllowSnapshot(a.cfg.Allow)
+	state.Admission.Credentials = nil
 
 	if state.Admission.ForwardedFor != "" || state.Admission.Forwarded != "" {
 		addr, err := parseRemoteIP(r.RemoteAddr)
@@ -61,12 +92,32 @@ func (a *Agent) Execute(_ context.Context, r *http.Request, state *pipeline.Stat
 		}
 	}
 
-	if token := r.Header.Get("Authorization"); token != "" {
+	matches := a.collectCredentials(r)
+	state.Admission.Credentials = matches
+
+	if len(matches) > 0 {
 		state.Admission.Authenticated = true
-		state.Admission.Reason = annotateReason("authorization header accepted", state.Admission.ProxyNote)
+		state.Admission.Reason = annotateReason("authentication requirements satisfied", state.Admission.ProxyNote)
 	} else {
-		state.Admission.Authenticated = false
-		state.Admission.Reason = annotateReason("authorization header missing", state.Admission.ProxyNote)
+		if a.cfg.Required {
+			state.Admission.Authenticated = false
+			state.Admission.Reason = annotateReason("no allowed credentials present", state.Admission.ProxyNote)
+			if header := a.challengeHeader(); header != "" {
+				if state.Response.Headers == nil {
+					state.Response.Headers = make(map[string]string)
+				}
+				state.Response.Headers["WWW-Authenticate"] = header
+				if state.Response.Status == 0 {
+					state.Response.Status = http.StatusUnauthorized
+				}
+				if strings.TrimSpace(state.Response.Message) == "" {
+					state.Response.Message = "authentication required"
+				}
+			}
+		} else {
+			state.Admission.Authenticated = true
+			state.Admission.Reason = annotateReason("optional authentication not provided", state.Admission.ProxyNote)
+		}
 	}
 
 	return a.finish(state, "")
@@ -89,6 +140,13 @@ func (a *Agent) finish(state *pipeline.State, status string) pipeline.Result {
 		"forwarded":     state.Admission.Forwarded,
 		"proxyNote":     state.Admission.ProxyNote,
 		"capturedAt":    state.Admission.CapturedAt,
+		"allow": map[string]any{
+			"authorization": append([]string{}, state.Admission.Allow.Authorization...),
+			"header":        append([]string{}, state.Admission.Allow.Header...),
+			"query":         append([]string{}, state.Admission.Allow.Query...),
+			"none":          state.Admission.Allow.None,
+		},
+		"credentials": cloneAdmissionCredentials(state.Admission.Credentials),
 	}
 	if status == "" {
 		status = decision
@@ -201,6 +259,202 @@ func stripForwardedHeaders(r *http.Request) {
 			r.Header.Del(name)
 		}
 	}
+}
+
+func sanitizeConfig(cfg Config) Config {
+	out := cfg
+	out.Allow.Authorization = sanitizeAuthorizationList(cfg.Allow.Authorization)
+	out.Allow.Header = sanitizeList(cfg.Allow.Header)
+	out.Allow.Query = sanitizeList(cfg.Allow.Query)
+	out.Challenge.Type = strings.ToLower(strings.TrimSpace(cfg.Challenge.Type))
+	out.Challenge.Realm = strings.TrimSpace(cfg.Challenge.Realm)
+	out.Challenge.Charset = strings.TrimSpace(cfg.Challenge.Charset)
+	return out
+}
+
+func sanitizeList(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	return out
+}
+
+func sanitizeAuthorizationList(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(strings.ToLower(value))
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	return out
+}
+
+func (a *Agent) collectCredentials(r *http.Request) []pipeline.AdmissionCredential {
+	var matches []pipeline.AdmissionCredential
+
+	authHeader := strings.TrimSpace(r.Header.Get("Authorization"))
+	scheme, param := parseAuthorization(authHeader)
+
+	if allowsAuthorization(a.cfg.Allow.Authorization, "basic") && strings.EqualFold(scheme, "basic") {
+		if user, pass, ok := decodeBasicCredential(param); ok {
+			matches = append(matches, pipeline.AdmissionCredential{
+				Type:     "basic",
+				Username: user,
+				Password: pass,
+				Source:   "authorization",
+			})
+		}
+	}
+
+	if allowsAuthorization(a.cfg.Allow.Authorization, "bearer") && strings.EqualFold(scheme, "bearer") {
+		token := strings.TrimSpace(param)
+		if token != "" {
+			matches = append(matches, pipeline.AdmissionCredential{
+				Type:   "bearer",
+				Token:  token,
+				Source: "authorization",
+			})
+		}
+	}
+
+	if len(a.cfg.Allow.Header) > 0 {
+		for _, name := range a.cfg.Allow.Header {
+			if value := strings.TrimSpace(r.Header.Get(name)); value != "" {
+				matches = append(matches, pipeline.AdmissionCredential{
+					Type:   "header",
+					Name:   name,
+					Value:  value,
+					Source: fmt.Sprintf("header:%s", name),
+				})
+			}
+		}
+	}
+
+	if len(a.cfg.Allow.Query) > 0 && r.URL != nil {
+		values := r.URL.Query()
+		for _, name := range a.cfg.Allow.Query {
+			if value := strings.TrimSpace(values.Get(name)); value != "" {
+				matches = append(matches, pipeline.AdmissionCredential{
+					Type:   "query",
+					Name:   name,
+					Value:  value,
+					Source: fmt.Sprintf("query:%s", name),
+				})
+			}
+		}
+	}
+
+	if a.cfg.Allow.None {
+		matches = append(matches, pipeline.AdmissionCredential{
+			Type:   "none",
+			Source: "anonymous",
+		})
+	}
+
+	return matches
+}
+
+func parseAuthorization(header string) (string, string) {
+	if header == "" {
+		return "", ""
+	}
+	parts := strings.SplitN(header, " ", 2)
+	if len(parts) == 0 {
+		return "", ""
+	}
+	if len(parts) == 1 {
+		return strings.TrimSpace(parts[0]), ""
+	}
+	return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+}
+
+func decodeBasicCredential(payload string) (string, string, bool) {
+	decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(payload))
+	if err != nil {
+		return "", "", false
+	}
+	creds := string(decoded)
+	if creds == "" {
+		return "", "", false
+	}
+	parts := strings.SplitN(creds, ":", 2)
+	if len(parts) != 2 {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
+}
+
+func (a *Agent) challengeHeader() string {
+	if a.cfg.Challenge.Type == "" || a.cfg.Challenge.Realm == "" {
+		return ""
+	}
+	switch a.cfg.Challenge.Type {
+	case "basic":
+		header := fmt.Sprintf(`Basic realm="%s"`, escapeChallengeValue(a.cfg.Challenge.Realm))
+		if a.cfg.Challenge.Charset != "" {
+			header = fmt.Sprintf(`%s, charset="%s"`, header, escapeChallengeValue(a.cfg.Challenge.Charset))
+		}
+		return header
+	case "bearer":
+		return fmt.Sprintf(`Bearer realm="%s"`, escapeChallengeValue(a.cfg.Challenge.Realm))
+	default:
+		return ""
+	}
+}
+
+func escapeChallengeValue(in string) string {
+	replacer := strings.NewReplacer(`\`, `\\`, `"`, `\"`)
+	return replacer.Replace(in)
+}
+
+func admissionAllowSnapshot(cfg AllowConfig) pipeline.AdmissionAllow {
+	return pipeline.AdmissionAllow{
+		Authorization: append([]string{}, cfg.Authorization...),
+		Header:        append([]string{}, cfg.Header...),
+		Query:         append([]string{}, cfg.Query...),
+		None:          cfg.None,
+	}
+}
+
+func cloneAdmissionCredentials(in []pipeline.AdmissionCredential) []pipeline.AdmissionCredential {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]pipeline.AdmissionCredential, len(in))
+	copy(out, in)
+	return out
+}
+
+func allowsAuthorization(list []string, kind string) bool {
+	for _, value := range list {
+		if value == kind {
+			return true
+		}
+	}
+	return false
 }
 
 var (

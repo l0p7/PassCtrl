@@ -123,12 +123,9 @@ rules:
         - lookup(vars.global, "tier") in ["free", "suspended"]
     responses:
       fail:
-        status: 403
-        body: |
-          {
-            "error": "upgrade required",
-            "tier": "{{ index .vars.global \"tier\" }}"
-          }
+        headers:
+          custom:
+            X-PassCtrl-Tier: "{{ index .vars.global \"tier\" }}"
     cache:
       passTTL: "0s"
       failTTL: "0s"

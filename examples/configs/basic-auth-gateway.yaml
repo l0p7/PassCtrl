@@ -64,16 +64,12 @@ rules:
           password: "{{ .auth.input.password }}"
     responses:
       pass:
-        status: 200
-        body: |
-          {
-            "message": "authenticated"
-          }
+        headers:
+          custom:
+            X-Auth-Result: "authenticated"
       fail:
-        status: 401
-        body: |
-          {
-            "message": "invalid credentials"
-          }
+        headers:
+          custom:
+            X-Auth-Result: "invalid credentials"
     cache:
       resultTTL: "0s"

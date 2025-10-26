@@ -186,6 +186,7 @@ func (p *Pipeline) logDebugDecisionSnapshot(ctx context.Context, logger *slog.Lo
 		slog.Bool("admission_authenticated", state.Admission.Authenticated),
 		slog.Bool("admission_trusted_proxy", state.Admission.TrustedProxy),
 		slog.Bool("admission_proxy_stripped", state.Admission.ProxyStripped),
+		slog.Int("admission_credential_count", len(state.Admission.Credentials)),
 		slog.Int("forward_header_count", len(state.Forward.Headers)),
 		slog.Int("forward_query_count", len(state.Forward.Query)),
 		slog.String("rule_outcome", state.Rule.Outcome),
@@ -248,12 +249,16 @@ func summarizeRuleHistory(entries []pipeline.RuleHistoryEntry) []map[string]any 
 	}
 	summary := make([]map[string]any, 0, len(entries))
 	for _, entry := range entries {
-		summary = append(summary, map[string]any{
+		item := map[string]any{
 			"name":        entry.Name,
 			"outcome":     entry.Outcome,
 			"reason":      entry.Reason,
 			"duration_ms": float64(entry.Duration) / float64(time.Millisecond),
-		})
+		}
+		if len(entry.Variables) > 0 {
+			item["variables"] = cloneInterfaceMap(entry.Variables)
+		}
+		summary = append(summary, item)
 	}
 	return summary
 }
@@ -637,7 +642,12 @@ func (p *Pipeline) installFallbackEndpoint() {
 	trusted := defaultTrustedNetworks()
 	agents := []pipeline.Agent{
 		&serverAgent{},
-		admission.New(trusted, false),
+		admission.New(trusted, false, admission.Config{
+			Required: false,
+			Allow: admission.AllowConfig{
+				Authorization: []string{"basic", "bearer"},
+			},
+		}),
 		forwardpolicy.New(forwardpolicy.DefaultConfig()),
 		rulechain.NewAgent(rulechain.DefaultDefinitions(p.templateRenderer)),
 		newRuleExecutionAgent(nil, ruleExecutionLogger, p.templateRenderer),
@@ -721,7 +731,7 @@ func (p *Pipeline) buildEndpointRuntime(name string, cfg config.EndpointConfig, 
 	trusted := append(defaultTrustedNetworks(), admission.ParseCIDRs(cfg.ForwardProxyPolicy.TrustedProxyIPs)...)
 	agents := []pipeline.Agent{
 		&serverAgent{},
-		admission.New(trusted, cfg.ForwardProxyPolicy.DevelopmentMode),
+		admission.New(trusted, cfg.ForwardProxyPolicy.DevelopmentMode, admissionConfigFromEndpoint(cfg.Authentication)),
 		forwardpolicy.New(forwardPolicyFromConfig(cfg.ForwardRequestPolicy)),
 		rulechain.NewAgent(ruleDefs),
 		newRuleExecutionAgent(nil, p.logger.With(slog.String("agent", "rule_execution"), slog.String("endpoint", trimmed)), p.templateRenderer),
@@ -815,6 +825,17 @@ func cloneStringMap(in map[string]string) map[string]string {
 	return out
 }
 
+func cloneInterfaceMap(in map[string]any) map[string]any {
+	if len(in) == 0 {
+		return map[string]any{}
+	}
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
 func cloneStringSlice(in []string) []string {
 	if len(in) == 0 {
 		return nil
@@ -863,6 +884,7 @@ func compileConfiguredRules(rules map[string]config.RuleConfig, renderer *templa
 		specs := []rulechain.DefinitionSpec{{
 			Name:        trimmedName,
 			Description: cfg.Description,
+			Auth:        buildRuleAuthSpec(cfg.Auth),
 			Conditions: rulechain.ConditionSpec{
 				Pass:  append([]string{}, cfg.Conditions.Pass...),
 				Fail:  append([]string{}, cfg.Conditions.Fail...),
@@ -890,9 +912,11 @@ func compileConfiguredRules(rules map[string]config.RuleConfig, renderer *templa
 					MaxPages: cfg.BackendAPI.Pagination.MaxPages,
 				},
 			},
-			PassMessage:  strings.TrimSpace(cfg.Responses.Pass.Body),
-			FailMessage:  strings.TrimSpace(cfg.Responses.Fail.Body),
-			ErrorMessage: strings.TrimSpace(cfg.Responses.Error.Body),
+			PassMessage:  "",
+			FailMessage:  "",
+			ErrorMessage: "",
+			Responses:    buildRuleResponsesSpec(cfg.Responses),
+			Variables:    buildRuleVariablesSpec(cfg.Variables),
 		}}
 
 		defs, err := rulechain.CompileDefinitions(specs, renderer)
@@ -905,4 +929,84 @@ func compileConfiguredRules(rules map[string]config.RuleConfig, renderer *templa
 		compiled[trimmedName] = defs[0]
 	}
 	return compiled, nil
+}
+
+func buildRuleAuthSpec(directives []config.RuleAuthDirective) []rulechain.AuthDirectiveSpec {
+	if len(directives) == 0 {
+		return nil
+	}
+	specs := make([]rulechain.AuthDirectiveSpec, 0, len(directives))
+	for _, directive := range directives {
+		specs = append(specs, rulechain.AuthDirectiveSpec{
+			Type: strings.TrimSpace(directive.Type),
+			Name: strings.TrimSpace(directive.Name),
+			Forward: rulechain.AuthForwardSpec{
+				Type:     strings.TrimSpace(directive.ForwardAs.Type),
+				Name:     directive.ForwardAs.Name,
+				Value:    directive.ForwardAs.Value,
+				Token:    directive.ForwardAs.Token,
+				User:     directive.ForwardAs.User,
+				Password: directive.ForwardAs.Password,
+			},
+		})
+	}
+	return specs
+}
+
+func buildRuleResponsesSpec(cfg config.RuleResponsesConfig) rulechain.ResponsesSpec {
+	return rulechain.ResponsesSpec{
+		Pass:  buildRuleResponseSpec(cfg.Pass),
+		Fail:  buildRuleResponseSpec(cfg.Fail),
+		Error: buildRuleResponseSpec(cfg.Error),
+	}
+}
+
+func buildRuleResponseSpec(cfg config.RuleResponseConfig) rulechain.ResponseSpec {
+	return rulechain.ResponseSpec{
+		Headers: forwardpolicy.CategoryConfig{
+			Allow:  append([]string{}, cfg.Headers.Allow...),
+			Strip:  append([]string{}, cfg.Headers.Strip...),
+			Custom: cloneStringMap(cfg.Headers.Custom),
+		},
+	}
+}
+
+func buildRuleVariablesSpec(cfg config.RuleVariablesConfig) rulechain.VariablesSpec {
+	return rulechain.VariablesSpec{
+		Global: buildRuleVariableMap(cfg.Global),
+		Rule:   buildRuleVariableMap(cfg.Rule),
+		Local:  buildRuleVariableMap(cfg.Local),
+	}
+}
+
+func buildRuleVariableMap(cfg map[string]config.RuleVariableSpec) map[string]rulechain.VariableSpec {
+	if len(cfg) == 0 {
+		return nil
+	}
+	out := make(map[string]rulechain.VariableSpec, len(cfg))
+	for name, spec := range cfg {
+		out[name] = rulechain.VariableSpec{From: spec.From}
+	}
+	return out
+}
+
+func admissionConfigFromEndpoint(cfg config.EndpointAuthenticationConfig) admission.Config {
+	required := true
+	if cfg.Required != nil {
+		required = *cfg.Required
+	}
+	return admission.Config{
+		Required: required,
+		Allow: admission.AllowConfig{
+			Authorization: cloneStringSlice(cfg.Allow.Authorization),
+			Header:        cloneStringSlice(cfg.Allow.Header),
+			Query:         cloneStringSlice(cfg.Allow.Query),
+			None:          cfg.Allow.None,
+		},
+		Challenge: admission.ChallengeConfig{
+			Type:    cfg.Challenge.Type,
+			Realm:   cfg.Challenge.Realm,
+			Charset: cfg.Challenge.Charset,
+		},
+	}
 }

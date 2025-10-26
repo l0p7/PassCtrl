@@ -2,6 +2,7 @@ package admission
 
 import (
 	"context"
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -28,21 +29,31 @@ func mustPrefixes(t *testing.T, cidrs []string) []netip.Prefix {
 	return prefixes
 }
 
+func basicAuth(user, pass string) string {
+	creds := user + ":" + pass
+	return base64.StdEncoding.EncodeToString([]byte(creds))
+}
+
 func TestAgentExecute(t *testing.T) {
 	tests := []struct {
 		name         string
 		trustedCIDRs []string
 		development  bool
+		cfg          Config
 		setup        func(t *testing.T) (*http.Request, *pipeline.State)
 		expect       func(t *testing.T, res pipeline.Result, state *pipeline.State, req *http.Request)
 	}{
 		{
 			name:         "rejects forwarded chain when proxy untrusted",
 			trustedCIDRs: []string{"192.0.2.0/24"},
+			cfg: Config{
+				Allow: AllowConfig{Authorization: []string{"bearer"}},
+			},
 			setup: func(t *testing.T) (*http.Request, *pipeline.State) {
 				req := httptest.NewRequest(http.MethodGet, "http://example.com/auth", nil)
 				req.RemoteAddr = "192.0.2.10:443"
 				req.Header.Set("X-Forwarded-For", "198.51.100.5, 203.0.113.7, 192.0.2.10")
+				req.Header.Set("Authorization", "Bearer token")
 				state := pipeline.NewState(req, "endpoint", "cache", "corr")
 				return req, state
 			},
@@ -56,6 +67,9 @@ func TestAgentExecute(t *testing.T) {
 		{
 			name:         "accepts forwarded chain from trusted proxies",
 			trustedCIDRs: []string{"192.0.2.0/24", "203.0.113.0/24"},
+			cfg: Config{
+				Allow: AllowConfig{Authorization: []string{"bearer"}},
+			},
 			setup: func(t *testing.T) (*http.Request, *pipeline.State) {
 				req := httptest.NewRequest(http.MethodGet, "http://example.com/auth", nil)
 				req.RemoteAddr = "192.0.2.10:80"
@@ -75,6 +89,9 @@ func TestAgentExecute(t *testing.T) {
 			name:         "development mode strips invalid forwarded metadata",
 			trustedCIDRs: []string{"192.0.2.0/24"},
 			development:  true,
+			cfg: Config{
+				Allow: AllowConfig{Authorization: []string{"bearer"}},
+			},
 			setup: func(t *testing.T) (*http.Request, *pipeline.State) {
 				req := httptest.NewRequest(http.MethodGet, "http://example.com/auth", nil)
 				req.RemoteAddr = "192.0.2.10:80"
@@ -99,13 +116,102 @@ func TestAgentExecute(t *testing.T) {
 			t.Parallel()
 			req, state := tc.setup(t)
 			prefixes := mustPrefixes(t, tc.trustedCIDRs)
-			agent := New(prefixes, tc.development)
+			agent := New(prefixes, tc.development, tc.cfg)
 
 			res := agent.Execute(context.Background(), req, state)
 
 			tc.expect(t, res, state, req)
 		})
 	}
+}
+
+func TestAgentCollectsCredentialsAndChallenge(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/auth?token=query-token", nil)
+	req.RemoteAddr = "203.0.113.5:443"
+	req.Header.Set("Authorization", "Basic "+basicAuth("user", "pass"))
+	req.Header.Set("X-Api-Token", "header-token")
+
+	cfg := Config{
+		Allow: AllowConfig{
+			Authorization: []string{"basic"},
+			Header:        []string{"X-Api-Token"},
+			Query:         []string{"token"},
+			None:          true,
+		},
+	}
+
+	agent := New(nil, false, cfg)
+	state := pipeline.NewState(req, "endpoint", "cache", "corr")
+
+	res := agent.Execute(context.Background(), req, state)
+	require.Equal(t, "pass", res.Status)
+	require.True(t, state.Admission.Authenticated)
+	require.Len(t, state.Admission.Credentials, 4, "expected basic, header, query, none credentials")
+
+	types := make([]string, 0, len(state.Admission.Credentials))
+	for _, cred := range state.Admission.Credentials {
+		types = append(types, cred.Type)
+	}
+	assert.Contains(t, types, "basic")
+	assert.Contains(t, types, "header")
+	assert.Contains(t, types, "query")
+	assert.Contains(t, types, "none")
+
+	var basicCred pipeline.AdmissionCredential
+	for _, cred := range state.Admission.Credentials {
+		if cred.Type == "basic" {
+			basicCred = cred
+			break
+		}
+	}
+	require.NotEmpty(t, basicCred.Username)
+	require.NotEmpty(t, basicCred.Password)
+}
+
+func TestAgentEmitsChallengeWhenUnauthenticated(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/auth", nil)
+	req.RemoteAddr = "203.0.113.5:443"
+
+	cfg := Config{
+		Required: true,
+		Allow: AllowConfig{
+			Header: []string{"X-Api-Key"},
+		},
+		Challenge: ChallengeConfig{
+			Type:  "basic",
+			Realm: "passctrl",
+		},
+	}
+
+	agent := New(nil, false, cfg)
+	state := pipeline.NewState(req, "endpoint", "cache", "corr")
+
+	res := agent.Execute(context.Background(), req, state)
+	require.Equal(t, "fail", res.Status)
+	require.False(t, state.Admission.Authenticated)
+	require.Equal(t, http.StatusUnauthorized, state.Response.Status)
+	assert.Equal(t, `Basic realm="passctrl"`, state.Response.Headers["WWW-Authenticate"])
+	assert.NotEmpty(t, state.Response.Message)
+}
+
+func TestAgentAllowsOptionalAuthenticationWithoutCredentials(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/auth", nil)
+	req.RemoteAddr = "203.0.113.5:443"
+
+	cfg := Config{
+		Required: false,
+		Allow: AllowConfig{
+			Authorization: []string{"bearer"},
+		},
+	}
+
+	agent := New(nil, false, cfg)
+	state := pipeline.NewState(req, "endpoint", "cache", "corr")
+
+	res := agent.Execute(context.Background(), req, state)
+	require.Equal(t, "pass", res.Status)
+	require.True(t, state.Admission.Authenticated, "optional endpoints should treat missing credentials as acceptable")
+	require.Empty(t, state.Response.Headers["WWW-Authenticate"])
 }
 
 func TestPrepareForwardedMetadata(t *testing.T) {
@@ -134,7 +240,7 @@ func TestPrepareForwardedMetadata(t *testing.T) {
 		},
 	}
 
-	agent := New(nil, false)
+	agent := New(nil, false, Config{})
 
 	for _, tc := range tests {
 		tc := tc

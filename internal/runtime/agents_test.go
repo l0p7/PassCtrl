@@ -24,6 +24,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+var bearerOnlyAdmission = admission.Config{
+	Required: true,
+	Allow:    admission.AllowConfig{Authorization: []string{"bearer"}},
+}
+
 func newTestPipelineState(req *http.Request) *pipeline.State {
 	return pipeline.NewState(req, "test", cacheKeyFromRequest(req, "test"), "")
 }
@@ -46,7 +51,7 @@ func TestNewPipelineState(t *testing.T) {
 func TestAdmissionAgentExecute(t *testing.T) {
 	trusted := admission.ParseCIDRs([]string{"127.0.0.0/8"})
 	t.Run("passes with authorization and trusted proxy", func(t *testing.T) {
-		agent := admission.New(admission.ParseCIDRs([]string{"127.0.0.0/8", "198.51.100.0/24"}), false)
+		agent := admission.New(admission.ParseCIDRs([]string{"127.0.0.0/8", "198.51.100.0/24"}), false, bearerOnlyAdmission)
 		t.Logf("trusted networks: %#v", agent)
 		req := httptest.NewRequest(http.MethodGet, "http://example.com/auth", http.NoBody)
 		req.RemoteAddr = "127.0.0.1:12345"
@@ -65,7 +70,7 @@ func TestAdmissionAgentExecute(t *testing.T) {
 	})
 
 	t.Run("rejects untrusted proxy in production", func(t *testing.T) {
-		agent := admission.New(trusted, false)
+		agent := admission.New(trusted, false, bearerOnlyAdmission)
 		req := httptest.NewRequest(http.MethodGet, "http://example.com/auth", http.NoBody)
 		req.RemoteAddr = "198.51.100.10:443"
 		req.Header.Set("Authorization", "Bearer token")
@@ -79,7 +84,7 @@ func TestAdmissionAgentExecute(t *testing.T) {
 	})
 
 	t.Run("accepts forwarded chain when remote is trusted", func(t *testing.T) {
-		agent := admission.New(admission.ParseCIDRs([]string{"127.0.0.0/8", "198.51.100.0/24"}), false)
+		agent := admission.New(admission.ParseCIDRs([]string{"127.0.0.0/8", "198.51.100.0/24"}), false, bearerOnlyAdmission)
 		req := httptest.NewRequest(http.MethodGet, "http://example.com/auth", http.NoBody)
 		req.RemoteAddr = "127.0.0.1:12345"
 		req.Header.Set("Authorization", "Bearer token")
@@ -94,7 +99,7 @@ func TestAdmissionAgentExecute(t *testing.T) {
 	})
 
 	t.Run("strips forwarded headers in development", func(t *testing.T) {
-		agent := admission.New(admission.ParseCIDRs([]string{"127.0.0.0/8", "198.51.100.0/24"}), true)
+		agent := admission.New(admission.ParseCIDRs([]string{"127.0.0.0/8", "198.51.100.0/24"}), true, bearerOnlyAdmission)
 		req := httptest.NewRequest(http.MethodGet, "http://example.com/auth", http.NoBody)
 		req.RemoteAddr = "198.51.100.10:443"
 		req.Header.Set("X-Forwarded-For", "203.0.113.7, 203.0.113.8")
@@ -109,12 +114,12 @@ func TestAdmissionAgentExecute(t *testing.T) {
 		require.Empty(t, req.Header.Get("X-Forwarded-For"))
 		require.Empty(t, req.Header.Get("Forwarded"))
 		require.Empty(t, state.Admission.Forwarded)
-		require.Contains(t, state.Admission.Reason, "authorization header missing")
+		require.Contains(t, state.Admission.Reason, "no allowed credentials present")
 		require.Empty(t, req.Header.Get("X-Forwarded-Prefix"))
 	})
 
 	t.Run("development mode keeps forwarded chain when remote is trusted", func(t *testing.T) {
-		agent := admission.New(admission.ParseCIDRs([]string{"127.0.0.0/8", "198.51.100.0/24"}), true)
+		agent := admission.New(admission.ParseCIDRs([]string{"127.0.0.0/8", "198.51.100.0/24"}), true, bearerOnlyAdmission)
 		req := httptest.NewRequest(http.MethodGet, "http://example.com/auth", http.NoBody)
 		req.RemoteAddr = "127.0.0.1:12345"
 		req.Header.Set("Authorization", "Bearer token")
@@ -131,7 +136,7 @@ func TestAdmissionAgentExecute(t *testing.T) {
 	})
 
 	t.Run("rejects invalid forwarded chain", func(t *testing.T) {
-		agent := admission.New(trusted, false)
+		agent := admission.New(trusted, false, bearerOnlyAdmission)
 		req := httptest.NewRequest(http.MethodGet, "http://example.com/auth", http.NoBody)
 		req.RemoteAddr = "127.0.0.1:12345"
 		req.Header.Set("Authorization", "Bearer token")
@@ -145,7 +150,7 @@ func TestAdmissionAgentExecute(t *testing.T) {
 	})
 
 	t.Run("accepts RFC7239 forwarded header", func(t *testing.T) {
-		agent := admission.New(trusted, false)
+		agent := admission.New(trusted, false, bearerOnlyAdmission)
 		req := httptest.NewRequest(http.MethodGet, "http://example.com/auth", http.NoBody)
 		req.RemoteAddr = "127.0.0.1:12345"
 		req.Header.Set("Authorization", "Bearer token")
@@ -162,7 +167,7 @@ func TestAdmissionAgentExecute(t *testing.T) {
 	})
 
 	t.Run("rejects mismatched forwarded metadata", func(t *testing.T) {
-		agent := admission.New(trusted, false)
+		agent := admission.New(trusted, false, bearerOnlyAdmission)
 		req := httptest.NewRequest(http.MethodGet, "http://example.com/auth", http.NoBody)
 		req.RemoteAddr = "127.0.0.1:12345"
 		req.Header.Set("Authorization", "Bearer token")
@@ -177,7 +182,7 @@ func TestAdmissionAgentExecute(t *testing.T) {
 	})
 
 	t.Run("rejects obfuscated forwarded directive", func(t *testing.T) {
-		agent := admission.New(trusted, false)
+		agent := admission.New(trusted, false, bearerOnlyAdmission)
 		req := httptest.NewRequest(http.MethodGet, "http://example.com/auth", http.NoBody)
 		req.RemoteAddr = "127.0.0.1:12345"
 		req.Header.Set("Authorization", "Bearer token")
@@ -191,7 +196,7 @@ func TestAdmissionAgentExecute(t *testing.T) {
 	})
 
 	t.Run("captures invalid remote address", func(t *testing.T) {
-		agent := admission.New(trusted, false)
+		agent := admission.New(trusted, false, bearerOnlyAdmission)
 		req := httptest.NewRequest(http.MethodGet, "http://example.com/auth", http.NoBody)
 		req.RemoteAddr = "bad-addr"
 		req.Header.Set("X-Forwarded-For", "203.0.113.7")
@@ -204,7 +209,7 @@ func TestAdmissionAgentExecute(t *testing.T) {
 	})
 
 	t.Run("records decision snapshot on success", func(t *testing.T) {
-		agent := admission.New(trusted, false)
+		agent := admission.New(trusted, false, bearerOnlyAdmission)
 		req := httptest.NewRequest(http.MethodGet, "http://example.com/auth", http.NoBody)
 		req.RemoteAddr = "127.0.0.1:12345"
 		req.Header.Set("Authorization", "Bearer token")
@@ -217,11 +222,11 @@ func TestAdmissionAgentExecute(t *testing.T) {
 		require.NotNil(t, state.Admission.Snapshot)
 		reason, ok := state.Admission.Snapshot["reason"].(string)
 		require.True(t, ok)
-		require.Contains(t, reason, "accepted")
+		require.Contains(t, reason, "authentication requirements satisfied")
 	})
 
 	t.Run("records decision snapshot on missing credentials", func(t *testing.T) {
-		agent := admission.New(trusted, false)
+		agent := admission.New(trusted, false, bearerOnlyAdmission)
 		req := httptest.NewRequest(http.MethodGet, "http://example.com/auth", http.NoBody)
 		req.RemoteAddr = "127.0.0.1:12345"
 
@@ -233,7 +238,7 @@ func TestAdmissionAgentExecute(t *testing.T) {
 		require.NotNil(t, state.Admission.Snapshot)
 		reason, ok := state.Admission.Snapshot["reason"].(string)
 		require.True(t, ok)
-		require.Contains(t, reason, "missing")
+		require.Contains(t, reason, "no allowed credentials present")
 	})
 }
 

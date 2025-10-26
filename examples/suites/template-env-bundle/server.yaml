@@ -70,9 +70,6 @@ rules:
         - admission.authenticated == false
     responses:
       fail:
-        status: 403
-        body: |
-          {
-            "error": "authentication required",
-            "contact": "{{ env \"SUPPORT_EMAIL\" }}"
-          }
+        headers:
+          custom:
+            X-Support-Contact: "{{ env \"SUPPORT_EMAIL\" }}"

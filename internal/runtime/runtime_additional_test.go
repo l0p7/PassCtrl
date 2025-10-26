@@ -35,7 +35,7 @@ func TestPipelineFallbackEndpoint(t *testing.T) {
 	require.True(t, pipe.EndpointExists("default"), "expected fallback endpoint to be discoverable")
 
 	req := httptest.NewRequest(http.MethodGet, "http://example.com/auth?error=false", http.NoBody)
-	req.Header.Set("Authorization", "token")
+	req.Header.Set("Authorization", "Bearer token")
 	req.Header.Set("X-PassCtrl-Deny", "false")
 	rec := httptest.NewRecorder()
 	pipe.ServeAuth(rec, req)

@@ -17,6 +17,22 @@ func TestConfigValidate(t *testing.T) {
 	conflictingRules := cfg
 	conflictingRules.Server.Rules.RulesFile = "rules.yaml"
 	require.Error(t, conflictingRules.Validate())
+
+	endpointWithoutAllow := cfg
+	endpointWithoutAllow.Endpoints = map[string]EndpointConfig{
+		"default": {},
+	}
+	require.Error(t, endpointWithoutAllow.Validate())
+
+	validEndpoint := cfg
+	validEndpoint.Endpoints = map[string]EndpointConfig{
+		"default": {
+			Authentication: EndpointAuthenticationConfig{
+				Allow: EndpointAuthAllowConfig{Authorization: []string{"bearer"}},
+			},
+		},
+	}
+	require.NoError(t, validEndpoint.Validate())
 }
 
 func TestDefaultConfigValues(t *testing.T) {

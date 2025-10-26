@@ -12,8 +12,10 @@ previous one and emits a typed result that downstream stages can reference.
   header families.
 - Extract the original URL from the `X-Forwarded-*` family (or RFC7239 `Forwarded` header), normalize headers/query parameters, and capture the immutable raw
   request snapshot (`rawState`).
-- Evaluate endpoint-level authentication requirements before any rule logic runs; failure exits through the response policy’s
-  `fail` branch with the configured challenge.
+- Evaluate endpoint-level authentication requirements by walking the ordered `authentication.allow` providers (basic, bearer, header, query, none);
+  capture every credential that matches and surface them to later stages. When `authentication.required` is `true` (default), failure exits through the
+  response policy’s `fail` branch with the configured challenge. When `false`, the pipeline records an unauthenticated admission but continues, leaving
+  rules to decide how to treat missing credentials.
 
 ## Stage 2: Forward Request Policy
 - Start with the raw request snapshot and determine which headers and query parameters rules may see.
@@ -27,11 +29,12 @@ previous one and emits a typed result that downstream stages can reference.
 - Each rule may include:
   - **auth** — an ordered list of accepted credential directives. Each entry names a source `type`
     (`basic`, `bearer`, `header`, `query`, or `none`), optional selector attributes such as `name`, and an inline `forwardAs`
-    block when the credential should be transformed before reaching the backend. Omitting `forwardAs` forwards the credential in
-    its original shape (e.g., Basic remains Basic). When present, `forwardAs` may declare a new credential `type` and populate
-    fields such as `token`, `user`, `password`, `name`, or `value` using Go templates (with Sprig helpers). The matched
-    credential is surfaced to templates as `.auth.input.*`, enabling rewrites like converting a Basic password into a Bearer
-    token or prefixing a captured header value.
+    block when the credential should be transformed before reaching the backend. Entries are evaluated sequentially; the first
+    directive that matches a captured credential is used. Omitting `forwardAs` forwards the credential in its original shape
+    (e.g., Basic remains Basic). When present, `forwardAs` may declare a new credential `type` and populate fields such as
+    `token`, `user`, `password`, `name`, or `value` using Go templates (with Sprig helpers). The matched credential is surfaced
+    to templates and CEL as `.auth.input.*`, and the synthesized outbound credential appears under `.auth.forward.*`. If no entry
+    matches and no directive specifies `type: none`, the rule fails before any backend call occurs.
   - **backendApi** — the target URL, HTTP method, accepted response status codes, pagination behavior, and the same
     allow/strip/custom controls for headers and query parameters used by the forward policy. Header and query names are literal,
     while request bodies and custom values are rendered via Go templates (with Sprig helpers).
@@ -39,7 +42,7 @@ previous one and emits a typed result that downstream stages can reference.
     CEL programs that inspect response headers/bodies to override outcomes. Helper functions such as `lookup(map, key)` return
     `null` for missing entries so conditions can probe optional headers, query parameters, or backend payloads without raising
     evaluation errors.
-  - **responses** — pass/fail/error response descriptors containing status codes, header directives, and bodies. Header values and bodies may use Go templates (with Sprig helpers) independent of the rule-condition pipeline.
+  - **responses** — pass/fail/error response descriptors containing header directives only. Header values may use Go templates (with Sprig helpers) independent of the rule-condition pipeline.
   - **variables** — extractions scoped as `global`, `rule`, or `local` for sharing data between rules. Each `from` directive is a CEL program evaluated against the rule context.
 - Variable scopes behave as follows:
   - `global` variables are visible to all rules as `.variables.<name>` (or `variables.<name>`) and may be overwritten by later
@@ -57,8 +60,8 @@ previous one and emits a typed result that downstream stages can reference.
   errors.
 - Within each category, allow templates to read the original raw request snapshot plus any variables emitted by rules.
 - Provide `allowHeaders` / `stripHeaders` / `customHeaders` tooling and `body`/`bodyFile` templating to construct the final HTTP
-  response, starting from the backend status code and header set captured from the decisive rule unless explicitly overridden.
-  Header overrides may use Go templates (with Sprig) or JMESPath expressions.
+  response. Endpoint response policy owns status codes and bodies, while rule responses may layer additional headers via their
+  `responses.*.headers` directives. Header overrides may use Go templates (with Sprig) or JMESPath expressions.
 - Default behavior, when a category is unspecified, returns the canonical forward-auth statuses (200 on pass, 401/403 on fail,
   5xx on error). The `/auth` response body remains minimal (outcome, message, endpoint, correlation ID, cache flag) to avoid
   exposing internal state; use `/explain` and logs for detailed diagnostics.

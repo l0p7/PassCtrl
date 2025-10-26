@@ -116,12 +116,10 @@ rules:
         - lookup(vars.global, "validated_token") == ""
     responses:
       fail:
-        status: 403
-        body: |
-          {
-            "error": "subscription check failed",
-            "plan": "{{ index .vars.global \"subscription_plan\" }}"
-          }
+        headers:
+          custom:
+            X-PassCtrl-Reason: "subscription check failed"
+            X-PassCtrl-Plan: "{{ index .vars.global \"subscription_plan\" }}"
     cache:
       passTTL: "0s"
       failTTL: "0s"

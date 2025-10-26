@@ -42,17 +42,19 @@ type RawState struct {
 
 // AdmissionState records authentication and proxy policy decisions.
 type AdmissionState struct {
-	Authenticated bool           `json:"authenticated"`
-	Reason        string         `json:"reason,omitempty"`
-	CapturedAt    time.Time      `json:"capturedAt"`
-	ClientIP      string         `json:"clientIp,omitempty"`
-	TrustedProxy  bool           `json:"trustedProxy"`
-	ProxyStripped bool           `json:"proxyStripped"`
-	ForwardedFor  string         `json:"forwardedFor,omitempty"`
-	Forwarded     string         `json:"forwarded,omitempty"`
-	ProxyNote     string         `json:"proxyNote,omitempty"`
-	Decision      string         `json:"decision"`
-	Snapshot      map[string]any `json:"snapshot,omitempty"`
+	Authenticated bool                  `json:"authenticated"`
+	Reason        string                `json:"reason,omitempty"`
+	CapturedAt    time.Time             `json:"capturedAt"`
+	ClientIP      string                `json:"clientIp,omitempty"`
+	TrustedProxy  bool                  `json:"trustedProxy"`
+	ProxyStripped bool                  `json:"proxyStripped"`
+	ForwardedFor  string                `json:"forwardedFor,omitempty"`
+	Forwarded     string                `json:"forwarded,omitempty"`
+	ProxyNote     string                `json:"proxyNote,omitempty"`
+	Decision      string                `json:"decision"`
+	Snapshot      map[string]any        `json:"snapshot,omitempty"`
+	Allow         AdmissionAllow        `json:"allow"`
+	Credentials   []AdmissionCredential `json:"credentials,omitempty"`
 }
 
 // ForwardState exposes the curated headers and query parameters the forward
@@ -71,14 +73,31 @@ type RuleState struct {
 	EvaluatedAt   time.Time          `json:"evaluatedAt"`
 	ShouldExecute bool               `json:"-"`
 	History       []RuleHistoryEntry `json:"history,omitempty"`
+	Auth          RuleAuthState      `json:"auth"`
+	Variables     RuleVariableState  `json:"variables"`
 }
 
 // RuleHistoryEntry records the result of a single rule within the chain.
 type RuleHistoryEntry struct {
-	Name     string        `json:"name"`
-	Outcome  string        `json:"outcome"`
-	Reason   string        `json:"reason,omitempty"`
-	Duration time.Duration `json:"duration"`
+	Name      string         `json:"name"`
+	Outcome   string         `json:"outcome"`
+	Reason    string         `json:"reason,omitempty"`
+	Duration  time.Duration  `json:"duration"`
+	Variables map[string]any `json:"variables,omitempty"`
+}
+
+// RuleAuthState surfaces the matched authentication directive and forwarding
+// metadata for templates and observability.
+type RuleAuthState struct {
+	Selected string         `json:"selected"`
+	Input    map[string]any `json:"input"`
+	Forward  map[string]any `json:"forward,omitempty"`
+}
+
+// RuleVariableState captures the rule and local variable scopes for the active rule.
+type RuleVariableState struct {
+	Rule  map[string]any `json:"rule"`
+	Local map[string]any `json:"local"`
 }
 
 // ResponseState is the HTTP response composed for the caller.
@@ -122,6 +141,12 @@ type BackendPageState struct {
 	Accepted bool              `json:"accepted"`
 }
 
+// VariablesState tracks shared variables exposed across rules and responses.
+type VariablesState struct {
+	Global map[string]any            `json:"global"`
+	Rules  map[string]map[string]any `json:"rules"`
+}
+
 // State is the shared context threaded through every agent in the pipeline.
 type State struct {
 	cacheKey string
@@ -138,6 +163,27 @@ type State struct {
 	Response  ResponseState  `json:"response"`
 	Cache     CacheState     `json:"cache"`
 	Backend   BackendState   `json:"backend"`
+	Variables VariablesState `json:"variables"`
+}
+
+// AdmissionAllow mirrors the endpoint authentication configuration so rules can
+// reason about permitted credential sources.
+type AdmissionAllow struct {
+	Authorization []string `json:"authorization"`
+	Header        []string `json:"header"`
+	Query         []string `json:"query"`
+	None          bool     `json:"none"`
+}
+
+// AdmissionCredential records a credential that satisfied the admission policy.
+type AdmissionCredential struct {
+	Type     string `json:"type"`
+	Name     string `json:"name,omitempty"`
+	Value    string `json:"value,omitempty"`
+	Token    string `json:"token,omitempty"`
+	Username string `json:"username,omitempty"`
+	Password string `json:"password,omitempty"`
+	Source   string `json:"source,omitempty"`
 }
 
 // NewState captures the inbound request metadata and initializes the shared
@@ -179,6 +225,20 @@ func NewState(r *http.Request, endpoint, cacheKey, correlationID string) *State 
 		Backend: BackendState{
 			Headers: make(map[string]string),
 		},
+		Rule: RuleState{
+			Auth: RuleAuthState{
+				Input:   make(map[string]any),
+				Forward: make(map[string]any),
+			},
+			Variables: RuleVariableState{
+				Rule:  make(map[string]any),
+				Local: make(map[string]any),
+			},
+		},
+		Variables: VariablesState{
+			Global: make(map[string]any),
+			Rules:  make(map[string]map[string]any),
+		},
 	}
 }
 
@@ -212,6 +272,69 @@ func (s *State) TemplateContext() map[string]any {
 		"cache":         s.Cache,
 		"backend":       s.Backend,
 	}
+	ctx["auth"] = s.Rule.Auth.templateContext()
+	vars := s.VariablesContext()
+	ctx["variables"] = vars
+	ctx["vars"] = vars
+	ctx["chain"] = s.Rule.History
+	rules := make(map[string]any, len(s.Variables.Rules))
+	for name, vars := range s.Variables.Rules {
+		rules[name] = map[string]any{
+			"variables": cloneAnyMap(vars),
+		}
+	}
+	ctx["rules"] = rules
 	ctx["state"] = s
 	return ctx
+}
+
+func (a RuleAuthState) templateContext() map[string]any {
+	input := a.Input
+	if input == nil {
+		input = map[string]any{}
+	}
+	forward := a.Forward
+	if forward == nil {
+		forward = map[string]any{}
+	}
+	return map[string]any{
+		"selected": a.Selected,
+		"input":    input,
+		"forward":  forward,
+	}
+}
+
+func (s *State) VariablesContext() map[string]any {
+	if s == nil {
+		return map[string]any{
+			"global": map[string]any{},
+			"rule":   map[string]any{},
+			"local":  map[string]any{},
+			"rules":  map[string]any{},
+		}
+	}
+	global := cloneAnyMap(s.Variables.Global)
+	rule := cloneAnyMap(s.Rule.Variables.Rule)
+	local := cloneAnyMap(s.Rule.Variables.Local)
+	rules := make(map[string]any, len(s.Variables.Rules))
+	for name, vars := range s.Variables.Rules {
+		rules[name] = cloneAnyMap(vars)
+	}
+	return map[string]any{
+		"global": global,
+		"rule":   rule,
+		"local":  local,
+		"rules":  rules,
+	}
+}
+
+func cloneAnyMap(in map[string]any) map[string]any {
+	if len(in) == 0 {
+		return map[string]any{}
+	}
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }

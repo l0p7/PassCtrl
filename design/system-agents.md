@@ -40,6 +40,9 @@ outputs, and operational concerns for each participant.
   - Reject untrusted proxies in production; optionally strip and annotate in development mode.
   - Normalise and validate both the legacy `X-Forwarded-*` family **and** RFC7239 `Forwarded` header, keeping the first hop in
     sync across both representations before surfacing trusted client metadata.
+  - Evaluate `authentication.allow` providers (basic, bearer, header, query, none), capture every credential that matches, and
+    expose the full set to downstream rules while failing fast when no providers are satisfied.
+  - Emit a `WWW-Authenticate` response using the configured challenge when admission fails and a challenge is defined.
   - Issue the configured failure response when admission fails, short-circuiting the rest of the pipeline.
   - Emit structured telemetry identifying client metadata, authentication outcome, and proxy evaluation.
 
@@ -68,6 +71,8 @@ outputs, and operational concerns for each participant.
 - **Outputs**: Rule outcome, rendered responses (status, headers, bodies), exported variables.
 - **Key Behaviors**:
   - Accept credentials via the ordered `auth` directives, with optional `forwardAs` transformations.
+  - Evaluate rule authentication directives sequentially, forwarding the first matched credential (or failing early when none
+    match and no `type: none` fallback exists) according to the configured `forwardAs` block.
   - Render backend requests using templated fields, invoke the API, and evaluate pass/fail/error conditions via CEL.
   - Honor rule-level caching directives and ensure error outcomes bypass caching.
   - Evaluate declarative `whenAll`/`failWhen`/`errorWhen` condition blocks sourced from the chain agent, populating execution history and per-rule reasons for downstream explanation.
