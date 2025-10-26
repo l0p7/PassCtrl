@@ -171,11 +171,11 @@ func TestHybridEvaluator_Empty(t *testing.T) {
 
 	result, err := evaluator.Evaluate("", nil)
 	require.NoError(t, err)
-	require.Equal(t, "", result)
+	require.Empty(t, result)
 
 	result, err = evaluator.Evaluate("   ", nil)
 	require.NoError(t, err)
-	require.Equal(t, "", result)
+	require.Empty(t, result)
 }
 
 func TestRequestContext(t *testing.T) {

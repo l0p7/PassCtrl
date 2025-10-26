@@ -46,16 +46,30 @@ type ruleResponseApplication struct {
 }
 
 type ruleExecutionAgent struct {
-	client   httpDoer
-	logger   *slog.Logger
-	renderer *templates.Renderer
+	client        httpDoer
+	logger        *slog.Logger
+	renderer      *templates.Renderer
+	ruleEvaluator *expr.HybridEvaluator
 }
 
 func newRuleExecutionAgent(client httpDoer, logger *slog.Logger, renderer *templates.Renderer) *ruleExecutionAgent {
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}
 	}
-	return &ruleExecutionAgent{client: client, logger: logger, renderer: renderer}
+	// Create hybrid evaluator for rule local variables
+	ruleEvaluator, err := expr.NewRuleHybridEvaluator(renderer)
+	if err != nil {
+		// Log error but continue - we'll fail gracefully during variable evaluation
+		if logger != nil {
+			logger.Warn("failed to create rule evaluator", slog.Any("error", err))
+		}
+	}
+	return &ruleExecutionAgent{
+		client:        client,
+		logger:        logger,
+		renderer:      renderer,
+		ruleEvaluator: ruleEvaluator,
+	}
 }
 
 func (a *ruleExecutionAgent) Name() string { return "rule_execution" }
@@ -820,7 +834,10 @@ func responseHasOverrides(resp rulechain.ResponseDefinition) bool {
 
 func (a *ruleExecutionAgent) evaluateRuleVariables(def rulechain.Definition, state *pipeline.State) error {
 	vars := def.Variables
-	if len(vars.Global) == 0 && len(vars.Rule) == 0 && len(vars.Local) == 0 {
+	hasV1 := len(vars.Global) > 0 || len(vars.Rule) > 0 || len(vars.Local) > 0
+	hasV2 := len(vars.LocalV2) > 0
+
+	if !hasV1 && !hasV2 {
 		return nil
 	}
 
@@ -845,6 +862,7 @@ func (a *ruleExecutionAgent) evaluateRuleVariables(def rulechain.Definition, sta
 		}
 	}
 
+	// V1 evaluation (legacy)
 	evaluateScope := func(scope string, defs map[string]rulechain.VariableDefinition, assign func(string, any)) error {
 		if len(defs) == 0 {
 			return nil
@@ -892,7 +910,92 @@ func (a *ruleExecutionAgent) evaluateRuleVariables(def rulechain.Definition, sta
 		return err
 	}
 
+	// V2 evaluation (hybrid CEL/Template for local variables)
+	if hasV2 {
+		if err := a.evaluateLocalVariablesV2(vars.LocalV2, state); err != nil {
+			return fmt.Errorf("local variables: %w", err)
+		}
+	}
+
 	return nil
+}
+
+// evaluateLocalVariablesV2 evaluates v2 local variables using hybrid CEL/Template evaluator
+func (a *ruleExecutionAgent) evaluateLocalVariablesV2(localVars map[string]string, state *pipeline.State) error {
+	if len(localVars) == 0 {
+		return nil
+	}
+
+	if a.ruleEvaluator == nil {
+		return fmt.Errorf("rule evaluator not initialized")
+	}
+
+	// Build rule context for evaluation
+	ctx := buildRuleContext(state)
+
+	// Evaluate variables in sorted order for determinism
+	names := make([]string, 0, len(localVars))
+	for name := range localVars {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		expression := localVars[name]
+		value, err := a.ruleEvaluator.Evaluate(expression, ctx)
+		if err != nil {
+			return fmt.Errorf("%s: %w", name, err)
+		}
+		state.Rule.Variables.Local[name] = value
+
+		// Also update ctx.variables for subsequent variable evaluations
+		if variables, ok := ctx["variables"].(map[string]any); ok {
+			variables[name] = value
+		}
+	}
+
+	return nil
+}
+
+// buildRuleContext creates the context for rule variable evaluation
+func buildRuleContext(state *pipeline.State) map[string]any {
+	// Build backend context
+	backend := map[string]any{
+		"requested": state.Backend.Requested,
+		"status":    state.Backend.Status,
+		"headers":   toAnyMap(state.Backend.Headers),
+		"body":      state.Backend.Body,
+		"bodyText":  state.Backend.BodyText,
+		"error":     state.Backend.Error,
+		"accepted":  state.Backend.Accepted,
+	}
+
+	// Build auth context
+	auth := map[string]any{
+		"selected": state.Rule.Auth.Selected,
+		"input":    cloneAnyMap(state.Rule.Auth.Input),
+		"forward":  cloneAnyMap(state.Rule.Auth.Forward),
+	}
+
+	// Build request context
+	request := map[string]any{
+		"method":  state.Raw.Method,
+		"path":    state.Raw.Path,
+		"host":    state.Raw.Host,
+		"headers": toAnyMap(state.Raw.Headers),
+		"query":   toAnyMap(state.Raw.Query),
+	}
+
+	// Variables context includes already-evaluated local variables
+	variables := cloneAnyMap(state.Rule.Variables.Local)
+
+	return map[string]any{
+		"backend":   backend,
+		"auth":      auth,
+		"vars":      state.VariablesContext(),
+		"request":   request,
+		"variables": variables,
+	}
 }
 
 func (a *ruleExecutionAgent) applyRuleResponse(ruleName string, resp rulechain.ResponseDefinition, state *pipeline.State) {

@@ -295,22 +295,6 @@ func validateConditionList(env *expr.Environment, name string, expressions []str
 	return nil
 }
 
-func validateVariableScope(env *expr.Environment, scope string, variables map[string]RuleVariableSpec) error {
-	if len(variables) == 0 {
-		return nil
-	}
-	for name, spec := range variables {
-		trimmed := strings.TrimSpace(spec.From)
-		if trimmed == "" {
-			continue
-		}
-		if _, err := env.CompileValue(trimmed); err != nil {
-			return fmt.Errorf("variables.%s[%s]: %w", scope, name, err)
-		}
-	}
-	return nil
-}
-
 func collectRuleSources(ctx context.Context, rulesCfg RulesConfig) ([]string, error) {
 	if rulesCfg.RulesFile != "" {
 		select {

@@ -83,6 +83,8 @@ type VariablesSpec struct {
 	Global map[string]VariableSpec
 	Rule   map[string]VariableSpec
 	Local  map[string]VariableSpec
+	// LocalV2 holds v2 local variables (map[string]string) for hybrid CEL/Template evaluation
+	LocalV2 map[string]string
 }
 
 // VariableSpec captures the CEL expression used to populate a variable.
@@ -114,6 +116,8 @@ type VariablesDefinition struct {
 	Global map[string]VariableDefinition
 	Rule   map[string]VariableDefinition
 	Local  map[string]VariableDefinition
+	// LocalV2 holds v2 local variables (map[string]string) for hybrid CEL/Template evaluation
+	LocalV2 map[string]string
 }
 
 // Definition represents a fully compiled rule that can be executed by the rule
@@ -429,9 +433,10 @@ func compileResponseDefinition(ruleName, category string, spec ResponseSpec, ren
 
 func compileVariableDefinitions(env *expr.Environment, spec VariablesSpec) (VariablesDefinition, error) {
 	def := VariablesDefinition{
-		Global: make(map[string]VariableDefinition),
-		Rule:   make(map[string]VariableDefinition),
-		Local:  make(map[string]VariableDefinition),
+		Global:  make(map[string]VariableDefinition),
+		Rule:    make(map[string]VariableDefinition),
+		Local:   make(map[string]VariableDefinition),
+		LocalV2: spec.LocalV2, // V2 local variables for hybrid CEL/Template evaluation
 	}
 
 	if err := compileVariableMap(env, spec.Global, def.Global, "global"); err != nil {

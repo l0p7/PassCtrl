@@ -1009,21 +1009,11 @@ func buildRuleResponseSpec(cfg config.RuleResponseConfig) rulechain.ResponseSpec
 }
 
 func buildRuleVariablesSpec(cfg config.RuleVariablesConfig) rulechain.VariablesSpec {
-	// TODO(PassCtrl-40): Implement local variable handling with v2 schema
-	// cfg is now map[string]string for local variables only
-	// This will be updated when implementing hybrid CEL/Template evaluation for rules
-	return rulechain.VariablesSpec{}
-}
-
-func buildRuleVariableMap(cfg map[string]config.RuleVariableSpec) map[string]rulechain.VariableSpec {
-	if len(cfg) == 0 {
-		return nil
+	// V2 schema: cfg is map[string]string for local variables
+	// These will be evaluated with hybrid CEL/Template evaluator
+	return rulechain.VariablesSpec{
+		LocalV2: cfg,
 	}
-	out := make(map[string]rulechain.VariableSpec, len(cfg))
-	for name, spec := range cfg {
-		out[name] = rulechain.VariableSpec{From: spec.From}
-	}
-	return out
 }
 
 func admissionConfigFromEndpoint(cfg config.EndpointAuthenticationConfig) admission.Config {

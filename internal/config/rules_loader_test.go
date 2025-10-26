@@ -104,28 +104,28 @@ func TestBuildRuleBundle(t *testing.T) {
 		// TODO(PassCtrl-40): Re-enable this test with v2 variable validation
 		// Old v1 test disabled during v2 schema migration
 		/*
-		{
-			name: "skips invalid variable expressions",
-			setup: func(t *testing.T) (map[string]EndpointConfig, map[string]RuleConfig, RulesConfig) {
-				rules := map[string]RuleConfig{
-					"bad-vars": {
-						Variables: RuleVariablesConfig{
-							"user": "!!invalid",
+			{
+				name: "skips invalid variable expressions",
+				setup: func(t *testing.T) (map[string]EndpointConfig, map[string]RuleConfig, RulesConfig) {
+					rules := map[string]RuleConfig{
+						"bad-vars": {
+							Variables: RuleVariablesConfig{
+								"user": "!!invalid",
+							},
 						},
-					},
-				}
-				return nil, rules, RulesConfig{}
+					}
+					return nil, rules, RulesConfig{}
+				},
+				assert: func(t *testing.T, bundle RuleBundle, err error) {
+					require.NoError(t, err)
+					require.Empty(t, bundle.Rules)
+					require.Len(t, bundle.Skipped, 1)
+					skipped := bundle.Skipped[0]
+					require.Equal(t, "rule", skipped.Kind)
+					require.Equal(t, "bad-vars", skipped.Name)
+					require.Contains(t, skipped.Reason, "variables.rule[user]")
+				},
 			},
-			assert: func(t *testing.T, bundle RuleBundle, err error) {
-				require.NoError(t, err)
-				require.Empty(t, bundle.Rules)
-				require.Len(t, bundle.Skipped, 1)
-				skipped := bundle.Skipped[0]
-				require.Equal(t, "rule", skipped.Kind)
-				require.Equal(t, "bad-vars", skipped.Name)
-				require.Contains(t, skipped.Reason, "variables.rule[user]")
-			},
-		},
 		*/
 	}
 

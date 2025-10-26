@@ -9,6 +9,10 @@ import (
 	"github.com/l0p7/passctrl/internal/templates"
 )
 
+// RuleContextBuilder is a function that builds the context for rule variable evaluation.
+// It's defined as a type to avoid circular dependencies with pipeline.State.
+type RuleContextBuilder func() map[string]any
+
 // HybridEvaluator can evaluate both CEL expressions and Go templates.
 // It automatically detects the type based on the presence of {{ in the expression.
 type HybridEvaluator struct {
@@ -17,10 +21,24 @@ type HybridEvaluator struct {
 }
 
 // NewHybridEvaluator creates an evaluator that supports both CEL and templates.
+// Uses the request environment (for endpoint variables).
 func NewHybridEvaluator(renderer *templates.Renderer) (*HybridEvaluator, error) {
 	celEnv, err := NewRequestEnvironment()
 	if err != nil {
 		return nil, fmt.Errorf("hybrid: create CEL environment: %w", err)
+	}
+	return &HybridEvaluator{
+		celEnv:   celEnv,
+		renderer: renderer,
+	}, nil
+}
+
+// NewRuleHybridEvaluator creates an evaluator for rule local variables.
+// Uses the rule environment (includes backend, auth, vars, request, variables).
+func NewRuleHybridEvaluator(renderer *templates.Renderer) (*HybridEvaluator, error) {
+	celEnv, err := NewRuleEnvironment()
+	if err != nil {
+		return nil, fmt.Errorf("hybrid: create rule CEL environment: %w", err)
 	}
 	return &HybridEvaluator{
 		celEnv:   celEnv,
@@ -126,6 +144,30 @@ func NewRequestEnvironment() (*Environment, error) {
 	)
 	if err != nil {
 		return nil, fmt.Errorf("expr: build request environment: %w", err)
+	}
+	return &Environment{env: env}, nil
+}
+
+// NewRuleEnvironment creates a CEL environment for rule local variable evaluation.
+// It includes all context available to rules: backend, auth, vars, request, variables.
+func NewRuleEnvironment() (*Environment, error) {
+	env, err := cel.NewEnv(
+		cel.Variable("backend", cel.MapType(cel.StringType, cel.DynType)),
+		cel.Variable("auth", cel.MapType(cel.StringType, cel.DynType)),
+		cel.Variable("vars", cel.MapType(cel.StringType, cel.DynType)),
+		cel.Variable("request", cel.MapType(cel.StringType, cel.DynType)),
+		cel.Variable("variables", cel.MapType(cel.StringType, cel.DynType)),
+		cel.Function("lookup",
+			cel.Overload("lookup_map_string",
+				[]*cel.Type{cel.MapType(cel.StringType, cel.DynType), cel.StringType},
+				cel.DynType,
+				cel.BinaryBinding(lookupMapValue),
+			),
+		),
+		cel.HomogeneousAggregateLiterals(),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("expr: build rule environment: %w", err)
 	}
 	return &Environment{env: env}, nil
 }
