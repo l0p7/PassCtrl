@@ -3,8 +3,11 @@ endpoints:
     description: "Relies on Redis-backed caches to reuse profile lookups."
     authentication:
       required: true
-      allow: ["bearer"]
-      challenge: "Bearer realm=\"External\""
+      allow:
+        authorization: ["bearer"]
+      challenge:
+        type: bearer
+        realm: "External"
     forwardRequestPolicy:
       headers:
         allow: ["authorization", "x-request-id"]

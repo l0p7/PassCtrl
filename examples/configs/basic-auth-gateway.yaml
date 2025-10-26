@@ -20,9 +20,10 @@ endpoints:
     description: "Protects the /auth endpoint with HTTP Basic credentials."
     authentication:
       required: true
-      allow: ["basic"]
-      challenge: "Basic realm=\"Internal\""
-      basic:
+      allow:
+        authorization: ["basic"]
+      challenge:
+        type: basic
         realm: "Internal"
         charset: "UTF-8"
     forwardRequestPolicy:

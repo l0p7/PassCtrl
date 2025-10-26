@@ -27,9 +27,10 @@ endpoints:
     description: "Renders environment-derived deny messages and forwards curated headers."
     authentication:
       required: true
-      allow: ["basic"]
-      challenge: "Basic realm=\"Env Demo\""
-      basic:
+      allow:
+        authorization: ["basic"]
+      challenge:
+        type: basic
         realm: "Env Demo"
         charset: "UTF-8"
     forwardRequestPolicy:

@@ -75,10 +75,9 @@ endpoints:
     authentication:                    # optional — omit when anonymous access is permitted
       required: false                  # optional — defaults to true; set false to allow rules to run without credentials
       allow:                           # required when authentication is declared; at least one provider must be enabled
-        basic: false                   # optional — accept Authorization: Basic credentials
-        bearer: true                   # optional — accept Authorization: Bearer credentials
-        header: []                     # optional — header names inspected for tokens
-        query: []                      # optional — query parameter names for tokens
+        authorization: ["basic", "bearer"]  # optional — list of Authorization header schemes (valid: "basic", "bearer")
+        header: []                     # optional — header names inspected for tokens (e.g., ["X-Api-Key"])
+        query: []                      # optional — query parameter names for tokens (e.g., ["token", "api_key"])
         none: false                    # optional — allow anonymous requests to proceed
       challenge:                       # optional — WWW-Authenticate response for failures
         type: bearer                   # optional — basic|bearer (controls header syntax)

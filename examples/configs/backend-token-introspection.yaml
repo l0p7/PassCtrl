@@ -26,8 +26,11 @@ endpoints:
     description: "Validates bearer tokens via the identity API before granting access."
     authentication:
       required: true
-      allow: ["bearer"]
-      challenge: "Bearer realm=\"Identity\""
+      allow:
+        authorization: ["bearer"]
+      challenge:
+        type: bearer
+        realm: "Identity"
     forwardProxyPolicy:
       trustedProxyIPs: ["10.0.0.0/8", "192.168.0.0/16"]
       developmentMode: false

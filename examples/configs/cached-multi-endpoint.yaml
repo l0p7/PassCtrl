@@ -22,8 +22,9 @@ endpoints:
     description: "Default endpoint for browser traffic with cached rule outcomes."
     authentication:
       required: false
-      allow: ["bearer", "header"]
-      header: ["x-session-token"]
+      allow:
+        authorization: ["bearer"]
+        header: ["x-session-token"]
     forwardRequestPolicy:
       headers:
         allow: ["x-request-id", "x-session-token"]
@@ -59,8 +60,11 @@ endpoints:
     description: "Privileged path that bypasses caching and requires explicit endpoint selection."
     authentication:
       required: true
-      allow: ["bearer"]
-      challenge: "Bearer realm=\"Admin\""
+      allow:
+        authorization: ["bearer"]
+      challenge:
+        type: bearer
+        realm: "Admin"
     forwardProxyPolicy:
       trustedProxyIPs: ["10.10.0.0/16"]
       developmentMode: false
