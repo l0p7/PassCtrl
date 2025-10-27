@@ -54,3 +54,53 @@ func (d BackendDescriptor) Hash() string {
 
 	return fmt.Sprintf("%016x", h.Sum64())
 }
+
+// HashUpstreamVariables computes a deterministic hash of all upstream exported variables
+// using FNV-1a. This hash is used in strict cache mode to invalidate caches when upstream
+// rule variables change.
+//
+// The hash is computed from a canonical representation:
+// - Rule names are sorted alphabetically
+// - Variable names within each rule are sorted alphabetically
+// - Format: ruleName.varName=value|ruleName.varName=value|...
+//
+// Returns a hex-encoded hash string suitable for use in cache keys.
+// Returns empty string if upstreamVars is nil or empty.
+func HashUpstreamVariables(upstreamVars map[string]map[string]any) string {
+	if len(upstreamVars) == 0 {
+		return ""
+	}
+
+	h := fnv.New64a()
+
+	// Sort rule names for determinism
+	ruleNames := make([]string, 0, len(upstreamVars))
+	for ruleName := range upstreamVars {
+		ruleNames = append(ruleNames, ruleName)
+	}
+	sort.Strings(ruleNames)
+
+	// Build canonical string: ruleName.varName=value|
+	for _, ruleName := range ruleNames {
+		vars := upstreamVars[ruleName]
+
+		// Sort variable names for determinism
+		varNames := make([]string, 0, len(vars))
+		for varName := range vars {
+			varNames = append(varNames, varName)
+		}
+		sort.Strings(varNames)
+
+		// Write each variable in sorted order
+		for _, varName := range varNames {
+			_, _ = h.Write([]byte(ruleName))
+			_, _ = h.Write([]byte("."))
+			_, _ = h.Write([]byte(varName))
+			_, _ = h.Write([]byte("="))
+			_, _ = fmt.Fprint(h, vars[varName])
+			_, _ = h.Write([]byte("|"))
+		}
+	}
+
+	return fmt.Sprintf("%016x", h.Sum64())
+}

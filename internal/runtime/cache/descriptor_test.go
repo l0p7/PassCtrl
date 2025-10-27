@@ -195,3 +195,280 @@ func TestBackendDescriptorHash_ComplexScenario(t *testing.T) {
 		require.Equal(t, hash, desc.Hash())
 	}
 }
+
+func TestHashUpstreamVariables_EmptyInput(t *testing.T) {
+	// Nil map should return empty string
+	hash := HashUpstreamVariables(nil)
+	require.Empty(t, hash)
+
+	// Empty map should return empty string
+	hash = HashUpstreamVariables(map[string]map[string]any{})
+	require.Empty(t, hash)
+}
+
+func TestHashUpstreamVariables_Deterministic(t *testing.T) {
+	vars1 := map[string]map[string]any{
+		"lookup-user": {
+			"user_id": "123",
+			"tier":    "premium",
+		},
+		"validate-token": {
+			"session_id": "abc-xyz",
+		},
+	}
+
+	vars2 := map[string]map[string]any{
+		"lookup-user": {
+			"user_id": "123",
+			"tier":    "premium",
+		},
+		"validate-token": {
+			"session_id": "abc-xyz",
+		},
+	}
+
+	hash1 := HashUpstreamVariables(vars1)
+	hash2 := HashUpstreamVariables(vars2)
+
+	require.Equal(t, hash1, hash2, "Same variables should produce same hash")
+	require.Len(t, hash1, 16, "Hash should be 16 hex characters (64-bit FNV-1a)")
+	require.NotEmpty(t, hash1)
+}
+
+func TestHashUpstreamVariables_RuleOrderIndependent(t *testing.T) {
+	// Rule names sorted differently but same content
+	vars1 := map[string]map[string]any{
+		"rule-a": {"var1": "value1"},
+		"rule-b": {"var2": "value2"},
+		"rule-c": {"var3": "value3"},
+	}
+
+	vars2 := map[string]map[string]any{
+		"rule-c": {"var3": "value3"},
+		"rule-a": {"var1": "value1"},
+		"rule-b": {"var2": "value2"},
+	}
+
+	hash1 := HashUpstreamVariables(vars1)
+	hash2 := HashUpstreamVariables(vars2)
+
+	require.Equal(t, hash1, hash2, "Rule insertion order should not affect hash")
+}
+
+func TestHashUpstreamVariables_VariableOrderIndependent(t *testing.T) {
+	// Variables within a rule sorted differently but same content
+	vars1 := map[string]map[string]any{
+		"lookup-user": {
+			"user_id":  "123",
+			"tier":     "premium",
+			"email":    "user@example.com",
+			"status":   "active",
+			"metadata": "...",
+		},
+	}
+
+	vars2 := map[string]map[string]any{
+		"lookup-user": {
+			"metadata": "...",
+			"status":   "active",
+			"email":    "user@example.com",
+			"tier":     "premium",
+			"user_id":  "123",
+		},
+	}
+
+	hash1 := HashUpstreamVariables(vars1)
+	hash2 := HashUpstreamVariables(vars2)
+
+	require.Equal(t, hash1, hash2, "Variable insertion order should not affect hash")
+}
+
+func TestHashUpstreamVariables_DifferentValues(t *testing.T) {
+	vars1 := map[string]map[string]any{
+		"lookup-user": {
+			"user_id": "123",
+			"tier":    "premium",
+		},
+	}
+
+	vars2 := map[string]map[string]any{
+		"lookup-user": {
+			"user_id": "123",
+			"tier":    "free", // Changed value
+		},
+	}
+
+	hash1 := HashUpstreamVariables(vars1)
+	hash2 := HashUpstreamVariables(vars2)
+
+	require.NotEqual(t, hash1, hash2, "Different values should produce different hashes")
+}
+
+func TestHashUpstreamVariables_DifferentVariableNames(t *testing.T) {
+	vars1 := map[string]map[string]any{
+		"lookup-user": {
+			"user_id": "123",
+		},
+	}
+
+	vars2 := map[string]map[string]any{
+		"lookup-user": {
+			"session_id": "123", // Different variable name
+		},
+	}
+
+	hash1 := HashUpstreamVariables(vars1)
+	hash2 := HashUpstreamVariables(vars2)
+
+	require.NotEqual(t, hash1, hash2, "Different variable names should produce different hashes")
+}
+
+func TestHashUpstreamVariables_DifferentRuleNames(t *testing.T) {
+	vars1 := map[string]map[string]any{
+		"rule-a": {
+			"var1": "value1",
+		},
+	}
+
+	vars2 := map[string]map[string]any{
+		"rule-b": {
+			"var1": "value1", // Same variable, different rule
+		},
+	}
+
+	hash1 := HashUpstreamVariables(vars1)
+	hash2 := HashUpstreamVariables(vars2)
+
+	require.NotEqual(t, hash1, hash2, "Different rule names should produce different hashes")
+}
+
+func TestHashUpstreamVariables_AdditionalVariable(t *testing.T) {
+	vars1 := map[string]map[string]any{
+		"lookup-user": {
+			"user_id": "123",
+		},
+	}
+
+	vars2 := map[string]map[string]any{
+		"lookup-user": {
+			"user_id": "123",
+			"tier":    "premium", // Additional variable
+		},
+	}
+
+	hash1 := HashUpstreamVariables(vars1)
+	hash2 := HashUpstreamVariables(vars2)
+
+	require.NotEqual(t, hash1, hash2, "Additional variables should produce different hashes")
+}
+
+func TestHashUpstreamVariables_AdditionalRule(t *testing.T) {
+	vars1 := map[string]map[string]any{
+		"rule-a": {
+			"var1": "value1",
+		},
+	}
+
+	vars2 := map[string]map[string]any{
+		"rule-a": {
+			"var1": "value1",
+		},
+		"rule-b": {
+			"var2": "value2", // Additional rule
+		},
+	}
+
+	hash1 := HashUpstreamVariables(vars1)
+	hash2 := HashUpstreamVariables(vars2)
+
+	require.NotEqual(t, hash1, hash2, "Additional rules should produce different hashes")
+}
+
+func TestHashUpstreamVariables_VariousTypes(t *testing.T) {
+	// Test different value types that fmt.Sprint can handle
+	vars := map[string]map[string]any{
+		"rule-types": {
+			"string_var": "text",
+			"int_var":    42,
+			"float_var":  3.14,
+			"bool_var":   true,
+			"nil_var":    nil,
+		},
+	}
+
+	hash := HashUpstreamVariables(vars)
+
+	require.NotEmpty(t, hash)
+	require.Len(t, hash, 16)
+
+	// Verify determinism
+	for i := 0; i < 10; i++ {
+		require.Equal(t, hash, HashUpstreamVariables(vars))
+	}
+}
+
+func TestHashUpstreamVariables_RealWorldScenario(t *testing.T) {
+	// Simulate a realistic multi-rule chain with upstream variables
+	vars := map[string]map[string]any{
+		"validate-token": {
+			"user_id":    "user-abc-123",
+			"session_id": "sess-xyz-789",
+			"expires_at": "2024-12-31T23:59:59Z",
+		},
+		"lookup-user": {
+			"user_id":  "user-abc-123",
+			"tier":     "premium",
+			"email":    "user@example.com",
+			"status":   "active",
+			"metadata": map[string]any{"region": "us-west", "plan": "pro"},
+		},
+		"fetch-permissions": {
+			"permissions": []string{"read", "write", "admin"},
+			"roles":       []string{"user", "moderator"},
+		},
+	}
+
+	hash := HashUpstreamVariables(vars)
+
+	require.NotEmpty(t, hash)
+	require.Len(t, hash, 16)
+
+	// Verify determinism across multiple computations
+	for i := 0; i < 10; i++ {
+		require.Equal(t, hash, HashUpstreamVariables(vars))
+	}
+}
+
+func TestHashUpstreamVariables_SameValuesRefresh(t *testing.T) {
+	// Simulate the scenario from design doc where upstream rule refreshes
+	// but returns same values - should produce same hash (cache hit)
+	vars1 := map[string]map[string]any{
+		"lookup-user": {
+			"user_id": "123",
+		},
+	}
+
+	vars2 := map[string]map[string]any{
+		"lookup-user": {
+			"user_id": "123", // Same value, refreshed at different time
+		},
+	}
+
+	hash1 := HashUpstreamVariables(vars1)
+	hash2 := HashUpstreamVariables(vars2)
+
+	require.Equal(t, hash1, hash2, "Same values should produce same hash even after refresh")
+}
+
+func TestHashUpstreamVariables_SingleRule(t *testing.T) {
+	vars := map[string]map[string]any{
+		"single-rule": {
+			"var1": "value1",
+		},
+	}
+
+	hash := HashUpstreamVariables(vars)
+
+	require.NotEmpty(t, hash)
+	require.Len(t, hash, 16)
+}
