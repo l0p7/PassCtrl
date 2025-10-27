@@ -662,7 +662,7 @@ func (p *Pipeline) installFallbackEndpoint() {
 		admission.New(trusted, false, defaultAuthConfig),
 		forwardpolicy.New(forwardpolicy.DefaultConfig()),
 		rulechain.NewAgent(rulechain.DefaultDefinitions(p.templateRenderer)),
-		newRuleExecutionAgent(nil, ruleExecutionLogger, p.templateRenderer),
+		newRuleExecutionAgent(nil, ruleExecutionLogger, p.templateRenderer, p.cache, p.cacheTTL),
 		responsepolicy.NewWithConfig(responsepolicy.Config{Endpoint: "default", Renderer: p.templateRenderer}),
 		resultcaching.New(resultcaching.Config{
 			Cache:   p.cache,
@@ -767,7 +767,7 @@ func (p *Pipeline) buildEndpointRuntime(name string, cfg config.EndpointConfig, 
 
 	agents = append(agents,
 		rulechain.NewAgent(ruleDefs),
-		newRuleExecutionAgent(nil, p.logger.With(slog.String("agent", "rule_execution"), slog.String("endpoint", trimmed)), p.templateRenderer),
+		newRuleExecutionAgent(nil, p.logger.With(slog.String("agent", "rule_execution"), slog.String("endpoint", trimmed)), p.templateRenderer, p.cache, p.cacheTTL),
 		responsepolicy.NewWithConfig(responsepolicy.Config{
 			Endpoint: trimmed,
 			Renderer: p.templateRenderer,

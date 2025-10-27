@@ -14,6 +14,20 @@ import (
 	"github.com/l0p7/passctrl/internal/templates"
 )
 
+// CacheTTLSpec defines TTLs for different rule outcomes.
+type CacheTTLSpec struct {
+	Pass  string // Duration: "5m", "30s", etc.
+	Fail  string // Duration: "30s", "1m", etc.
+	Error string // Always "0s" - errors never cached
+}
+
+// CacheConfigSpec defines per-rule caching configuration.
+type CacheConfigSpec struct {
+	FollowCacheControl bool         // Parse backend Cache-Control header
+	TTL                CacheTTLSpec // TTLs per outcome
+	Strict             *bool        // Include upstream variables in cache key (default: true)
+}
+
 // DefinitionSpec captures the declarative rule definition loaded from
 // configuration prior to compilation.
 type DefinitionSpec struct {
@@ -27,6 +41,7 @@ type DefinitionSpec struct {
 	Variables    VariablesSpec
 	FailMessage  string
 	ErrorMessage string
+	Cache        CacheConfigSpec
 }
 
 // ConditionSpec groups the CEL expressions that govern rule outcomes.
@@ -140,6 +155,7 @@ type Definition struct {
 	PassTemplate  *templates.Template
 	FailTemplate  *templates.Template
 	ErrorTemplate *templates.Template
+	Cache         CacheConfigSpec
 }
 
 // ExecutionPlan records the rule definitions that should be evaluated for the
@@ -301,6 +317,7 @@ func compileDefinition(env *expr.Environment, spec DefinitionSpec, renderer *tem
 		Variables:    variables,
 		FailMessage:  strings.TrimSpace(spec.FailMessage),
 		ErrorMessage: strings.TrimSpace(spec.ErrorMessage),
+		Cache:        spec.Cache,
 	}
 	if renderer != nil {
 		if tmpl, err := renderer.CompileInline(fmt.Sprintf("%s:pass", compileName), spec.PassMessage); err != nil {

@@ -284,7 +284,7 @@ func TestRuleChainAgentExecute(t *testing.T) {
 
 func TestRuleExecutionAgentExecute(t *testing.T) {
 	newAgent := func(client httpDoer) *ruleExecutionAgent {
-		return newRuleExecutionAgent(client, nil, nil)
+		return newRuleExecutionAgent(client, nil, nil, nil, 0)
 	}
 
 	t.Run("skip on cache", func(t *testing.T) {
@@ -561,7 +561,7 @@ func TestRuleExecutionAgentExecute(t *testing.T) {
 		state.Rule.ShouldExecute = true
 		state.SetPlan(rulechain.ExecutionPlan{Rules: defs})
 
-		res := newRuleExecutionAgent(mockClient, nil, renderer).Execute(context.Background(), nil, state)
+		res := newRuleExecutionAgent(mockClient, nil, renderer, nil, 0).Execute(context.Background(), nil, state)
 		require.Equal(t, "pass", res.Status)
 		require.Equal(t, "pass", state.Rule.Outcome)
 		require.Len(t, state.Rule.History, 2)

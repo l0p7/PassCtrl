@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/l0p7/passctrl/internal/expr"
+	"github.com/l0p7/passctrl/internal/runtime/cache"
 	"github.com/l0p7/passctrl/internal/runtime/pipeline"
 	"github.com/l0p7/passctrl/internal/runtime/rulechain"
 	"github.com/l0p7/passctrl/internal/templates"
@@ -45,14 +46,26 @@ type ruleResponseApplication struct {
 	response rulechain.ResponseDefinition
 }
 
+// renderedBackendRequest holds a fully-rendered backend request ready for HTTP execution.
+// All templates have been evaluated and auth has been applied.
+type renderedBackendRequest struct {
+	Method  string
+	URL     string
+	Headers map[string]string
+	Query   map[string]string
+	Body    string
+}
+
 type ruleExecutionAgent struct {
 	client        httpDoer
 	logger        *slog.Logger
 	renderer      *templates.Renderer
 	ruleEvaluator *expr.HybridEvaluator
+	cacheBackend  cache.DecisionCache // Per-rule caching backend
+	serverMaxTTL  time.Duration       // Server-level TTL ceiling
 }
 
-func newRuleExecutionAgent(client httpDoer, logger *slog.Logger, renderer *templates.Renderer) *ruleExecutionAgent {
+func newRuleExecutionAgent(client httpDoer, logger *slog.Logger, renderer *templates.Renderer, cacheBackend cache.DecisionCache, serverMaxTTL time.Duration) *ruleExecutionAgent {
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}
 	}
@@ -69,6 +82,8 @@ func newRuleExecutionAgent(client httpDoer, logger *slog.Logger, renderer *templ
 		logger:        logger,
 		renderer:      renderer,
 		ruleEvaluator: ruleEvaluator,
+		cacheBackend:  cacheBackend,
+		serverMaxTTL:  serverMaxTTL,
 	}
 }
 
@@ -186,6 +201,19 @@ func (a *ruleExecutionAgent) finishRule(def rulechain.Definition, outcome, reaso
 	return outcome, reason, resp
 }
 
+// finishRuleWithCache wraps finishRule and stores the result in the per-rule cache if applicable.
+func (a *ruleExecutionAgent) finishRuleWithCache(ctx context.Context, def rulechain.Definition, rendered *renderedBackendRequest, outcome, reason string, state *pipeline.State) (string, string, *rulechain.ResponseDefinition) {
+	// Call finishRule to get the response and evaluate exported variables
+	outcome, reason, resp := a.finishRule(def, outcome, reason, state)
+
+	// Store in per-rule cache if applicable
+	if rendered != nil && a.cacheBackend != nil && def.Backend.IsConfigured() {
+		a.storeRuleCache(ctx, def, *rendered, outcome, reason, state)
+	}
+
+	return outcome, reason, resp
+}
+
 func (a *ruleExecutionAgent) evaluateRule(ctx context.Context, def rulechain.Definition, state *pipeline.State) (string, string, *rulechain.ResponseDefinition) {
 	resetBackendState(&state.Backend)
 	state.Rule.Auth = pipeline.RuleAuthState{
@@ -210,11 +238,31 @@ func (a *ruleExecutionAgent) evaluateRule(ctx context.Context, def rulechain.Def
 		}
 	}
 
+	// Track rendered backend request for cache storage
+	var renderedBackend *renderedBackendRequest
+
 	if def.Backend.IsConfigured() {
-		if err := a.invokeBackend(ctx, def.Backend, selection, state); err != nil {
+		// Render backend request templates before invocation (enables cache key generation)
+		rendered, err := a.renderBackendRequest(def.Backend, selection, state)
+		if err != nil {
+			state.Backend.Error = err.Error()
+			reason := a.ruleMessage(def.ErrorTemplate, def.ErrorMessage, fmt.Sprintf("backend render failed: %v", err), state)
+			return a.finishRule(def, "error", reason, state)
+		}
+		renderedBackend = &rendered
+
+		// Check per-rule cache
+		if entry, hit := a.checkRuleCache(ctx, def, rendered, state); hit {
+			// Cache hit - restore cached outcome and variables
+			restoreFromCache(entry, def.Name, state)
+			return a.finishRule(def, entry.Outcome, entry.Reason, nil)
+		}
+
+		// Invoke backend with pre-rendered request
+		if err := a.invokeBackend(ctx, rendered, def.Backend, state); err != nil {
 			state.Backend.Error = err.Error()
 			reason := a.ruleMessage(def.ErrorTemplate, def.ErrorMessage, fmt.Sprintf("backend request failed: %v", err), state)
-			return a.finishRule(def, "error", reason, state)
+			return a.finishRuleWithCache(ctx, def, renderedBackend, "error", reason, state)
 		}
 	} else {
 		state.Backend.Accepted = true
@@ -222,34 +270,34 @@ func (a *ruleExecutionAgent) evaluateRule(ctx context.Context, def rulechain.Def
 
 	if err := a.evaluateRuleVariables(def, state); err != nil {
 		reason := a.ruleMessage(def.ErrorTemplate, def.ErrorMessage, fmt.Sprintf("variable extraction failed: %v", err), state)
-		return a.finishRule(def, "error", reason, state)
+		return a.finishRuleWithCache(ctx, def, renderedBackend, "error", reason, state)
 	}
 
 	activation := buildActivation(state)
 
 	if matched, source, err := evaluateProgramList(def.Conditions.Error, activation, false); err != nil {
-		return a.finishRule(def, "error", fmt.Sprintf("error condition %s evaluation failed: %v", source, err), state)
+		return a.finishRuleWithCache(ctx, def, renderedBackend, "error", fmt.Sprintf("error condition %s evaluation failed: %v", source, err), state)
 	} else if matched {
 		reason := a.ruleMessage(def.ErrorTemplate, def.ErrorMessage, fmt.Sprintf("error condition matched: %s", source), state)
-		return a.finishRule(def, "error", reason, state)
+		return a.finishRuleWithCache(ctx, def, renderedBackend, "error", reason, state)
 	}
 
 	if matched, source, err := evaluateProgramList(def.Conditions.Fail, activation, false); err != nil {
-		return a.finishRule(def, "error", fmt.Sprintf("fail condition %s evaluation failed: %v", source, err), state)
+		return a.finishRuleWithCache(ctx, def, renderedBackend, "error", fmt.Sprintf("fail condition %s evaluation failed: %v", source, err), state)
 	} else if matched {
 		reason := a.ruleMessage(def.FailTemplate, def.FailMessage, fmt.Sprintf("fail condition matched: %s", source), state)
-		return a.finishRule(def, "fail", reason, state)
+		return a.finishRuleWithCache(ctx, def, renderedBackend, "fail", reason, state)
 	}
 
 	if matched, source, err := evaluateProgramList(def.Conditions.Pass, activation, true); err != nil {
-		return a.finishRule(def, "error", fmt.Sprintf("pass condition %s evaluation failed: %v", source, err), state)
+		return a.finishRuleWithCache(ctx, def, renderedBackend, "error", fmt.Sprintf("pass condition %s evaluation failed: %v", source, err), state)
 	} else if matched {
 		reason := a.ruleMessage(def.PassTemplate, def.PassMessage, fmt.Sprintf("pass conditions satisfied: %s", source), state)
-		return a.finishRule(def, "pass", reason, state)
+		return a.finishRuleWithCache(ctx, def, renderedBackend, "pass", reason, state)
 	}
 
 	if len(def.Conditions.Pass) > 0 {
-		return a.finishRule(def, "fail", a.ruleMessage(def.FailTemplate, def.FailMessage, "required pass condition not satisfied", state), state)
+		return a.finishRuleWithCache(ctx, def, renderedBackend, "fail", a.ruleMessage(def.FailTemplate, def.FailMessage, "required pass condition not satisfied", state), state)
 	}
 
 	if def.Backend.IsConfigured() && !state.Backend.Accepted {
@@ -257,10 +305,226 @@ func (a *ruleExecutionAgent) evaluateRule(ctx context.Context, def rulechain.Def
 		if state.Backend.Status != 0 {
 			fallback = fmt.Sprintf("backend response not accepted: status %d", state.Backend.Status)
 		}
-		return a.finishRule(def, "fail", a.ruleMessage(def.FailTemplate, def.FailMessage, fallback, state), state)
+		return a.finishRuleWithCache(ctx, def, renderedBackend, "fail", a.ruleMessage(def.FailTemplate, def.FailMessage, fallback, state), state)
 	}
 
-	return a.finishRule(def, "pass", a.ruleMessage(def.PassTemplate, def.PassMessage, "rule evaluated without explicit outcome", state), state)
+	return a.finishRuleWithCache(ctx, def, renderedBackend, "pass", a.ruleMessage(def.PassTemplate, def.PassMessage, "rule evaluated without explicit outcome", state), state)
+}
+
+// checkRuleCache builds the cache key and checks for a cached rule result.
+// Returns the cached entry and true if found, or nil and false if not found.
+func (a *ruleExecutionAgent) checkRuleCache(ctx context.Context, def rulechain.Definition, rendered renderedBackendRequest, state *pipeline.State) (*RuleCacheEntry, bool) {
+	if a.cacheBackend == nil {
+		return nil, false
+	}
+
+	// Build cache key components
+	baseKey := state.CacheKey()
+	if baseKey == "" {
+		return nil, false
+	}
+
+	// Build backend hash from rendered request
+	descriptor := cache.BackendDescriptor{
+		Method:  rendered.Method,
+		URL:     rendered.URL,
+		Headers: rendered.Headers,
+		Body:    rendered.Body,
+	}
+	backendHash := buildBackendHash(descriptor)
+
+	// Determine if strict mode is enabled
+	strict := true
+	if def.Cache.Strict != nil {
+		strict = *def.Cache.Strict
+	}
+
+	// Build upstream variables hash
+	upstreamHash := buildUpstreamVarsHash(strict, state)
+
+	// Build final cache key
+	cacheKey := buildRuleCacheKey(baseKey, def.Name, backendHash, upstreamHash)
+
+	// Lookup cache
+	return lookupRuleCache(ctx, a.cacheBackend, cacheKey)
+}
+
+// storeRuleCache stores a rule execution result in the per-rule cache.
+func (a *ruleExecutionAgent) storeRuleCache(ctx context.Context, def rulechain.Definition, rendered renderedBackendRequest, outcome, reason string, state *pipeline.State) {
+	if a.cacheBackend == nil {
+		return
+	}
+
+	// Build cache key (same logic as checkRuleCache)
+	baseKey := state.CacheKey()
+	if baseKey == "" {
+		return
+	}
+
+	descriptor := cache.BackendDescriptor{
+		Method:  rendered.Method,
+		URL:     rendered.URL,
+		Headers: rendered.Headers,
+		Body:    rendered.Body,
+	}
+	backendHash := buildBackendHash(descriptor)
+
+	strict := true
+	if def.Cache.Strict != nil {
+		strict = *def.Cache.Strict
+	}
+	upstreamHash := buildUpstreamVarsHash(strict, state)
+	cacheKey := buildRuleCacheKey(baseKey, def.Name, backendHash, upstreamHash)
+
+	// Calculate effective TTL
+	endpointTTL := cache.RuleCacheTTLConfig{} // TODO: Get from endpoint config
+	ruleConfig := cache.RuleCacheConfig{
+		FollowCacheControl: def.Cache.FollowCacheControl,
+		TTL: cache.RuleCacheTTLConfig{
+			Pass:  def.Cache.TTL.Pass,
+			Fail:  def.Cache.TTL.Fail,
+			Error: def.Cache.TTL.Error,
+		},
+		Strict: def.Cache.Strict,
+	}
+	ttl := cache.CalculateEffectiveTTL(outcome, a.serverMaxTTL, endpointTTL, ruleConfig, state.Backend.Headers)
+
+	// Store in cache
+	if err := storeRuleCache(ctx, a.cacheBackend, cacheKey, outcome, reason, state.Rule.Variables.Exported, state.Response.Headers, ttl); err != nil {
+		// Log error but don't fail the rule
+		if a.logger != nil {
+			a.logger.Warn("failed to store rule cache",
+				slog.String("rule", def.Name),
+				slog.String("cache_key", cacheKey),
+				slog.Any("error", err))
+		}
+	}
+}
+
+// renderBackendRequest renders all template components of a backend request before execution.
+// This separation allows cache key generation before invoking the backend.
+func (a *ruleExecutionAgent) renderBackendRequest(
+	backend rulechain.BackendDefinition,
+	authSel *ruleAuthSelection,
+	state *pipeline.State,
+) (renderedBackendRequest, error) {
+	// Determine method
+	method := backend.Method
+	if strings.TrimSpace(method) == "" {
+		method = http.MethodGet
+	}
+
+	// URL is used as-is (no template rendering for URL currently)
+	url := backend.URL
+
+	// Render body template if present
+	var body string
+	if backend.BodyTemplate != nil {
+		rendered, err := backend.BodyTemplate.Render(state.TemplateContext())
+		if err != nil {
+			return renderedBackendRequest{}, fmt.Errorf("backend body render: %w", err)
+		}
+
+		// If the rendered string looks like a file path and a renderer is
+		// available, treat it as a template file reference
+		content := rendered
+		trimmedRendered := strings.TrimSpace(rendered)
+		if trimmedRendered != "" && a.renderer != nil {
+			if fileTmpl, err := a.renderer.CompileFile(trimmedRendered); err == nil {
+				output, err := fileTmpl.Render(state.TemplateContext())
+				if err != nil {
+					return renderedBackendRequest{}, fmt.Errorf("backend body file render: %w", err)
+				}
+				content = output
+			}
+		}
+		body = content
+	} else if strings.TrimSpace(backend.Body) != "" {
+		body = backend.Body
+	}
+
+	// Select headers
+	headers := backend.SelectHeaders(state.Forward.Headers)
+	if backend.ForwardProxyHeaders {
+		if state.Admission.ForwardedFor != "" {
+			if headers == nil {
+				headers = make(map[string]string)
+			}
+			headers["X-Forwarded-For"] = state.Admission.ForwardedFor
+		}
+		if state.Admission.Forwarded != "" {
+			if headers == nil {
+				headers = make(map[string]string)
+			}
+			headers["Forwarded"] = state.Admission.Forwarded
+		}
+	}
+
+	// Apply auth selection to headers
+	if authSel != nil {
+		if headers == nil {
+			headers = make(map[string]string)
+		}
+		if err := applyAuthToHeaders(authSel, headers); err != nil {
+			return renderedBackendRequest{}, fmt.Errorf("apply auth to headers: %w", err)
+		}
+	}
+
+	// Select query parameters
+	query := backend.SelectQuery(state.Forward.Query)
+
+	// Apply auth selection to query if needed
+	if authSel != nil && authSel.forward.Type == "query" {
+		if query == nil {
+			query = make(map[string]string)
+		}
+		if authSel.forward.Name != "" {
+			query[authSel.forward.Name] = authSel.forward.Value
+		}
+	}
+
+	return renderedBackendRequest{
+		Method:  method,
+		URL:     url,
+		Headers: headers,
+		Query:   query,
+		Body:    body,
+	}, nil
+}
+
+// applyAuthToHeaders applies authentication to the headers map (not query params).
+func applyAuthToHeaders(sel *ruleAuthSelection, headers map[string]string) error {
+	if sel == nil {
+		return nil
+	}
+
+	switch sel.forward.Type {
+	case "", "none":
+		return nil
+	case "basic":
+		if sel.forward.User == "" || sel.forward.Password == "" {
+			return fmt.Errorf("basic credential missing user or password")
+		}
+		credential := base64.StdEncoding.EncodeToString([]byte(sel.forward.User + ":" + sel.forward.Password))
+		headers["Authorization"] = "Basic " + credential
+	case "bearer":
+		if sel.forward.Token == "" {
+			return fmt.Errorf("bearer credential missing token")
+		}
+		headers["Authorization"] = "Bearer " + sel.forward.Token
+	case "header":
+		if sel.forward.Name == "" {
+			return fmt.Errorf("header credential missing name")
+		}
+		headers[sel.forward.Name] = sel.forward.Value
+	case "query":
+		// Query params are handled separately in renderBackendRequest
+		return nil
+	default:
+		return fmt.Errorf("unsupported credential forward type %s", sel.forward.Type)
+	}
+
+	return nil
 }
 
 func (a *ruleExecutionAgent) ruleMessage(tmpl *templates.Template, message, fallback string, state *pipeline.State) string {
@@ -292,14 +556,11 @@ func (a *ruleExecutionAgent) ruleMessage(tmpl *templates.Template, message, fall
 	return fallback
 }
 
-func (a *ruleExecutionAgent) invokeBackend(ctx context.Context, backend rulechain.BackendDefinition, authSel *ruleAuthSelection, state *pipeline.State) error {
+// invokeBackend executes a pre-rendered backend request and handles pagination.
+// The rendered parameter contains all template-rendered values (URL, headers, body, etc.).
+func (a *ruleExecutionAgent) invokeBackend(ctx context.Context, rendered renderedBackendRequest, backend rulechain.BackendDefinition, state *pipeline.State) error {
 	if a.client == nil {
 		return errors.New("rule execution agent: http client missing")
-	}
-
-	method := backend.Method
-	if strings.TrimSpace(method) == "" {
-		method = http.MethodGet
 	}
 
 	pagination := backend.Pagination()
@@ -308,7 +569,7 @@ func (a *ruleExecutionAgent) invokeBackend(ctx context.Context, backend rulechai
 		maxPages = 1
 	}
 
-	nextURL := backend.URL
+	nextURL := rendered.URL
 	visited := make(map[string]struct{})
 	pages := make([]pipeline.BackendPageState, 0, maxPages)
 
@@ -327,37 +588,16 @@ func (a *ruleExecutionAgent) invokeBackend(ctx context.Context, backend rulechai
 			return fmt.Errorf("backend request url: %w", err)
 		}
 
+		// Prepare body reader for first page (use rendered body)
+		// For subsequent pages, body is reused from first page
 		var body io.Reader
 		var bodyText string
-		if backend.BodyTemplate != nil {
-			rendered, err := backend.BodyTemplate.Render(state.TemplateContext())
-			if err != nil {
-				return fmt.Errorf("backend body render: %w", err)
-			}
-
-			// If the rendered string looks like a file path and a renderer is
-			// available, treat it as a template file reference; otherwise use the
-			// rendered string as the body contents.
-			content := rendered
-			trimmedRendered := strings.TrimSpace(rendered)
-			if trimmedRendered != "" && a.renderer != nil {
-				if fileTmpl, err := a.renderer.CompileFile(trimmedRendered); err == nil {
-					output, err := fileTmpl.Render(state.TemplateContext())
-					if err != nil {
-						return fmt.Errorf("backend body file render: %w", err)
-					}
-					content = output
-				}
-			}
-
-			bodyText = content
-			body = strings.NewReader(content)
-		} else if strings.TrimSpace(backend.Body) != "" {
-			bodyText = backend.Body
-			body = strings.NewReader(backend.Body)
+		if page == 0 && rendered.Body != "" {
+			bodyText = rendered.Body
+			body = strings.NewReader(rendered.Body)
 		}
 
-		req, err := http.NewRequestWithContext(ctx, method, parsed.String(), body)
+		req, err := http.NewRequestWithContext(ctx, rendered.Method, parsed.String(), body)
 		if err != nil {
 			return fmt.Errorf("backend request build: %w", err)
 		}
@@ -368,11 +608,27 @@ func (a *ruleExecutionAgent) invokeBackend(ctx context.Context, backend rulechai
 			}
 		}
 
-		backend.ApplyHeaders(req, state)
-		backend.ApplyQuery(req, state)
+		// Apply rendered headers (only on first page)
+		if page == 0 {
+			for name, value := range rendered.Headers {
+				if strings.TrimSpace(value) != "" {
+					req.Header.Set(name, value)
+				}
+			}
+		}
 
-		if err := applyRuleAuthSelection(req, authSel); err != nil {
-			return fmt.Errorf("apply rule authentication: %w", err)
+		// Apply rendered query parameters (on all pages, pagination URLs can add/override)
+		// This ensures query params from the original request are preserved across pagination
+		if len(rendered.Query) > 0 {
+			values := req.URL.Query()
+			// Only add rendered query params that aren't already in the URL
+			// This lets pagination URLs override or add their own params
+			for name, value := range rendered.Query {
+				if values.Get(name) == "" {
+					values.Set(name, value)
+				}
+			}
+			req.URL.RawQuery = values.Encode()
 		}
 
 		resp, err := a.client.Do(req)
@@ -656,44 +912,6 @@ func (a *ruleExecutionAgent) buildForwardAuth(directive rulechain.AuthDirective,
 	}
 
 	return forward, nil
-}
-
-func applyRuleAuthSelection(req *http.Request, sel *ruleAuthSelection) error {
-	if sel == nil {
-		return nil
-	}
-
-	switch sel.forward.Type {
-	case "", "none":
-		return nil
-	case "basic":
-		if sel.forward.User == "" || sel.forward.Password == "" {
-			return fmt.Errorf("basic credential missing user or password")
-		}
-		credential := base64.StdEncoding.EncodeToString([]byte(sel.forward.User + ":" + sel.forward.Password))
-		req.Header.Set("Authorization", "Basic "+credential)
-	case "bearer":
-		if sel.forward.Token == "" {
-			return fmt.Errorf("bearer credential missing token")
-		}
-		req.Header.Set("Authorization", "Bearer "+sel.forward.Token)
-	case "header":
-		if sel.forward.Name == "" {
-			return fmt.Errorf("header credential missing name")
-		}
-		req.Header.Set(sel.forward.Name, sel.forward.Value)
-	case "query":
-		if sel.forward.Name == "" {
-			return fmt.Errorf("query credential missing name")
-		}
-		values := req.URL.Query()
-		values.Set(sel.forward.Name, sel.forward.Value)
-		req.URL.RawQuery = values.Encode()
-	default:
-		return fmt.Errorf("unsupported credential forward type %s", sel.forward.Type)
-	}
-
-	return nil
 }
 
 func (f ruleAuthForward) toMap() map[string]any {
