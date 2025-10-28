@@ -284,6 +284,42 @@ func (c RuleCacheConfig) GetTTL(outcome string) time.Duration {
 	return duration
 }
 
+// validateCacheTTLConfig validates that TTL duration strings are parseable.
+func validateCacheTTLConfig(ttl RuleCacheTTLConfig, context string) error {
+	if ttl.Pass != "" {
+		if _, err := time.ParseDuration(ttl.Pass); err != nil {
+			return fmt.Errorf("%s.pass: invalid duration %q: %w", context, ttl.Pass, err)
+		}
+	}
+	if ttl.Fail != "" {
+		if _, err := time.ParseDuration(ttl.Fail); err != nil {
+			return fmt.Errorf("%s.fail: invalid duration %q: %w", context, ttl.Fail, err)
+		}
+	}
+	if ttl.Error != "" {
+		if _, err := time.ParseDuration(ttl.Error); err != nil {
+			return fmt.Errorf("%s.error: invalid duration %q: %w", context, ttl.Error, err)
+		}
+	}
+	return nil
+}
+
+// validateVariableMap validates variable expressions (CEL or Template).
+// Variables can be empty (validation is lenient - runtime will catch evaluation errors).
+func validateVariableMap(variables map[string]string, context string) error {
+	// Variable expressions are validated at runtime during compilation
+	// This validation just ensures the map structure is valid
+	// Empty expressions are allowed (will be caught during rule compilation)
+	for name, expr := range variables {
+		if strings.TrimSpace(name) == "" {
+			return fmt.Errorf("%s: empty variable name not allowed", context)
+		}
+		// Expression can be empty or whitespace - runtime will handle it
+		_ = expr
+	}
+	return nil
+}
+
 // Validate enforces invariants that keep the runtime predictable before serving traffic.
 func (c *Config) Validate() error {
 	if c == nil {
@@ -313,6 +349,30 @@ func (c *Config) Validate() error {
 	}
 	for name, endpoint := range c.Endpoints {
 		if err := validateEndpointAuthentication(name, endpoint.Authentication); err != nil {
+			return err
+		}
+		// Validate endpoint variables (CEL or Template expressions)
+		if err := validateVariableMap(endpoint.Variables, fmt.Sprintf("endpoints[%s].variables", name)); err != nil {
+			return err
+		}
+	}
+	for name, rule := range c.Rules {
+		// Validate rule cache TTL durations
+		if err := validateCacheTTLConfig(rule.Cache.TTL, fmt.Sprintf("rules[%s].cache.ttl", name)); err != nil {
+			return err
+		}
+		// Validate rule local variables (CEL or Template expressions)
+		if err := validateVariableMap(rule.Variables, fmt.Sprintf("rules[%s].variables", name)); err != nil {
+			return err
+		}
+		// Validate response exported variables
+		if err := validateVariableMap(rule.Responses.Pass.Variables, fmt.Sprintf("rules[%s].responses.pass.variables", name)); err != nil {
+			return err
+		}
+		if err := validateVariableMap(rule.Responses.Fail.Variables, fmt.Sprintf("rules[%s].responses.fail.variables", name)); err != nil {
+			return err
+		}
+		if err := validateVariableMap(rule.Responses.Error.Variables, fmt.Sprintf("rules[%s].responses.error.variables", name)); err != nil {
 			return err
 		}
 	}
