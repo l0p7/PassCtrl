@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/l0p7/passctrl/internal/expr"
+	"github.com/l0p7/passctrl/internal/metrics"
 	"github.com/l0p7/passctrl/internal/runtime/cache"
 	"github.com/l0p7/passctrl/internal/runtime/pipeline"
 	"github.com/l0p7/passctrl/internal/runtime/rulechain"
@@ -63,9 +64,10 @@ type ruleExecutionAgent struct {
 	ruleEvaluator *expr.HybridEvaluator
 	cacheBackend  cache.DecisionCache // Per-rule caching backend
 	serverMaxTTL  time.Duration       // Server-level TTL ceiling
+	metrics       metrics.Recorder    // Metrics recorder for cache operations
 }
 
-func newRuleExecutionAgent(client httpDoer, logger *slog.Logger, renderer *templates.Renderer, cacheBackend cache.DecisionCache, serverMaxTTL time.Duration) *ruleExecutionAgent {
+func newRuleExecutionAgent(client httpDoer, logger *slog.Logger, renderer *templates.Renderer, cacheBackend cache.DecisionCache, serverMaxTTL time.Duration, metricsRecorder metrics.Recorder) *ruleExecutionAgent {
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}
 	}
@@ -84,6 +86,7 @@ func newRuleExecutionAgent(client httpDoer, logger *slog.Logger, renderer *templ
 		ruleEvaluator: ruleEvaluator,
 		cacheBackend:  cacheBackend,
 		serverMaxTTL:  serverMaxTTL,
+		metrics:       metricsRecorder,
 	}
 }
 
@@ -119,6 +122,13 @@ func (a *ruleExecutionAgent) Execute(ctx context.Context, _ *http.Request, state
 	passResponses := make([]ruleResponseApplication, 0, len(plan.Rules))
 
 	for _, def := range plan.Rules {
+		// Reset cache state before evaluating each rule
+		state.Cache.Hit = false
+		state.Cache.Decision = ""
+		state.Cache.StoredAt = time.Time{}
+		state.Cache.ExpiresAt = time.Time{}
+		state.Cache.Stored = false
+
 		start := time.Now()
 		outcome, reason, response := a.evaluateRule(ctx, def, state)
 		entry := pipeline.RuleHistoryEntry{
@@ -127,6 +137,7 @@ func (a *ruleExecutionAgent) Execute(ctx context.Context, _ *http.Request, state
 			Reason:    reason,
 			Duration:  time.Since(start),
 			Variables: cloneAnyMap(state.Rule.Variables.Rule),
+			FromCache: state.Cache.Hit, // Capture whether this rule result came from cache
 		}
 		history = append(history, entry)
 
@@ -255,7 +266,7 @@ func (a *ruleExecutionAgent) evaluateRule(ctx context.Context, def rulechain.Def
 		if entry, hit := a.checkRuleCache(ctx, def, rendered, state); hit {
 			// Cache hit - restore cached outcome and variables
 			restoreFromCache(entry, def.Name, state)
-			return a.finishRule(def, entry.Outcome, entry.Reason, nil)
+			return a.finishRule(def, entry.Outcome, entry.Reason, state)
 		}
 
 		// Invoke backend with pre-rendered request
@@ -346,7 +357,40 @@ func (a *ruleExecutionAgent) checkRuleCache(ctx context.Context, def rulechain.D
 	cacheKey := buildRuleCacheKey(baseKey, def.Name, backendHash, upstreamHash)
 
 	// Lookup cache
-	return lookupRuleCache(ctx, a.cacheBackend, cacheKey)
+	lookupStart := time.Now()
+	entry, hit := lookupRuleCache(ctx, a.cacheBackend, cacheKey)
+	lookupDuration := time.Since(lookupStart)
+
+	// Record metrics
+	if a.metrics != nil {
+		result := metrics.CacheLookupMiss
+		if hit {
+			result = metrics.CacheLookupHit
+		}
+		a.metrics.ObserveCacheLookup(def.Name, result, lookupDuration)
+	}
+
+	// Log cache result
+	if hit && a.logger != nil {
+		ttl := time.Until(entry.ExpiresAt)
+		a.logger.Info("per-rule cache hit",
+			slog.String("rule", def.Name),
+			slog.String("outcome", entry.Outcome),
+			slog.Time("stored_at", entry.StoredAt),
+			slog.Time("expires_at", entry.ExpiresAt),
+			slog.Duration("ttl_remaining", ttl),
+			slog.Float64("lookup_ms", float64(lookupDuration)/float64(time.Millisecond)))
+	}
+
+	// Populate state.Cache fields
+	if hit {
+		state.Cache.Hit = true
+		state.Cache.Decision = entry.Outcome
+		state.Cache.StoredAt = entry.StoredAt
+		state.Cache.ExpiresAt = entry.ExpiresAt
+	}
+
+	return entry, hit
 }
 
 // storeRuleCache stores a rule execution result in the per-rule cache.
@@ -390,7 +434,21 @@ func (a *ruleExecutionAgent) storeRuleCache(ctx context.Context, def rulechain.D
 	ttl := cache.CalculateEffectiveTTL(outcome, a.serverMaxTTL, endpointTTL, ruleConfig, state.Backend.Headers)
 
 	// Store in cache
-	if err := storeRuleCache(ctx, a.cacheBackend, cacheKey, outcome, reason, state.Rule.Variables.Exported, state.Response.Headers, ttl); err != nil {
+	storeStart := time.Now()
+	err := storeRuleCache(ctx, a.cacheBackend, cacheKey, outcome, reason, state.Rule.Variables.Exported, state.Response.Headers, ttl)
+	storeDuration := time.Since(storeStart)
+
+	// Record metrics
+	if a.metrics != nil {
+		result := metrics.CacheStoreStored
+		if err != nil {
+			result = metrics.CacheStoreError
+		}
+		a.metrics.ObserveCacheStore(def.Name, result, storeDuration)
+	}
+
+	// Log result
+	if err != nil {
 		// Log error but don't fail the rule
 		if a.logger != nil {
 			a.logger.Warn("failed to store rule cache",
@@ -398,6 +456,17 @@ func (a *ruleExecutionAgent) storeRuleCache(ctx context.Context, def rulechain.D
 				slog.String("cache_key", cacheKey),
 				slog.Any("error", err))
 		}
+	} else {
+		// Log successful store
+		if a.logger != nil && ttl > 0 {
+			a.logger.Info("per-rule cache stored",
+				slog.String("rule", def.Name),
+				slog.String("outcome", outcome),
+				slog.Duration("ttl", ttl),
+				slog.Float64("store_ms", float64(storeDuration)/float64(time.Millisecond)))
+		}
+		// Mark state as stored
+		state.Cache.Stored = true
 	}
 }
 

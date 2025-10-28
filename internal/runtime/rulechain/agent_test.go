@@ -28,20 +28,6 @@ func TestNewAgentFiltersDefinitions(t *testing.T) {
 }
 
 func TestAgentExecuteStates(t *testing.T) {
-	t.Run("cache hit short circuits", func(t *testing.T) {
-		state := &pipeline.State{}
-		state.Cache.Hit = true
-		state.Cache.Decision = "pass"
-
-		agent := NewAgent(nil)
-		res := agent.Execute(context.Background(), nil, state)
-
-		require.Equal(t, "cached", res.Status)
-		require.Equal(t, "pass", state.Rule.Outcome)
-		require.True(t, state.Rule.FromCache)
-		require.False(t, state.Rule.Executed)
-	})
-
 	t.Run("admission failure prevents execution", func(t *testing.T) {
 		state := &pipeline.State{}
 		state.Admission.Authenticated = false

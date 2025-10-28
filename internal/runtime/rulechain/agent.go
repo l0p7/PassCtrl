@@ -190,25 +190,11 @@ func NewAgent(rules []Definition) *Agent {
 // Name identifies the rule chain agent.
 func (a *Agent) Name() string { return "rule_chain" }
 
-// Execute decides whether rules should run or if a cached decision is
-// sufficient, short-circuiting on cache hits or admission failures.
+// Execute decides whether rules should run, short-circuiting on admission failures.
 func (a *Agent) Execute(_ context.Context, _ *http.Request, state *pipeline.State) pipeline.Result {
 	state.Rule.EvaluatedAt = time.Now().UTC()
 	state.Rule.History = nil
 	state.SetPlan(ExecutionPlan{})
-
-	if state.Cache.Hit {
-		state.Rule.Outcome = state.Cache.Decision
-		state.Rule.Reason = "decision replayed from cache"
-		state.Rule.FromCache = true
-		state.Rule.Executed = false
-		state.Rule.ShouldExecute = false
-		return pipeline.Result{
-			Name:    a.Name(),
-			Status:  "cached",
-			Details: state.Rule.Reason,
-		}
-	}
 
 	if !state.Admission.Authenticated {
 		state.Rule.Outcome = "fail"

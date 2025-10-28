@@ -84,6 +84,7 @@ type RuleHistoryEntry struct {
 	Reason    string         `json:"reason,omitempty"`
 	Duration  time.Duration  `json:"duration"`
 	Variables map[string]any `json:"variables,omitempty"`
+	FromCache bool           `json:"fromCache,omitempty"`
 }
 
 // RuleAuthState surfaces the matched authentication directive and forwarding

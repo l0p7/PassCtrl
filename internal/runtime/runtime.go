@@ -26,7 +26,6 @@ import (
 	"github.com/l0p7/passctrl/internal/runtime/forwardpolicy"
 	"github.com/l0p7/passctrl/internal/runtime/pipeline"
 	"github.com/l0p7/passctrl/internal/runtime/responsepolicy"
-	"github.com/l0p7/passctrl/internal/runtime/resultcaching"
 	"github.com/l0p7/passctrl/internal/runtime/rulechain"
 	"github.com/l0p7/passctrl/internal/templates"
 )
@@ -359,32 +358,6 @@ func (p *Pipeline) ServeAuth(w http.ResponseWriter, r *http.Request) {
 
 	p.logDebugRequestSnapshot(r, reqLogger, state)
 
-	// Skip cache lookup if cacheKey is empty (e.g., none: true endpoints)
-	if cacheKey != "" {
-		lookupStart := time.Now()
-		entry, ok, err := p.cache.Lookup(r.Context(), cacheKey)
-		if p.metrics != nil {
-			result := metrics.CacheLookupMiss
-			if err != nil {
-				result = metrics.CacheLookupError
-			} else if ok {
-				result = metrics.CacheLookupHit
-			}
-			p.metrics.ObserveCacheLookup(endpointName, result, time.Since(lookupStart))
-		}
-		if err != nil {
-			reqLogger.Error("cache lookup failed", slog.Any("error", err), slog.String("cache_key", cacheKey))
-		} else if ok {
-			state.Cache.Hit = true
-			state.Cache.Decision = entry.Decision
-			state.Cache.Stored = true
-			state.Cache.StoredAt = entry.StoredAt
-			state.Cache.ExpiresAt = entry.ExpiresAt
-			state.Response = resultcaching.ResponseFromCache(entry.Response)
-			state.Rule.Outcome = entry.Decision
-		}
-	}
-
 	for _, ag := range endpointRuntime.agents {
 		// Agents publish their observable state via the shared pipeline.State.
 		_ = ag.Execute(r.Context(), r, state)
@@ -662,14 +635,8 @@ func (p *Pipeline) installFallbackEndpoint() {
 		admission.New(trusted, false, defaultAuthConfig),
 		forwardpolicy.New(forwardpolicy.DefaultConfig()),
 		rulechain.NewAgent(rulechain.DefaultDefinitions(p.templateRenderer)),
-		newRuleExecutionAgent(nil, ruleExecutionLogger, p.templateRenderer, p.cache, p.cacheTTL),
+		newRuleExecutionAgent(nil, ruleExecutionLogger, p.templateRenderer, p.cache, p.cacheTTL, p.metrics),
 		responsepolicy.NewWithConfig(responsepolicy.Config{Endpoint: "default", Renderer: p.templateRenderer}),
-		resultcaching.New(resultcaching.Config{
-			Cache:   p.cache,
-			TTL:     p.cacheTTL,
-			Logger:  p.logger.With(slog.String("agent", "result_caching"), slog.String("endpoint", "default")),
-			Metrics: p.metrics,
-		}),
 	}
 	runtime := &endpointRuntime{
 		name:       "default",
@@ -732,15 +699,6 @@ func (p *Pipeline) buildEndpointRuntime(name string, cfg config.EndpointConfig, 
 		ruleDefs = append(ruleDefs, def)
 	}
 
-	ttl := p.cacheTTL
-	if cfg.Cache.ResultTTL != "" {
-		if parsed, err := time.ParseDuration(cfg.Cache.ResultTTL); err == nil && parsed > 0 {
-			ttl = parsed
-		} else if err != nil {
-			p.logger.Warn("invalid endpoint cache ttl", slog.String("endpoint", trimmed), slog.String("value", cfg.Cache.ResultTTL), slog.Any("error", err))
-		}
-	}
-
 	trusted := append(defaultTrustedNetworks(), admission.ParseCIDRs(cfg.ForwardProxyPolicy.TrustedProxyIPs)...)
 	authConfig := admissionConfigFromEndpoint(cfg.Authentication)
 
@@ -767,7 +725,7 @@ func (p *Pipeline) buildEndpointRuntime(name string, cfg config.EndpointConfig, 
 
 	agents = append(agents,
 		rulechain.NewAgent(ruleDefs),
-		newRuleExecutionAgent(nil, p.logger.With(slog.String("agent", "rule_execution"), slog.String("endpoint", trimmed)), p.templateRenderer, p.cache, p.cacheTTL),
+		newRuleExecutionAgent(nil, p.logger.With(slog.String("agent", "rule_execution"), slog.String("endpoint", trimmed)), p.templateRenderer, p.cache, p.cacheTTL, p.metrics),
 		responsepolicy.NewWithConfig(responsepolicy.Config{
 			Endpoint: trimmed,
 			Renderer: p.templateRenderer,
@@ -801,12 +759,6 @@ func (p *Pipeline) buildEndpointRuntime(name string, cfg config.EndpointConfig, 
 					Custom: cloneStringMap(cfg.ResponsePolicy.Error.Headers.Custom),
 				},
 			},
-		}),
-		resultcaching.New(resultcaching.Config{
-			Cache:   p.cache,
-			TTL:     ttl,
-			Logger:  p.logger.With(slog.String("agent", "result_caching"), slog.String("endpoint", trimmed)),
-			Metrics: p.metrics,
 		}),
 	)
 

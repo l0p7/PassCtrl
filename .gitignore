@@ -8,6 +8,7 @@ dist/
 *.dylib
 *.test
 *.out
+passctrl
 
 # Go tooling outputs
 *.cover

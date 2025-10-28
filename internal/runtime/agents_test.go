@@ -243,19 +243,6 @@ func TestAdmissionAgentExecute(t *testing.T) {
 }
 
 func TestRuleChainAgentExecute(t *testing.T) {
-	t.Run("cached", func(t *testing.T) {
-		state := &pipeline.State{}
-		state.Cache.Hit = true
-		state.Cache.Decision = "pass"
-
-		agent := rulechain.NewAgent(rulechain.DefaultDefinitions(nil))
-		res := agent.Execute(context.Background(), nil, state)
-
-		require.Equal(t, "cached", res.Status)
-		require.Equal(t, "pass", state.Rule.Outcome)
-		require.True(t, state.Rule.FromCache)
-	})
-
 	t.Run("admission failure", func(t *testing.T) {
 		state := &pipeline.State{}
 		state.Admission.Authenticated = false
@@ -284,7 +271,7 @@ func TestRuleChainAgentExecute(t *testing.T) {
 
 func TestRuleExecutionAgentExecute(t *testing.T) {
 	newAgent := func(client httpDoer) *ruleExecutionAgent {
-		return newRuleExecutionAgent(client, nil, nil, nil, 0)
+		return newRuleExecutionAgent(client, nil, nil, nil, 0, nil)
 	}
 
 	t.Run("skip on cache", func(t *testing.T) {
@@ -561,7 +548,7 @@ func TestRuleExecutionAgentExecute(t *testing.T) {
 		state.Rule.ShouldExecute = true
 		state.SetPlan(rulechain.ExecutionPlan{Rules: defs})
 
-		res := newRuleExecutionAgent(mockClient, nil, renderer, nil, 0).Execute(context.Background(), nil, state)
+		res := newRuleExecutionAgent(mockClient, nil, renderer, nil, 0, nil).Execute(context.Background(), nil, state)
 		require.Equal(t, "pass", res.Status)
 		require.Equal(t, "pass", state.Rule.Outcome)
 		require.Len(t, state.Rule.History, 2)
