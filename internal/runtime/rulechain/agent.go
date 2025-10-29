@@ -278,7 +278,7 @@ func compileDefinition(env *expr.Environment, spec DefinitionSpec, renderer *tem
 	if err != nil {
 		return Definition{}, err
 	}
-	backend := buildBackendDefinition(spec.Backend)
+	backend := buildBackendDefinition(spec.Backend, renderer)
 	responses, err := compileResponseDefinitions(ruleName, spec.Responses, renderer)
 	if err != nil {
 		return Definition{}, fmt.Errorf("responses: %w", err)

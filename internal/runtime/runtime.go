@@ -630,10 +630,19 @@ func (p *Pipeline) installFallbackEndpoint() {
 			Authorization: []string{"basic", "bearer"},
 		},
 	}
+	fwdLogger := p.logger.With(
+		slog.String("agent", "forward_request_policy"),
+		slog.String("endpoint", "default"),
+	)
+	fwdPolicy, err := forwardpolicy.New(forwardpolicy.DefaultConfig(), p.templateRenderer, fwdLogger)
+	if err != nil {
+		p.logger.Error("failed to create forward policy agent for default endpoint", slog.String("error", err.Error()))
+		fwdPolicy, _ = forwardpolicy.New(forwardpolicy.DefaultConfig(), nil, fwdLogger)
+	}
 	agents := []pipeline.Agent{
 		&serverAgent{},
 		admission.New(trusted, false, defaultAuthConfig),
-		forwardpolicy.New(forwardpolicy.DefaultConfig()),
+		fwdPolicy,
 		rulechain.NewAgent(rulechain.DefaultDefinitions(p.templateRenderer)),
 		newRuleExecutionAgent(nil, ruleExecutionLogger, p.templateRenderer, p.cache, p.cacheTTL, p.metrics),
 		responsepolicy.NewWithConfig(responsepolicy.Config{Endpoint: "default", Renderer: p.templateRenderer}),
@@ -712,10 +721,19 @@ func (p *Pipeline) buildEndpointRuntime(name string, cfg config.EndpointConfig, 
 		endpointVarsAgent = evAgent
 	}
 
+	fwdPolicy, err := forwardpolicy.New(
+		forwardPolicyFromConfig(cfg.ForwardRequestPolicy),
+		p.templateRenderer,
+		p.logger.With(slog.String("agent", "forward_request_policy"), slog.String("endpoint", trimmed)),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("build forward policy agent: %w", err)
+	}
+
 	agents := []pipeline.Agent{
 		&serverAgent{},
 		admission.New(trusted, cfg.ForwardProxyPolicy.DevelopmentMode, authConfig),
-		forwardpolicy.New(forwardPolicyFromConfig(cfg.ForwardRequestPolicy)),
+		fwdPolicy,
 	}
 
 	// Add endpoint variables agent if configured

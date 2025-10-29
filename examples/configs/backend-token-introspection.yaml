@@ -107,9 +107,11 @@ rules:
           subscription_plan: variables.subscription_plan
           subject: variables.subject
     cache:
-      passTTL: "90s"
-      failTTL: "0s"
       followCacheControl: true
+      ttl:
+        pass: "90s"
+        fail: "0s"
+        error: "0s"
 
   require-active-subscription:
     description: "Ensures the identity API flagged the account as active."
@@ -126,5 +128,7 @@ rules:
             X-PassCtrl-Reason: "subscription check failed"
             X-PassCtrl-Plan: "{{ index .rules \"introspect-bearer-token\" \"variables\" \"subscription_plan\" }}"
     cache:
-      passTTL: "0s"
-      failTTL: "0s"
+      ttl:
+        pass: "0s"
+        fail: "0s"
+        error: "0s"

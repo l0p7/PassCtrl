@@ -116,9 +116,11 @@ rules:
           user_id: variables.user_id
           tier: variables.tier
     cache:
-      passTTL: "5m"
-      failTTL: "30s"
       followCacheControl: true
+      ttl:
+        pass: "5m"
+        fail: "30s"
+        error: "0s"
 
   enforce-customer-tier:
     description: "Denies requests from suspended or free-tier accounts."
@@ -133,8 +135,10 @@ rules:
           custom:
             X-PassCtrl-Tier: "{{ index .rules \"session-lookup\" \"variables\" \"tier\" }}"
     cache:
-      passTTL: "0s"
-      failTTL: "0s"
+      ttl:
+        pass: "0s"
+        fail: "0s"
+        error: "0s"
 
   audit-token-check:
     description: "Validates admin bearer tokens without caching."
@@ -165,5 +169,7 @@ rules:
       error:
         - backend.status >= 500
     cache:
-      passTTL: "0s"
-      failTTL: "0s"
+      ttl:
+        pass: "0s"
+        fail: "0s"
+        error: "0s"

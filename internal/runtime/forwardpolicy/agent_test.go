@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/l0p7/passctrl/internal/runtime/pipeline"
+	"github.com/l0p7/passctrl/internal/templates"
 	"github.com/stretchr/testify/require"
 )
 
@@ -134,7 +135,111 @@ func TestAgentExecute(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			req := tc.req()
 			state := newTestState(req)
-			agent := New(tc.cfg)
+			agent, err := New(tc.cfg, nil, nil)
+			require.NoError(t, err)
+
+			res := agent.Execute(req.Context(), req, state)
+
+			tc.expect(t, res, state)
+		})
+	}
+}
+
+func TestAgentExecuteWithTemplates(t *testing.T) {
+	tests := []struct {
+		name   string
+		cfg    Config
+		req    func() *http.Request
+		expect func(t *testing.T, res pipeline.Result, state *pipeline.State)
+	}{
+		{
+			name: "renders custom header templates",
+			cfg: Config{
+				Headers: CategoryConfig{
+					Custom: map[string]string{
+						"X-Trace-ID": `{{ index .raw.Headers "x-request-id" }}`,
+						"X-User":     `{{ index .raw.Headers "authorization" | replace "Bearer " "" }}`,
+					},
+				},
+			},
+			req: func() *http.Request {
+				req := httptest.NewRequest(http.MethodGet, "http://example.com/auth", http.NoBody)
+				req.Header.Set("X-Request-ID", "req-123")
+				req.Header.Set("Authorization", "Bearer token-456")
+				return req
+			},
+			expect: func(t *testing.T, _ pipeline.Result, state *pipeline.State) {
+				require.Equal(t, "req-123", state.Forward.Headers["x-trace-id"])
+				require.Equal(t, "token-456", state.Forward.Headers["x-user"])
+			},
+		},
+		{
+			name: "renders custom query templates",
+			cfg: Config{
+				Query: CategoryConfig{
+					Custom: map[string]string{
+						"token": `{{ index .raw.Headers "authorization" | replace "Bearer " "" }}`,
+						"page":  `{{ index .raw.Query "offset" | default "1" }}`,
+					},
+				},
+			},
+			req: func() *http.Request {
+				req := httptest.NewRequest(http.MethodGet, "http://example.com/auth?offset=5", http.NoBody)
+				req.Header.Set("Authorization", "Bearer my-token")
+				return req
+			},
+			expect: func(t *testing.T, _ pipeline.Result, state *pipeline.State) {
+				require.Equal(t, "my-token", state.Forward.Query["token"])
+				require.Equal(t, "5", state.Forward.Query["page"])
+			},
+		},
+		{
+			name: "handles empty template results",
+			cfg: Config{
+				Headers: CategoryConfig{
+					Custom: map[string]string{
+						"X-Missing": `{{ index .raw.Headers "non-existent" }}`,
+					},
+				},
+			},
+			req: func() *http.Request {
+				return httptest.NewRequest(http.MethodGet, "http://example.com/auth", http.NoBody)
+			},
+			expect: func(t *testing.T, _ pipeline.Result, state *pipeline.State) {
+				// Empty template results should be stripped
+				require.NotContains(t, state.Forward.Headers, "x-missing")
+			},
+		},
+		{
+			name: "falls back to static value on template error",
+			cfg: Config{
+				Headers: CategoryConfig{
+					Custom: map[string]string{
+						"X-Static": "fallback-value",
+					},
+				},
+			},
+			req: func() *http.Request {
+				return httptest.NewRequest(http.MethodGet, "http://example.com/auth", http.NoBody)
+			},
+			expect: func(t *testing.T, _ pipeline.Result, state *pipeline.State) {
+				// Should use static value if no template is configured
+				require.Equal(t, "fallback-value", state.Forward.Headers["x-static"])
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			req := tc.req()
+			state := newTestState(req)
+
+			// Create template renderer
+			renderer := templates.NewRenderer(nil)
+
+			agent, err := New(tc.cfg, renderer, nil)
+			require.NoError(t, err)
 
 			res := agent.Execute(req.Context(), req, state)
 

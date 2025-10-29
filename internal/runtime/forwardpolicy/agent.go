@@ -2,10 +2,13 @@ package forwardpolicy
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/l0p7/passctrl/internal/runtime/pipeline"
+	"github.com/l0p7/passctrl/internal/templates"
 )
 
 // Config captures the forward request policy toggles and curated allow/strip
@@ -27,26 +30,34 @@ type CategoryConfig struct {
 type policyRules struct {
 	forwardProxyHeaders bool
 
-	headerAllowAll bool
-	headerAllow    map[string]struct{}
-	headerStrip    map[string]struct{}
-	headerCustom   map[string]string
+	headerAllowAll      bool
+	headerAllow         map[string]struct{}
+	headerStrip         map[string]struct{}
+	headerCustom        map[string]string
+	headerCustomTemplates map[string]*templates.Template
 
-	queryAllowAll bool
-	queryAllow    map[string]struct{}
-	queryStrip    map[string]struct{}
-	queryCustom   map[string]string
+	queryAllowAll       bool
+	queryAllow          map[string]struct{}
+	queryStrip          map[string]struct{}
+	queryCustom         map[string]string
+	queryCustomTemplates map[string]*templates.Template
 }
 
 // Agent curates the inbound request metadata to expose a minimal forward view
 // for downstream rule evaluation and backend calls.
 type Agent struct {
 	policy policyRules
+	logger *slog.Logger
 }
 
 // New constructs an Agent with the supplied configuration.
-func New(cfg Config) *Agent {
-	return &Agent{policy: compile(cfg)}
+// If renderer is provided, custom header/query values will be treated as templates.
+func New(cfg Config, renderer *templates.Renderer, logger *slog.Logger) (*Agent, error) {
+	rules, err := compile(cfg, renderer)
+	if err != nil {
+		return nil, err
+	}
+	return &Agent{policy: rules, logger: logger}, nil
 }
 
 // DefaultConfig returns the baseline forward request policy that keeps
@@ -63,15 +74,17 @@ func DefaultConfig() Config {
 	}
 }
 
-func compile(cfg Config) policyRules {
+func compile(cfg Config, renderer *templates.Renderer) (policyRules, error) {
 	rules := policyRules{
 		forwardProxyHeaders: cfg.ForwardProxyHeaders,
 		headerAllow:         make(map[string]struct{}),
 		headerStrip:         make(map[string]struct{}),
 		headerCustom:        make(map[string]string),
+		headerCustomTemplates: make(map[string]*templates.Template),
 		queryAllow:          make(map[string]struct{}),
 		queryStrip:          make(map[string]struct{}),
 		queryCustom:         make(map[string]string),
+		queryCustomTemplates: make(map[string]*templates.Template),
 	}
 
 	for _, name := range cfg.Headers.Allow {
@@ -92,12 +105,30 @@ func compile(cfg Config) policyRules {
 		}
 		rules.headerStrip[strings.ToLower(trimmed)] = struct{}{}
 	}
-	for name, value := range cfg.Headers.Custom {
-		key := strings.TrimSpace(name)
-		if key == "" {
-			continue
+	if len(cfg.Headers.Custom) > 0 {
+		keys := make([]string, 0, len(cfg.Headers.Custom))
+		for name := range cfg.Headers.Custom {
+			keys = append(keys, name)
 		}
-		rules.headerCustom[strings.ToLower(key)] = value
+		sort.Strings(keys)
+		for _, name := range keys {
+			key := strings.TrimSpace(name)
+			if key == "" {
+				continue
+			}
+			value := cfg.Headers.Custom[name]
+			lower := strings.ToLower(key)
+			rules.headerCustom[lower] = value
+
+			// Compile template if renderer is available
+			if renderer != nil {
+				tmpl, err := renderer.CompileInline("forward:header:"+lower, value)
+				if err != nil {
+					return policyRules{}, err
+				}
+				rules.headerCustomTemplates[lower] = tmpl
+			}
+		}
 	}
 
 	for _, name := range cfg.Query.Allow {
@@ -118,15 +149,33 @@ func compile(cfg Config) policyRules {
 		}
 		rules.queryStrip[strings.ToLower(trimmed)] = struct{}{}
 	}
-	for name, value := range cfg.Query.Custom {
-		key := strings.TrimSpace(name)
-		if key == "" {
-			continue
+	if len(cfg.Query.Custom) > 0 {
+		keys := make([]string, 0, len(cfg.Query.Custom))
+		for name := range cfg.Query.Custom {
+			keys = append(keys, name)
 		}
-		rules.queryCustom[strings.ToLower(key)] = value
+		sort.Strings(keys)
+		for _, name := range keys {
+			key := strings.TrimSpace(name)
+			if key == "" {
+				continue
+			}
+			value := cfg.Query.Custom[name]
+			lower := strings.ToLower(key)
+			rules.queryCustom[lower] = value
+
+			// Compile template if renderer is available
+			if renderer != nil {
+				tmpl, err := renderer.CompileInline("forward:query:"+lower, value)
+				if err != nil {
+					return policyRules{}, err
+				}
+				rules.queryCustomTemplates[lower] = tmpl
+			}
+		}
 	}
 
-	return rules
+	return rules, nil
 }
 
 // Name identifies the forward request policy agent for logging and result
@@ -142,8 +191,8 @@ func (a *Agent) Execute(_ context.Context, r *http.Request, state *pipeline.Stat
 	incomingHeaders := captureRequestHeaders(r)
 	incomingQuery := captureRequestQuery(r)
 
-	headers := a.selectHeaders(incomingHeaders)
-	queries := a.selectQueryParams(incomingQuery)
+	headers := a.selectHeaders(incomingHeaders, state)
+	queries := a.selectQueryParams(incomingQuery, state)
 
 	state.Forward.Headers = headers
 	state.Forward.Query = queries
@@ -158,7 +207,7 @@ func (a *Agent) Execute(_ context.Context, r *http.Request, state *pipeline.Stat
 	}
 }
 
-func (a *Agent) selectHeaders(incoming map[string]string) map[string]string {
+func (a *Agent) selectHeaders(incoming map[string]string, state *pipeline.State) map[string]string {
 	selected := make(map[string]string)
 	if a.policy.headerAllowAll {
 		for name, value := range incoming {
@@ -189,17 +238,34 @@ func (a *Agent) selectHeaders(incoming map[string]string) map[string]string {
 	}
 
 	for name, value := range a.policy.headerCustom {
-		trimmed := strings.TrimSpace(value)
-		if trimmed == "" {
+		// Render template if available
+		if tmpl := a.policy.headerCustomTemplates[name]; tmpl != nil {
+			rendered, err := tmpl.Render(state.TemplateContext())
+			if err != nil {
+				// Log error but continue with static value
+				if a.logger != nil {
+					a.logger.Warn("forward policy header template render failed",
+						slog.String("header", name),
+						slog.String("error", err.Error()))
+				}
+				value = strings.TrimSpace(value)
+			} else {
+				value = strings.TrimSpace(rendered)
+			}
+		} else {
+			value = strings.TrimSpace(value)
+		}
+
+		if value == "" {
 			delete(selected, name)
 			continue
 		}
-		selected[name] = trimmed
+		selected[name] = value
 	}
 	return selected
 }
 
-func (a *Agent) selectQueryParams(incoming map[string]string) map[string]string {
+func (a *Agent) selectQueryParams(incoming map[string]string, state *pipeline.State) map[string]string {
 	selected := make(map[string]string)
 	if a.policy.queryAllowAll {
 		for name, value := range incoming {
@@ -218,12 +284,29 @@ func (a *Agent) selectQueryParams(incoming map[string]string) map[string]string 
 	}
 
 	for name, value := range a.policy.queryCustom {
-		trimmed := strings.TrimSpace(value)
-		if trimmed == "" {
+		// Render template if available
+		if tmpl := a.policy.queryCustomTemplates[name]; tmpl != nil {
+			rendered, err := tmpl.Render(state.TemplateContext())
+			if err != nil {
+				// Log error but continue with static value
+				if a.logger != nil {
+					a.logger.Warn("forward policy query template render failed",
+						slog.String("query", name),
+						slog.String("error", err.Error()))
+				}
+				value = strings.TrimSpace(value)
+			} else {
+				value = strings.TrimSpace(rendered)
+			}
+		} else {
+			value = strings.TrimSpace(value)
+		}
+
+		if value == "" {
 			delete(selected, name)
 			continue
 		}
-		selected[name] = trimmed
+		selected[name] = value
 	}
 	return selected
 }

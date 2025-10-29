@@ -513,7 +513,7 @@ func (a *ruleExecutionAgent) renderBackendRequest(
 	}
 
 	// Select headers
-	headers := backend.SelectHeaders(state.Forward.Headers)
+	headers := backend.SelectHeaders(state.Forward.Headers, state)
 	if backend.ForwardProxyHeaders {
 		if state.Admission.ForwardedFor != "" {
 			if headers == nil {
@@ -540,7 +540,7 @@ func (a *ruleExecutionAgent) renderBackendRequest(
 	}
 
 	// Select query parameters
-	query := backend.SelectQuery(state.Forward.Query)
+	query := backend.SelectQuery(state.Forward.Query, state)
 
 	// Apply auth selection to query if needed
 	if authSel != nil && authSel.forward.Type == "query" {

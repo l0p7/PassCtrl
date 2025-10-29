@@ -73,4 +73,7 @@ rules:
           custom:
             X-Auth-Result: "invalid credentials"
     cache:
-      resultTTL: "0s"
+      ttl:
+        pass: "0s"
+        fail: "0s"
+        error: "0s"

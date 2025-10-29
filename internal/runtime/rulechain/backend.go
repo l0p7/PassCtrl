@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/textproto"
 	"net/url"
+	"sort"
 	"strings"
 
 	"github.com/l0p7/passctrl/internal/runtime/forwardpolicy"
@@ -37,10 +38,11 @@ type BackendPagination struct {
 }
 
 type backendForwardRules struct {
-	allowAll bool
-	allow    map[string]struct{}
-	strip    map[string]struct{}
-	custom   map[string]string
+	allowAll        bool
+	allow           map[string]struct{}
+	strip           map[string]struct{}
+	custom          map[string]string
+	customTemplates map[string]*templates.Template
 }
 
 // Pagination returns the pagination configuration for the backend.
@@ -60,7 +62,8 @@ func (b BackendDefinition) Accepts(status int) bool {
 }
 
 // SelectHeaders curates the headers that should be forwarded to the backend.
-func (b BackendDefinition) SelectHeaders(incoming map[string]string) map[string]string {
+// If templates are available, they will be rendered using the provided state.
+func (b BackendDefinition) SelectHeaders(incoming map[string]string, state *pipeline.State) map[string]string {
 	selected := make(map[string]string)
 	if b.Headers.allowAll {
 		for name, value := range incoming {
@@ -77,19 +80,31 @@ func (b BackendDefinition) SelectHeaders(incoming map[string]string) map[string]
 		delete(selected, name)
 	}
 	for name, value := range b.Headers.custom {
-		trimmed := strings.TrimSpace(value)
-		if trimmed == "" {
+		// Render template if available
+		if tmpl := b.Headers.customTemplates[name]; tmpl != nil && state != nil {
+			rendered, err := tmpl.Render(state.TemplateContext())
+			if err != nil {
+				// On error, fall back to static value
+				value = strings.TrimSpace(value)
+			} else {
+				value = strings.TrimSpace(rendered)
+			}
+		} else {
+			value = strings.TrimSpace(value)
+		}
+
+		if value == "" {
 			delete(selected, name)
 			continue
 		}
-		selected[name] = trimmed
+		selected[name] = value
 	}
 	return selected
 }
 
 // SelectQuery curates the query parameters that should be forwarded to the
-// backend.
-func (b BackendDefinition) SelectQuery(incoming map[string]string) map[string]string {
+// backend. If templates are available, they will be rendered using the provided state.
+func (b BackendDefinition) SelectQuery(incoming map[string]string, state *pipeline.State) map[string]string {
 	selected := make(map[string]string)
 	if b.Query.allowAll {
 		for name, value := range incoming {
@@ -106,17 +121,29 @@ func (b BackendDefinition) SelectQuery(incoming map[string]string) map[string]st
 		delete(selected, name)
 	}
 	for name, value := range b.Query.custom {
-		trimmed := strings.TrimSpace(value)
-		if trimmed == "" {
+		// Render template if available
+		if tmpl := b.Query.customTemplates[name]; tmpl != nil && state != nil {
+			rendered, err := tmpl.Render(state.TemplateContext())
+			if err != nil {
+				// On error, fall back to static value
+				value = strings.TrimSpace(value)
+			} else {
+				value = strings.TrimSpace(rendered)
+			}
+		} else {
+			value = strings.TrimSpace(value)
+		}
+
+		if value == "" {
 			delete(selected, name)
 			continue
 		}
-		selected[name] = trimmed
+		selected[name] = value
 	}
 	return selected
 }
 
-func buildBackendDefinition(spec BackendDefinitionSpec) BackendDefinition {
+func buildBackendDefinition(spec BackendDefinitionSpec, renderer *templates.Renderer) BackendDefinition {
 	url := strings.TrimSpace(spec.URL)
 	if url == "" {
 		return BackendDefinition{}
@@ -147,8 +174,8 @@ func buildBackendDefinition(spec BackendDefinitionSpec) BackendDefinition {
 		URL:                 url,
 		Method:              method,
 		ForwardProxyHeaders: spec.ForwardProxyHeaders,
-		Headers:             compileBackendForwardRules(spec.Headers),
-		Query:               compileBackendForwardRules(spec.Query),
+		Headers:             compileBackendForwardRules(spec.Headers, renderer),
+		Query:               compileBackendForwardRules(spec.Query, renderer),
 		Body:                spec.Body,
 		BodyFile:            strings.TrimSpace(spec.BodyFile),
 		Accepted:            accepted,
@@ -160,11 +187,12 @@ func buildBackendDefinition(spec BackendDefinitionSpec) BackendDefinition {
 	}
 }
 
-func compileBackendForwardRules(cfg forwardpolicy.CategoryConfig) backendForwardRules {
+func compileBackendForwardRules(cfg forwardpolicy.CategoryConfig, renderer *templates.Renderer) backendForwardRules {
 	rules := backendForwardRules{
-		allow:  make(map[string]struct{}),
-		strip:  make(map[string]struct{}),
-		custom: make(map[string]string),
+		allow:           make(map[string]struct{}),
+		strip:           make(map[string]struct{}),
+		custom:          make(map[string]string),
+		customTemplates: make(map[string]*templates.Template),
 	}
 
 	for _, name := range cfg.Allow {
@@ -185,12 +213,30 @@ func compileBackendForwardRules(cfg forwardpolicy.CategoryConfig) backendForward
 		}
 		rules.strip[strings.ToLower(trimmed)] = struct{}{}
 	}
-	for name, value := range cfg.Custom {
-		key := strings.TrimSpace(name)
-		if key == "" {
-			continue
+	if len(cfg.Custom) > 0 {
+		keys := make([]string, 0, len(cfg.Custom))
+		for name := range cfg.Custom {
+			keys = append(keys, name)
 		}
-		rules.custom[strings.ToLower(key)] = value
+		sort.Strings(keys)
+		for _, name := range keys {
+			key := strings.TrimSpace(name)
+			if key == "" {
+				continue
+			}
+			value := cfg.Custom[name]
+			lower := strings.ToLower(key)
+			rules.custom[lower] = value
+
+			// Compile template if renderer is available
+			if renderer != nil {
+				// Note: errors during compilation are logged but don't fail the build
+				// Templates will fall back to static values if compilation fails
+				if tmpl, err := renderer.CompileInline("backend:"+lower, value); err == nil {
+					rules.customTemplates[lower] = tmpl
+				}
+			}
+		}
 	}
 	return rules
 }
@@ -198,7 +244,7 @@ func compileBackendForwardRules(cfg forwardpolicy.CategoryConfig) backendForward
 // ApplyHeaders mutates the supplied request with the curated backend headers
 // and proxy forwarding metadata.
 func (b BackendDefinition) ApplyHeaders(req *http.Request, state *pipeline.State) {
-	headers := b.SelectHeaders(state.Forward.Headers)
+	headers := b.SelectHeaders(state.Forward.Headers, state)
 	for name, value := range headers {
 		if strings.TrimSpace(value) == "" {
 			continue
@@ -218,7 +264,7 @@ func (b BackendDefinition) ApplyHeaders(req *http.Request, state *pipeline.State
 // ApplyQuery mutates the supplied request URL with the curated backend query
 // parameters.
 func (b BackendDefinition) ApplyQuery(req *http.Request, state *pipeline.State) {
-	selected := b.SelectQuery(state.Forward.Query)
+	selected := b.SelectQuery(state.Forward.Query, state)
 	values := req.URL.Query()
 	for name := range b.Query.strip {
 		values.Del(name)
