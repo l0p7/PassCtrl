@@ -108,11 +108,13 @@ rules:
       error:
         - backend.status >= 500
     variables:
-      global:
-        user_id:
-          from: backend.body.userId
-        tier:
-          from: backend.body.tier
+      user_id: backend.body.userId
+      tier: backend.body.tier
+    responses:
+      pass:
+        variables:
+          user_id: variables.user_id
+          tier: variables.tier
     cache:
       passTTL: "5m"
       failTTL: "30s"
@@ -122,14 +124,14 @@ rules:
     description: "Denies requests from suspended or free-tier accounts."
     conditions:
       pass:
-        - lookup(vars.global, "tier") in ["gold", "platinum"]
+        - lookup(vars.rules["session-lookup"], "tier") in ["gold", "platinum"]
       fail:
-        - lookup(vars.global, "tier") in ["free", "suspended"]
+        - lookup(vars.rules["session-lookup"], "tier") in ["free", "suspended"]
     responses:
       fail:
         headers:
           custom:
-            X-PassCtrl-Tier: "{{ index .vars.global \"tier\" }}"
+            X-PassCtrl-Tier: "{{ index .rules \"session-lookup\" \"variables\" \"tier\" }}"
     cache:
       passTTL: "0s"
       failTTL: "0s"

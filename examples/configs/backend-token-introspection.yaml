@@ -97,13 +97,15 @@ rules:
       error:
         - backend.status >= 500
     variables:
-      global:
-        validated_token:
-          from: backend.body.token
-        subscription_plan:
-          from: backend.body.plan
-        subject:
-          from: backend.body.sub
+      validated_token: backend.body.token
+      subscription_plan: backend.body.plan
+      subject: backend.body.sub
+    responses:
+      pass:
+        variables:
+          validated_token: variables.validated_token
+          subscription_plan: variables.subscription_plan
+          subject: variables.subject
     cache:
       passTTL: "90s"
       failTTL: "0s"
@@ -113,16 +115,16 @@ rules:
     description: "Ensures the identity API flagged the account as active."
     conditions:
       pass:
-        - lookup(vars.global, "validated_token") != "" && lookup(vars.global, "subscription_plan") in ["plus", "enterprise"]
+        - lookup(vars.rules, "introspect-bearer-token") != {} && lookup(vars.rules["introspect-bearer-token"], "validated_token") != "" && lookup(vars.rules["introspect-bearer-token"], "subscription_plan") in ["plus", "enterprise"]
       fail:
-        - lookup(vars.global, "subscription_plan") == "expired"
-        - lookup(vars.global, "validated_token") == ""
+        - lookup(vars.rules["introspect-bearer-token"], "subscription_plan") == "expired"
+        - lookup(vars.rules, "introspect-bearer-token") == {} || lookup(vars.rules["introspect-bearer-token"], "validated_token") == ""
     responses:
       fail:
         headers:
           custom:
             X-PassCtrl-Reason: "subscription check failed"
-            X-PassCtrl-Plan: "{{ index .vars.global \"subscription_plan\" }}"
+            X-PassCtrl-Plan: "{{ index .rules \"introspect-bearer-token\" \"variables\" \"subscription_plan\" }}"
     cache:
       passTTL: "0s"
       failTTL: "0s"

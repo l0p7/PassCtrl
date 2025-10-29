@@ -54,11 +54,13 @@ rules:
         - lookup(backend.body, "active") == false
         - backend.status == 404
     variables:
-      global:
-        user_id:
-          from: backend.body.id
-        plan:
-          from: backend.body.plan
+      user_id: backend.body.id
+      plan: backend.body.plan
+    responses:
+      pass:
+        variables:
+          user_id: variables.user_id
+          plan: variables.plan
     cache:
       followCacheControl: true
       passTTL: "5m"
@@ -68,14 +70,14 @@ rules:
     description: "Requires a paid subscription level before allowing access."
     conditions:
       pass:
-        - lookup(vars.global, "plan") in ["plus", "enterprise"]
+        - lookup(vars.rules["fetch-profile"], "plan") in ["plus", "enterprise"]
       fail:
-        - lookup(vars.global, "plan") == "free"
+        - lookup(vars.rules["fetch-profile"], "plan") == "free"
     responses:
       fail:
         headers:
           custom:
-            X-PassCtrl-Plan: "{{ index .vars.global \"plan\" }}"
+            X-PassCtrl-Plan: "{{ index .rules \"fetch-profile\" \"variables\" \"plan\" }}"
     cache:
       passTTL: "0s"
       failTTL: "0s"
