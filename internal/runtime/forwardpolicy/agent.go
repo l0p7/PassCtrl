@@ -30,16 +30,16 @@ type CategoryConfig struct {
 type policyRules struct {
 	forwardProxyHeaders bool
 
-	headerAllowAll      bool
-	headerAllow         map[string]struct{}
-	headerStrip         map[string]struct{}
-	headerCustom        map[string]string
+	headerAllowAll        bool
+	headerAllow           map[string]struct{}
+	headerStrip           map[string]struct{}
+	headerCustom          map[string]string
 	headerCustomTemplates map[string]*templates.Template
 
-	queryAllowAll       bool
-	queryAllow          map[string]struct{}
-	queryStrip          map[string]struct{}
-	queryCustom         map[string]string
+	queryAllowAll        bool
+	queryAllow           map[string]struct{}
+	queryStrip           map[string]struct{}
+	queryCustom          map[string]string
 	queryCustomTemplates map[string]*templates.Template
 }
 
@@ -76,15 +76,15 @@ func DefaultConfig() Config {
 
 func compile(cfg Config, renderer *templates.Renderer) (policyRules, error) {
 	rules := policyRules{
-		forwardProxyHeaders: cfg.ForwardProxyHeaders,
-		headerAllow:         make(map[string]struct{}),
-		headerStrip:         make(map[string]struct{}),
-		headerCustom:        make(map[string]string),
+		forwardProxyHeaders:   cfg.ForwardProxyHeaders,
+		headerAllow:           make(map[string]struct{}),
+		headerStrip:           make(map[string]struct{}),
+		headerCustom:          make(map[string]string),
 		headerCustomTemplates: make(map[string]*templates.Template),
-		queryAllow:          make(map[string]struct{}),
-		queryStrip:          make(map[string]struct{}),
-		queryCustom:         make(map[string]string),
-		queryCustomTemplates: make(map[string]*templates.Template),
+		queryAllow:            make(map[string]struct{}),
+		queryStrip:            make(map[string]struct{}),
+		queryCustom:           make(map[string]string),
+		queryCustomTemplates:  make(map[string]*templates.Template),
 	}
 
 	for _, name := range cfg.Headers.Allow {

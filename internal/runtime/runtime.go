@@ -623,6 +623,10 @@ func (p *Pipeline) installFallbackEndpoint() {
 		slog.String("agent", "rule_execution"),
 		slog.String("endpoint", "default"),
 	)
+	backendInteractionLogger := p.logger.With(
+		slog.String("agent", "backend_interaction"),
+		slog.String("endpoint", "default"),
+	)
 	trusted := defaultTrustedNetworks()
 	defaultAuthConfig := admission.Config{
 		Required: false,
@@ -639,12 +643,16 @@ func (p *Pipeline) installFallbackEndpoint() {
 		p.logger.Error("failed to create forward policy agent for default endpoint", slog.String("error", err.Error()))
 		fwdPolicy, _ = forwardpolicy.New(forwardpolicy.DefaultConfig(), nil, fwdLogger)
 	}
+
+	// Create backend interaction agent with HTTP client
+	backendAgent := newBackendInteractionAgent(&http.Client{Timeout: 10 * time.Second}, backendInteractionLogger)
+
 	agents := []pipeline.Agent{
 		&serverAgent{},
 		admission.New(trusted, false, defaultAuthConfig),
 		fwdPolicy,
 		rulechain.NewAgent(rulechain.DefaultDefinitions(p.templateRenderer)),
-		newRuleExecutionAgent(nil, ruleExecutionLogger, p.templateRenderer, p.cache, p.cacheTTL, p.metrics),
+		newRuleExecutionAgent(backendAgent, ruleExecutionLogger, p.templateRenderer, p.cache, p.cacheTTL, p.metrics),
 		responsepolicy.NewWithConfig(responsepolicy.Config{Endpoint: "default", Renderer: p.templateRenderer}),
 	}
 	runtime := &endpointRuntime{
@@ -741,9 +749,15 @@ func (p *Pipeline) buildEndpointRuntime(name string, cfg config.EndpointConfig, 
 		agents = append(agents, endpointVarsAgent)
 	}
 
+	// Create backend interaction agent with HTTP client
+	backendAgent := newBackendInteractionAgent(
+		&http.Client{Timeout: 10 * time.Second},
+		p.logger.With(slog.String("agent", "backend_interaction"), slog.String("endpoint", trimmed)),
+	)
+
 	agents = append(agents,
 		rulechain.NewAgent(ruleDefs),
-		newRuleExecutionAgent(nil, p.logger.With(slog.String("agent", "rule_execution"), slog.String("endpoint", trimmed)), p.templateRenderer, p.cache, p.cacheTTL, p.metrics),
+		newRuleExecutionAgent(backendAgent, p.logger.With(slog.String("agent", "rule_execution"), slog.String("endpoint", trimmed)), p.templateRenderer, p.cache, p.cacheTTL, p.metrics),
 		responsepolicy.NewWithConfig(responsepolicy.Config{
 			Endpoint: trimmed,
 			Renderer: p.templateRenderer,

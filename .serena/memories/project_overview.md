@@ -2,7 +2,7 @@
 
 ## Purpose
 
-PassCtrl is a forward-auth runtime implementing a composable rule chain architecture. It's a redesign of the Rest ForwardAuth runtime that processes authentication/authorization requests through seven specialized runtime agents. The system emphasizes observability, predictable request handling, and configuration-driven behavior.
+PassCtrl is a forward-auth runtime implementing a composable rule chain architecture. It's a redesign of the Rest ForwardAuth runtime that processes authentication/authorization requests through eight specialized runtime agents. The system emphasizes observability, predictable request handling, and configuration-driven behavior.
 
 ## Tech Stack
 
@@ -36,15 +36,26 @@ Supports YAML, TOML, and JSON via koanf parsers.
 
 ## Core Architecture
 
-PassCtrl models request processing as collaboration between seven specialized agents:
+PassCtrl models request processing as collaboration between eight specialized agents:
 
 1. **Server Configuration & Lifecycle** - Bootstrap, config loading, hot-reload
 2. **Admission & Raw State** - Request authentication, proxy validation
 3. **Forward Request Policy** - Header/query parameter curation
 4. **Rule Chain** - Ordered rule execution with short-circuit semantics
-5. **Rule Execution** - Individual rule processing, backend calls, CEL evaluation
-6. **Response Policy** - HTTP response rendering
-7. **Result Caching** - Decision memoization (never caches backend bodies or 5xx)
+5. **Rule Execution** - Individual rule orchestration, template rendering, condition evaluation
+6. **Backend Interaction** - HTTP execution to backend APIs with pagination support
+7. **Response Policy** - HTTP response rendering
+8. **Result Caching** - Decision memoization (never caches backend bodies or 5xx)
+
+### Agent Separation (v2 Architecture)
+
+The Backend Interaction Agent (Agent 6) was separated from the Rule Execution Agent to achieve:
+- **Single Responsibility**: HTTP execution isolated from rule orchestration
+- **Better Testability**: Backend agent fully mockable
+- **Improved Observability**: Separate `agent: "backend_interaction"` log labels
+- **Future Extensibility**: Circuit breakers, retries, streaming can be added without touching rule logic
+
+See `design/backend-agent-separation.md` for detailed architecture and migration rationale.
 
 ## Key Features
 
@@ -52,7 +63,7 @@ PassCtrl models request processing as collaboration between seven specialized ag
 - Template-based response rendering with Sprig helpers
 - Configuration hot-reload with automatic cache invalidation
 - Template sandboxing with path traversal protection
-- Backend pagination support
+- Backend pagination support (link-header per RFC 5988)
 - Separate pass/fail TTL caching
 - Prometheus metrics on `/metrics`
 - Structured logging with correlation IDs

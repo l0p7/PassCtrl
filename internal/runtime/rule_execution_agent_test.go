@@ -29,7 +29,8 @@ func TestRuleExecutionAgentBackendDefaultFailWhenNotAccepted(t *testing.T) {
 
 	def := compileBackendOnlyRule(t, targetURL, []int{http.StatusOK})
 
-	agent := newRuleExecutionAgent(mockClient, nil, nil, nil, 0, nil)
+	backendAgent := newBackendInteractionAgent(mockClient, nil)
+	agent := newRuleExecutionAgent(backendAgent, nil, nil, nil, 0, nil)
 	state := pipeline.NewState(httptest.NewRequest(http.MethodGet, "http://unit.test/request", nil), "endpoint", "cache-key", "")
 
 	outcome, reason, _ := agent.evaluateRule(context.Background(), def, state)
@@ -51,7 +52,8 @@ func TestRuleExecutionAgentBackendDefaultPassWhenAccepted(t *testing.T) {
 
 	def := compileBackendOnlyRule(t, targetURL, []int{http.StatusOK})
 
-	agent := newRuleExecutionAgent(mockClient, nil, nil, nil, 0, nil)
+	backendAgent := newBackendInteractionAgent(mockClient, nil)
+	agent := newRuleExecutionAgent(backendAgent, nil, nil, nil, 0, nil)
 	state := pipeline.NewState(httptest.NewRequest(http.MethodGet, "http://unit.test/request", nil), "endpoint", "cache-key", "")
 
 	outcome, reason, _ := agent.evaluateRule(context.Background(), def, state)
@@ -73,7 +75,8 @@ func TestRuleExecutionAgentAuthForwardsBearer(t *testing.T) {
 
 	def := compileRuleWithAuth(t, []rulechain.AuthDirectiveSpec{{Type: "bearer"}}, targetURL, []int{http.StatusOK})
 
-	agent := newRuleExecutionAgent(client, nil, nil, nil, 0, nil)
+	backendAgent := newBackendInteractionAgent(client, nil)
+	agent := newRuleExecutionAgent(backendAgent, nil, nil, nil, 0, nil)
 	state := pipeline.NewState(httptest.NewRequest(http.MethodGet, "http://unit.test/request", nil), "endpoint", "cache-key", "")
 	state.Admission.Credentials = []pipeline.AdmissionCredential{{
 		Type:   "bearer",
@@ -110,7 +113,8 @@ func TestRuleExecutionAgentAuthForwardAsHeaderTemplate(t *testing.T) {
 		},
 	}, targetURL, []int{http.StatusOK})
 
-	agent := newRuleExecutionAgent(client, nil, templates.NewRenderer(nil), nil, 0, nil)
+	backendAgent := newBackendInteractionAgent(client, nil)
+	agent := newRuleExecutionAgent(backendAgent, nil, templates.NewRenderer(nil), nil, 0, nil)
 	state := pipeline.NewState(httptest.NewRequest(http.MethodGet, "http://unit.test/request", nil), "endpoint", "cache-key", "")
 	state.Admission.Credentials = []pipeline.AdmissionCredential{{
 		Type:   "header",
@@ -132,7 +136,8 @@ func TestRuleExecutionAgentAuthFailsWhenNoMatch(t *testing.T) {
 
 	def := compileRuleWithAuth(t, []rulechain.AuthDirectiveSpec{{Type: "bearer"}}, targetURL, []int{http.StatusOK})
 
-	agent := newRuleExecutionAgent(client, nil, nil, nil, 0, nil)
+	backendAgent := newBackendInteractionAgent(client, nil)
+	agent := newRuleExecutionAgent(backendAgent, nil, nil, nil, 0, nil)
 	state := pipeline.NewState(httptest.NewRequest(http.MethodGet, "http://unit.test/request", nil), "endpoint", "cache-key", "")
 	state.Admission.Credentials = []pipeline.AdmissionCredential{{
 		Type:  "header",
@@ -168,7 +173,8 @@ func TestRuleExecutionAgentVariableScopes(t *testing.T) {
 	require.Len(t, defs, 1)
 	def := defs[0]
 
-	agent := newRuleExecutionAgent(nil, nil, renderer, nil, 0, nil)
+	backendAgent := newBackendInteractionAgent(nil, nil)
+	agent := newRuleExecutionAgent(backendAgent, nil, renderer, nil, 0, nil)
 	req := httptest.NewRequest(http.MethodGet, "http://unit.test/request", nil)
 	state := pipeline.NewState(req, "endpoint", "cache-key", "")
 	state.Admission.Authenticated = true
@@ -232,7 +238,8 @@ func TestRuleExecutionAgentAppliesPassResponse(t *testing.T) {
 	require.Len(t, defs, 1)
 	def := defs[0]
 
-	agent := newRuleExecutionAgent(nil, nil, renderer, nil, 0, nil)
+	backendAgent := newBackendInteractionAgent(nil, nil)
+	agent := newRuleExecutionAgent(backendAgent, nil, renderer, nil, 0, nil)
 	req := httptest.NewRequest(http.MethodGet, "http://unit.test/request", nil)
 	state := pipeline.NewState(req, "endpoint", "cache-key", "")
 	state.Admission.Authenticated = true
@@ -270,7 +277,8 @@ func TestRuleExecutionAgentAppliesFailResponse(t *testing.T) {
 	require.Len(t, defs, 1)
 	def := defs[0]
 
-	agent := newRuleExecutionAgent(nil, nil, renderer, nil, 0, nil)
+	backendAgent := newBackendInteractionAgent(nil, nil)
+	agent := newRuleExecutionAgent(backendAgent, nil, renderer, nil, 0, nil)
 	req := httptest.NewRequest(http.MethodGet, "http://unit.test/request", nil)
 	state := pipeline.NewState(req, "endpoint", "cache-key", "")
 	state.Admission.Authenticated = true
@@ -311,7 +319,8 @@ func TestRuleExecutionAgentAggregatesPassHeaders(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, defs, 2)
 
-	agent := newRuleExecutionAgent(nil, nil, renderer, nil, 0, nil)
+	backendAgent := newBackendInteractionAgent(nil, nil)
+	agent := newRuleExecutionAgent(backendAgent, nil, renderer, nil, 0, nil)
 	req := httptest.NewRequest(http.MethodGet, "http://unit.test/request", nil)
 	state := pipeline.NewState(req, "endpoint", "cache-key", "")
 	state.Admission.Authenticated = true
@@ -348,7 +357,8 @@ func TestRuleExecutionAgentAppliesErrorResponse(t *testing.T) {
 	require.Len(t, defs, 1)
 	def := defs[0]
 
-	agent := newRuleExecutionAgent(nil, nil, renderer, nil, 0, nil)
+	backendAgent := newBackendInteractionAgent(nil, nil)
+	agent := newRuleExecutionAgent(backendAgent, nil, renderer, nil, 0, nil)
 	req := httptest.NewRequest(http.MethodGet, "http://unit.test/request", nil)
 	state := pipeline.NewState(req, "endpoint", "cache-key", "")
 	state.Admission.Authenticated = true
@@ -419,7 +429,8 @@ func TestRuleExecutionAgentExportedVariables(t *testing.T) {
 			headers := map[string]string{"Content-Type": "application/json"}
 			return newBackendResponse(200, `{"userId":"123","email":"TEST@EXAMPLE.COM","tier":"premium"}`, headers), nil
 		})
-	agent := newRuleExecutionAgent(mockClient, nil, renderer, nil, 0, nil)
+	backendAgent := newBackendInteractionAgent(mockClient, nil)
+	agent := newRuleExecutionAgent(backendAgent, nil, renderer, nil, 0, nil)
 
 	def, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{
 		{
@@ -487,7 +498,8 @@ func TestRuleExecutionAgentExportedVariablesOnFail(t *testing.T) {
 			headers := map[string]string{"Content-Type": "application/json"}
 			return newBackendResponse(403, `{"error":"forbidden"}`, headers), nil
 		})
-	agent := newRuleExecutionAgent(mockClient, nil, renderer, nil, 0, nil)
+	backendAgent := newBackendInteractionAgent(mockClient, nil)
+	agent := newRuleExecutionAgent(backendAgent, nil, renderer, nil, 0, nil)
 
 	def, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{
 		{

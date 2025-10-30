@@ -24,7 +24,8 @@ Core implementation (private packages)
 - `internal/runtime/responsepolicy/` - Response rendering
 - `internal/runtime/resultcaching/` - Cache policy enforcement
 - `internal/runtime/cache/` - Cache backend abstractions (memory, Valkey/Redis)
-- `internal/runtime/rule_execution_agent.go` - Individual rule execution
+- `internal/runtime/rule_execution_agent.go` - Individual rule orchestration (delegates to backend agent)
+- `internal/runtime/backend_interaction_agent.go` - HTTP execution to backend APIs with pagination
 
 #### HTTP Layer
 - `internal/server/` - HTTP routing, health endpoints, request pipeline
@@ -35,11 +36,13 @@ Core implementation (private packages)
 ### `design/`
 Architecture documents, UML diagrams, request flows
 - **Authoritative** design documentation
-- `design/system-agents.md` - Agent contracts
+- `design/system-agents.md` - Agent contracts (8 agents)
+- `design/backend-agent-separation.md` - Backend agent architecture and rationale
 - `design/config-structure.md` - Configuration schema
 - `design/request-flows.md` - Request walkthroughs
 - `design/uml-diagrams.md` - Architecture diagrams
 - `design/decision-model.md` - Evaluation semantics
+- `design/per-rule-caching-v2.md` - Per-rule caching architecture
 
 ### `examples/`
 Working configuration samples
@@ -83,8 +86,8 @@ Beads issue tracking database (git-tracked)
 ### Rule Evaluation Order
 1. Evaluate rule authentication directives (ordered `auth` blocks)
 2. Forward first matched credential via optional `forwardAs` transformation
-3. Render backend request using templates
-4. Invoke backend API
+3. Render backend request using templates (Rule Execution Agent)
+4. Delegate HTTP execution to Backend Interaction Agent
 5. Evaluate CEL conditions (`whenAll`, `failWhen`, `errorWhen`)
 6. Export variables to scoped context (`global`, `rule`, `local`)
 7. Return outcome (`Pass`, `Fail`, `Error`)
@@ -97,7 +100,7 @@ First non-pass result short-circuits the chain.
 
 Configuration precedence: `env > file > default`
 
-## Agent Boundaries
+## Agent Boundaries (8 Total)
 
 Each runtime agent has a clear contract and should not leak responsibilities:
 
@@ -105,8 +108,24 @@ Each runtime agent has a clear contract and should not leak responsibilities:
 2. **Admission & Raw State** - Auth, proxy validation
 3. **Forward Request Policy** - Header/query curation
 4. **Rule Chain** - Orchestration
-5. **Rule Execution** - Individual rule processing
-6. **Response Policy** - Response rendering
-7. **Result Caching** - Decision memoization
+5. **Rule Execution** - Individual rule orchestration, template rendering, condition evaluation, caching
+6. **Backend Interaction** (NEW) - HTTP execution, pagination, response parsing (no policy decisions)
+7. **Response Policy** - Response rendering
+8. **Result Caching** - Decision memoization
 
 See `design/system-agents.md` for detailed contracts.
+
+## Backend Agent Separation
+
+The Backend Interaction Agent was separated from Rule Execution Agent (PassCtrl-37) to:
+- Achieve single responsibility per agent
+- Improve testability (backend agent fully mockable)
+- Enable future features (circuit breakers, retries) without touching rule logic
+- Provide better observability (separate log labels)
+
+**Key files**:
+- `internal/runtime/backend_interaction_agent.go` - HTTP execution implementation
+- `internal/runtime/backend_interaction_agent_test.go` - Comprehensive tests
+- `design/backend-agent-separation.md` - Architecture documentation
+
+**No configuration changes required** - separation is purely internal.
