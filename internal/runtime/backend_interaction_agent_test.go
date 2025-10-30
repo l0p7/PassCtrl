@@ -279,6 +279,7 @@ func TestBackendInteractionAgent_Execute_Pagination_LinkHeader(t *testing.T) {
 				if resp.linkNext != "" {
 					header.Set("Link", `<`+resp.linkNext+`>; rel="next"`)
 				}
+				//nolint:bodyclose // Body will be closed by agent under test
 				responses = append(responses, &http.Response{
 					StatusCode: 200,
 					Header:     header,
@@ -517,7 +518,7 @@ func TestBackendInteractionAgent_Execute_EmptyURL(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.False(t, state.Backend.Requested)
-	assert.Len(t, state.Backend.Pages, 0)
+	assert.Empty(t, state.Backend.Pages)
 }
 
 func TestBackendInteractionAgent_Execute_PaginationQueryPreservation(t *testing.T) {

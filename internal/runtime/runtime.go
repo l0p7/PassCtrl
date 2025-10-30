@@ -958,17 +958,57 @@ func buildRuleAuthSpec(directives []config.RuleAuthDirective) []rulechain.AuthDi
 	}
 	specs := make([]rulechain.AuthDirectiveSpec, 0, len(directives))
 	for _, directive := range directives {
+		// Convert matchers
+		matchers := make([]rulechain.AuthMatcherSpec, 0, len(directive.Match))
+		for _, m := range directive.Match {
+			matcher := rulechain.AuthMatcherSpec{
+				Type: strings.TrimSpace(m.Type),
+				Name: strings.TrimSpace(m.Name),
+			}
+
+			// Parse value constraints
+			if m.Value != nil {
+				values, err := config.ParseValueConstraint(m.Value, "auth.match.value")
+				if err != nil {
+					// Skip this directive if parsing fails (validation should have caught this)
+					continue
+				}
+				matcher.Value = values
+			}
+			if m.Username != nil {
+				values, err := config.ParseValueConstraint(m.Username, "auth.match.username")
+				if err != nil {
+					continue
+				}
+				matcher.Username = values
+			}
+			if m.Password != nil {
+				values, err := config.ParseValueConstraint(m.Password, "auth.match.password")
+				if err != nil {
+					continue
+				}
+				matcher.Password = values
+			}
+
+			matchers = append(matchers, matcher)
+		}
+
+		// Convert forwards
+		forwards := make([]rulechain.AuthForwardSpec, 0, len(directive.ForwardAs))
+		for _, f := range directive.ForwardAs {
+			forwards = append(forwards, rulechain.AuthForwardSpec{
+				Type:     strings.TrimSpace(f.Type),
+				Name:     f.Name,
+				Value:    f.Value,
+				Token:    f.Token,
+				User:     f.User,
+				Password: f.Password,
+			})
+		}
+
 		specs = append(specs, rulechain.AuthDirectiveSpec{
-			Type: strings.TrimSpace(directive.Type),
-			Name: strings.TrimSpace(directive.Name),
-			Forward: rulechain.AuthForwardSpec{
-				Type:     strings.TrimSpace(directive.ForwardAs.Type),
-				Name:     directive.ForwardAs.Name,
-				Value:    directive.ForwardAs.Value,
-				Token:    directive.ForwardAs.Token,
-				User:     directive.ForwardAs.User,
-				Password: directive.ForwardAs.Password,
-			},
+			Match:     matchers,
+			ForwardAs: forwards,
 		})
 	}
 	return specs

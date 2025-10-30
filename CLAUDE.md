@@ -112,7 +112,7 @@ Configuration uses YAML/TOML/JSON loaded via `koanf` with precedence: `env > fil
 Configuration spans three layers:
 - **Server** - Listen address/port, logging (json/text), rules sources, template sandbox controls (`templatesFolder`, `templatesAllowEnv`)
 - **Endpoints** - Authentication posture, trusted proxy IPs, forward request/response policies, rule chain ordering, cache hints
-- **Rules** - Credential intake via ordered `auth` directives, backend orchestration with CEL-based conditions (`whenAll`/`failWhen`/`errorWhen`), scoped variable exports, response shaping
+- **Rules** - Credential intake via **match groups** (compound admission with AND/OR logic, value-based matching with regex, multi-format credential emission), backend orchestration with CEL-based conditions (`whenAll`/`failWhen`/`errorWhen`), scoped variable exports, response shaping
 
 See `design/config-structure.md` for complete schema and `examples/` for working configurations.
 
@@ -162,15 +162,30 @@ Endpoints referencing missing rules get quarantined with `SkippedDefinitions` en
 
 ### Rule Evaluation Order
 Rules in an endpoint's chain execute sequentially:
-1. Evaluate rule authentication directives (ordered `auth` blocks)
-2. Forward first matched credential via optional `forwardAs` transformation
-3. Render backend request using templates
-4. Invoke backend API
+1. **Evaluate rule authentication match groups** (ordered `auth` blocks):
+   - Extract credentials from admission state (bearer, basic, headers, query)
+   - Evaluate match groups sequentially (OR between groups, AND within groups)
+   - For each group, check if ALL matchers succeed (including value constraints via regex/literals)
+   - Build template context from all matched credentials in winning group
+   - First complete match wins
+2. **Render and apply credential forwards**:
+   - When `forwardAs` is present: render each output using templates
+   - When `forwardAs` is omitted: pass-through mode (forward matched credentials unchanged)
+   - Strip all credential sources mentioned in auth block before applying forwards
+3. Render backend request using templates (URL, headers, query, body)
+4. Invoke backend API (with pagination if configured)
 5. Evaluate CEL conditions (`whenAll`, `failWhen`, `errorWhen`)
 6. Export variables to scoped context (`global`, `rule`, `local`)
 7. Return outcome (`Pass`, `Fail`, `Error`)
 
 First non-pass result short-circuits the chain.
+
+**Auth Model Key Features**:
+- **Match Groups**: Compound admission (require multiple credentials simultaneously)
+- **Value Matching**: Filter credentials by literal strings or regex patterns (`/pattern/`)
+- **Multi-Format Emission**: Emit same credential as bearer + header + query
+- **Template Context**: `.auth.input.bearer.token`, `.auth.input.basic.user/.password`, `.auth.input.header['x-name']`, `.auth.input.query['param']`
+- **Explicit Stripping**: All credential sources stripped before applying forwards (fail-closed security)
 
 ### Caching Invariants
 - Store only decision metadata (outcome, variables, response descriptors)

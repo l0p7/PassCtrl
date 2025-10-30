@@ -58,11 +58,12 @@ rules:
   require-basic-login:
     description: "Accepts known Basic credentials and denies everything else."
     auth:
-      - type: basic
+      - match:
+          - type: basic
         forwardAs:
-          type: basic
-          user: "{{ .auth.input.user }}"
-          password: "{{ .auth.input.password }}"
+          - type: basic
+            user: "{{ .auth.input.basic.user }}"
+            password: "{{ .auth.input.basic.password }}"
     responses:
       pass:
         headers:

@@ -70,14 +70,25 @@ outputs, and operational concerns for each participant.
 - **Inputs**: Rule configuration, curated request view, scoped variables, optional cached decision hints.
 - **Outputs**: Rule outcome, rendered responses (status, headers, bodies), exported variables.
 - **Key Behaviors**:
-  - Accept credentials via the ordered `auth` directives, with optional `forwardAs` transformations.
-  - Evaluate rule authentication directives sequentially, forwarding the first matched credential (or failing early when none
-    match and no `type: none` fallback exists) according to the configured `forwardAs` block.
-  - Render backend request templates (URL, method, headers, query params, body) using the curated context and matched credentials, producing a fully-rendered request descriptor for the Backend Interaction Agent.
-  - Delegate HTTP execution and pagination to the Backend Interaction Agent, receiving populated backend state in return.
+  - Accept credentials via ordered **match groups**, where each group contains a `match` array (credential matchers with AND logic)
+    and optional `forwardAs` array (credential outputs).
+  - **Extract credentials** from admission state, organizing them by type (bearer, basic, headers map, query map) for efficient matching.
+  - **Evaluate match groups sequentially** (OR between groups, AND within groups): for each group, check if ALL matchers succeed;
+    first complete match wins. Each matcher specifies type, optional name, and optional value constraints (literal or regex patterns).
+  - **Value matching**: For matchers with value constraints, test credential values against literal strings or compiled regex patterns
+    (delimited by `/`). Multiple patterns use OR logic (any match succeeds).
+  - **Build template context** from all matched credentials in winning group, exposing `.auth.input.bearer.token`,
+    `.auth.input.basic.user/.password`, `.auth.input.header['x-name']` (lowercase keys), `.auth.input.query['param']`.
+  - **Render credential outputs**: When `forwardAs` is present, render each output using Go templates. When `forwardAs` is omitted,
+    enable **pass-through mode** by reconstructing forwards from matched credentials.
+  - **Strip all credential sources** mentioned in ANY match group from forwarded request, then apply winning group's outputs
+    (explicit credential stripping for fail-closed security).
+  - Render backend request templates (URL, method, headers, query params, body) using curated context and matched credentials,
+    producing fully-rendered request descriptor for Backend Interaction Agent.
+  - Delegate HTTP execution and pagination to Backend Interaction Agent, receiving populated backend state in return.
   - Evaluate pass/fail/error conditions via CEL using backend responses and scoped variables.
-  - Honor rule-level caching directives (checking before backend calls, storing after evaluation) and ensure error outcomes bypass caching.
-  - Evaluate declarative `whenAll`/`failWhen`/`errorWhen` condition blocks, populating execution history and per-rule reasons for downstream explanation.
+  - Honor rule-level caching directives (checking before backend calls, storing after evaluation); error outcomes bypass caching.
+  - Evaluate declarative `whenAll`/`failWhen`/`errorWhen` condition blocks, populating execution history and per-rule reasons.
   - Extract and export variables to global/rule/local scopes from backend responses and CEL evaluations.
 
 ## 6. Backend Interaction Agent

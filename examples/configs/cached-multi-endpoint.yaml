@@ -143,10 +143,11 @@ rules:
   audit-token-check:
     description: "Validates admin bearer tokens without caching."
     auth:
-      - type: bearer
+      - match:
+          - type: bearer
         forwardAs:
-          type: bearer
-          token: "{{ .auth.input.token }}"
+          - type: bearer
+            token: "{{ .auth.input.bearer.token }}"
     backendApi:
       url: "https://audit.internal/v1/validate"
       method: POST
@@ -154,11 +155,11 @@ rules:
         allow: []
         strip: []
         custom:
-          authorization: "Bearer {{ .auth.input.token }}"
+          authorization: "Bearer {{ .auth.input.bearer.token }}"
           content-type: "application/json"
       body: |
         {
-          "token": "{{ .auth.input.token }}"
+          "token": "{{ .auth.input.bearer.token }}"
         }
       acceptedStatuses: [200]
     conditions:

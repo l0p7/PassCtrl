@@ -27,14 +27,18 @@ previous one and emits a typed result that downstream stages can reference.
 ## Stage 3: Rule Evaluation
 - Execute ordered, named rules sourced from the endpoint’s `rules` list.
 - Each rule may include:
-  - **auth** — an ordered list of accepted credential directives. Each entry names a source `type`
-    (`basic`, `bearer`, `header`, `query`, or `none`), optional selector attributes such as `name`, and an inline `forwardAs`
-    block when the credential should be transformed before reaching the backend. Entries are evaluated sequentially; the first
-    directive that matches a captured credential is used. Omitting `forwardAs` forwards the credential in its original shape
-    (e.g., Basic remains Basic). When present, `forwardAs` may declare a new credential `type` and populate fields such as
-    `token`, `user`, `password`, `name`, or `value` using Go templates (with Sprig helpers). The matched credential is surfaced
-    to templates and CEL as `.auth.input.*`, and the synthesized outbound credential appears under `.auth.forward.*`. If no entry
-    matches and no directive specifies `type: none`, the rule fails before any backend call occurs.
+  - **auth** — an ordered array of **match groups**, where each group contains a `match` array of credential matchers and an
+    optional `forwardAs` array of credential outputs. Match groups implement **AND logic within groups, OR logic between groups**:
+    within a single group, ALL matchers must succeed; groups are evaluated sequentially until one fully matches. Each matcher
+    specifies a `type` (`basic`, `bearer`, `header`, `query`, or `none`), optional selector attributes like `name`, and optional
+    **value constraints** (literal strings or regex patterns delimited by `/`) to filter credentials by their values. When a group
+    matches, all matched credentials become accessible via `.auth.input.*` (e.g., `.auth.input.bearer.token`,
+    `.auth.input.basic.user`, `.auth.input.header['x-name']`, `.auth.input.query['param']`). The `forwardAs` array contains
+    multiple credential outputs (each specifying `type` and type-specific fields like `token`, `user`, `password`, `name`, `value`)
+    rendered via Go templates with Sprig helpers. Omitting `forwardAs` enables **pass-through mode** where matched credentials
+    forward unchanged. **Credential stripping** is explicit: all credential sources mentioned in ANY match group are stripped from
+    the forwarded request before the winning group's outputs are applied. If no group matches and no `type: none` is present, the
+    rule fails before any backend call occurs. The synthesized outbound credentials appear under `.auth.forward.*` for CEL access.
   - **backendApi** — the target URL, HTTP method, accepted response status codes, pagination behavior, and the same
     allow/strip/custom controls for headers and query parameters used by the forward policy. Header and query names are literal,
     while request bodies and custom values are rendered via Go templates (with Sprig helpers).

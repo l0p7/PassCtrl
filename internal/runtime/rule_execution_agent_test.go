@@ -73,7 +73,9 @@ func TestRuleExecutionAgentAuthForwardsBearer(t *testing.T) {
 			return newBackendResponse(http.StatusOK, `{}`, map[string]string{}), nil
 		})
 
-	def := compileRuleWithAuth(t, []rulechain.AuthDirectiveSpec{{Type: "bearer"}}, targetURL, []int{http.StatusOK})
+	def := compileRuleWithAuth(t, []rulechain.AuthDirectiveSpec{{
+		Match: []rulechain.AuthMatcherSpec{{Type: "bearer"}},
+	}}, targetURL, []int{http.StatusOK})
 
 	backendAgent := newBackendInteractionAgent(client, nil)
 	agent := newRuleExecutionAgent(backendAgent, nil, nil, nil, 0, nil)
@@ -88,7 +90,8 @@ func TestRuleExecutionAgentAuthForwardsBearer(t *testing.T) {
 	require.Equal(t, "pass", outcome)
 	require.Equal(t, "rule evaluated without explicit outcome", reason)
 	require.Equal(t, "bearer", state.Rule.Auth.Selected)
-	require.Equal(t, "token-123", state.Rule.Auth.Input["token"])
+	bearerMap := state.Rule.Auth.Input["bearer"].(map[string]any)
+	require.Equal(t, "token-123", bearerMap["token"])
 }
 
 func TestRuleExecutionAgentAuthForwardAsHeaderTemplate(t *testing.T) {
@@ -103,13 +106,15 @@ func TestRuleExecutionAgentAuthForwardAsHeaderTemplate(t *testing.T) {
 
 	def := compileRuleWithAuth(t, []rulechain.AuthDirectiveSpec{
 		{
-			Type: "header",
-			Name: "X-Api-Token",
-			Forward: rulechain.AuthForwardSpec{
+			Match: []rulechain.AuthMatcherSpec{{
+				Type: "header",
+				Name: "X-Api-Token",
+			}},
+			ForwardAs: []rulechain.AuthForwardSpec{{
 				Type:  "header",
 				Name:  "Authorization",
-				Value: "Bearer {{ .auth.input.value }}",
-			},
+				Value: `Bearer {{ index .auth.input.header "x-api-token" }}`,
+			}},
 		},
 	}, targetURL, []int{http.StatusOK})
 
@@ -126,7 +131,8 @@ func TestRuleExecutionAgentAuthForwardAsHeaderTemplate(t *testing.T) {
 	outcome, _, _ := agent.evaluateRule(context.Background(), def, state)
 	require.Equal(t, "pass", outcome)
 	require.Equal(t, "header", state.Rule.Auth.Selected)
-	require.Equal(t, "abc-123", state.Rule.Auth.Input["value"])
+	headerMap := state.Rule.Auth.Input["header"].(map[string]string)
+	require.Equal(t, "abc-123", headerMap["x-api-token"])
 	require.Equal(t, "Authorization", state.Rule.Auth.Forward["name"])
 }
 
@@ -134,7 +140,9 @@ func TestRuleExecutionAgentAuthFailsWhenNoMatch(t *testing.T) {
 	const targetURL = "https://backend.test/auth"
 	client := runtimemocks.NewMockHTTPDoer(t)
 
-	def := compileRuleWithAuth(t, []rulechain.AuthDirectiveSpec{{Type: "bearer"}}, targetURL, []int{http.StatusOK})
+	def := compileRuleWithAuth(t, []rulechain.AuthDirectiveSpec{{
+		Match: []rulechain.AuthMatcherSpec{{Type: "bearer"}},
+	}}, targetURL, []int{http.StatusOK})
 
 	backendAgent := newBackendInteractionAgent(client, nil)
 	agent := newRuleExecutionAgent(backendAgent, nil, nil, nil, 0, nil)

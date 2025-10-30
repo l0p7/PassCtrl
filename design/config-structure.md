@@ -169,33 +169,65 @@ This ensures that different users never share cache entries, preventing cache po
 rules:
   rule-a:
     description: ""                    # optional — human-readable summary
-    auth:                              # optional — omit to inherit endpoint admission result
-      - type: basic                    # optional entries — accept Basic credentials; forwarded unchanged when `forwardAs` is omitted
-      - type: basic                    # transforms a captured Basic credential into a Bearer token
+    auth:                              # optional — omit to inherit endpoint admission result; array of match groups
+      # Simple bearer token acceptance (pass-through when forwardAs is omitted)
+      - match:
+          - type: bearer
+
+      # Transform basic auth to bearer token
+      - match:
+          - type: basic
         forwardAs:
-          type: bearer                 # emit as Authorization: Bearer ...
-          token: "{{ .auth.input.password }}"  # Go template drawing from the matched credential
-      - type: bearer                   # optional — accept bearer tokens; forwarded unchanged when `forwardAs` is omitted
-      - type: bearer                   # prefix the inbound bearer token before forwarding
+          - type: bearer
+            token: "{{ .auth.input.basic.password }}"
+
+      # Match bearer token with value constraint (regex pattern)
+      - match:
+          - type: bearer
+            value: "/^admin-/"         # Regex pattern for admin tokens
         forwardAs:
-          type: bearer
-          token: "ZZZ-{{ .auth.input.token }}"
-      - type: header                   # optional — capture named header credentials
-        name: PRIVATE-TOKEN            # required when type is header
+          - type: bearer
+            token: "ADMIN-{{ .auth.input.bearer.token }}"
+
+      # Compound admission: require BOTH bearer token AND username header
+      - match:
+          - type: bearer
+          - type: header
+            name: X-Username
         forwardAs:
-          type: bearer                 # re-emit as a bearer token using the header value
-          token: "{{ .auth.input.value }}"
-      - type: query                    # optional — capture named query credentials
-        name: private_token            # required when type is query
+          - type: basic                # Compose basic auth from multiple sources
+            user: "{{ index .auth.input.header \"x-username\" }}"
+            password: "{{ .auth.input.bearer.token }}"
+
+      # Multiple outputs: emit credentials in multiple formats simultaneously
+      - match:
+          - type: header
+            name: PRIVATE-TOKEN
         forwardAs:
-          type: header
-          name: Authorization
-          value: "Bearer {{ .auth.input.value }}"
-      - type: none                     # optional — synthesize credentials when none were provided upstream
+          - type: bearer               # Emit as bearer token
+            token: "{{ index .auth.input.header \"private-token\" }}"
+          - type: header               # AND as custom header
+            name: X-Api-Key
+            value: "{{ index .auth.input.header \"private-token\" }}"
+          - type: query                # AND as query parameter
+            name: api_key
+            value: "{{ index .auth.input.header \"private-token\" }}"
+
+      # Value matching with multiple patterns (literal and regex)
+      - match:
+          - type: bearer
+            value: ["literal-token", "/^pattern-/", "/service-[0-9]+$/"]
         forwardAs:
-          type: basic
-          user: service
-          password: "{{ .variables.api_key }}"
+          - type: bearer
+            token: "{{ .auth.input.bearer.token }}"
+
+      # Synthesize credentials when none provided (type: none)
+      - match:
+          - type: none
+        forwardAs:
+          - type: basic
+            user: service
+            password: "{{ .variables.api_key }}"
     backendApi:                        # optional — omit when the rule is static
       url: "https://api.example"       # required when backendApi is present
       method: GET                      # optional — default GET
@@ -251,19 +283,50 @@ rules:
 ```
 
 ### Notes
-- Rules referenced inside an endpoint’s `rules` list must have corresponding entries under `rules:`.
+- Rules referenced inside an endpoint's `rules` list must have corresponding entries under `rules:`.
 - Endpoint caches expire immediately when any contributing rule cache lapses; 5xx/error outcomes are never cached.
-- The `auth` block is an ordered list. Each entry declares an accepted credential source (`type: basic|bearer|header|query|none`) and, when desired, a `forwardAs` mapping describing how that credential is emitted to the backend. Omitting `forwardAs` forwards the credential unchanged in its native form (e.g., Basic remains Basic). When `forwardAs` is present, fields such as `token`, `user`, `password`, `name`, and `value` may be populated via Go templates (with Sprig helpers) or JMESPath expressions.
-- Within each `auth` directive, the matched credential is exposed as `.auth.input.*` (e.g., `.auth.input.user`, `.auth.input.password`, `.auth.input.token`, `.auth.input.value`) so transformations can reference the captured value.
-- `forwardAs.type` accepts `basic`, `bearer`, `header`, `query`, or `none`. The type selects which additional fields matter:
-  - `basic` expects `user` and `password` templates.
-  - `bearer` expects a `token` template.
-  - `header` expects a `name` and optional `value` template (defaulting to the matched credential for pass-through).
-  - `query` expects a `name` and optional `value` template (also defaulting to the matched credential).
-  - `none` emits no downstream credential, allowing rules to consume input without forwarding anything.
-- Authentication directives are evaluated sequentially; the first directive that matches a captured credential wins. If nothing
-  matches and no directive specifies `type: none`, the rule fails before invoking the backend. The credential projected to the
-  backend (whether forwarded as-is or via `forwardAs`) is exposed to templates as `.auth.forward.*`.
+- The `auth` block is an ordered array of **match groups**. Each match group contains:
+  - `match`: Array of credential matchers that ALL must succeed (AND logic within group)
+  - `forwardAs`: Array of credential outputs to emit (optional; omit for pass-through mode)
+- **Match Group Evaluation** (OR between groups, AND within groups):
+  - Groups are evaluated sequentially
+  - Within each group, ALL matchers must succeed (AND logic)
+  - First group where ALL matchers succeed wins
+  - If no group matches and no `type: none` is present, rule fails before backend invocation
+- **Credential Matchers** accept these types: `basic`, `bearer`, `header`, `query`, `none`
+  - `basic`: Matches Basic Authorization header; optionally constrain via `username` and/or `password` value patterns
+  - `bearer`: Matches Bearer Authorization header; optionally constrain via `value` patterns
+  - `header`: Matches specific header by `name` (required); optionally constrain via `value` patterns
+  - `query`: Matches specific query parameter by `name` (required); optionally constrain via `value` patterns
+  - `none`: Always matches; used to synthesize credentials when client provides none
+- **Value Constraints** filter credentials by their values (optional for bearer, header, query, basic username/password):
+  - Single string: `value: "literal-match"` — exact match
+  - Regex pattern: `value: "/^admin-/"` — pattern delimited by forward slashes
+  - Array: `value: ["literal", "/pattern-1/", "/pattern-2/"]` — matches any (OR logic)
+  - If no value constraint provided, any credential of that type matches
+  - Regex uses Go's RE2 engine; patterns compile at config load time
+- **Template Context** for matched credentials (`.auth.input.*`):
+  - `.auth.input.bearer.token` — bearer token string
+  - `.auth.input.basic.user`, `.auth.input.basic.password` — basic auth components
+  - `.auth.input.header` — map of lowercase header names to values (access via `{{ index .auth.input.header "x-name" }}`)
+  - `.auth.input.query` — map of query parameter names to values
+  - All matched credentials in the winning group are accessible regardless of which matcher specified them
+- **Forward Outputs** (`forwardAs` array):
+  - Omit `forwardAs` for pass-through mode (credentials forwarded unchanged after stripping)
+  - Each forward output specifies `type` and type-specific fields:
+    - `basic`: requires `user` and `password` templates
+    - `bearer`: requires `token` template
+    - `header`: requires `name` template and optional `value` (defaults to empty if not provided)
+    - `query`: requires `name` template and optional `value`
+    - `none`: emits nothing (consume credentials without forwarding)
+  - Multiple outputs supported: emit same credential as bearer + header + query simultaneously
+  - All outputs rendered using Go templates with Sprig helpers
+  - Duplicate outputs (same header or query name) cause compile-time validation error
+- **Security Model** (explicit credential stripping):
+  - All credential sources mentioned in ANY match group across the entire auth block are stripped from forwarded request
+  - Only the winning group's `forwardAs` outputs are then applied to the backend request
+  - Fail-closed: missing credentials fail evaluation; no implicit forwarding
+  - This ensures credentials don't leak through unintended paths
 - CEL conditions execute against the activation assembled in `internal/runtime/rule_execution_agent.go`.
   Expressions should reference the documented maps (`raw`, `admission`, `forward`,
   `backend`, `vars`, `now`) instead of the early `request.*` identifiers so

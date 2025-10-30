@@ -177,9 +177,16 @@ type RuleConfig struct {
 }
 
 type RuleAuthDirective struct {
-	Type      string              `koanf:"type"`
-	Name      string              `koanf:"name"`
-	ForwardAs RuleForwardAsConfig `koanf:"forwardAs"`
+	Match     []RuleAuthMatcher     `koanf:"match"`
+	ForwardAs []RuleForwardAsConfig `koanf:"forwardAs"`
+}
+
+type RuleAuthMatcher struct {
+	Type     string `koanf:"type"`     // basic|bearer|header|query|none
+	Name     string `koanf:"name"`     // Required for header/query
+	Value    any    `koanf:"value"`    // string or []string - for header/query/bearer (regex or literal)
+	Username any    `koanf:"username"` // string or []string - for basic
+	Password any    `koanf:"password"` // string or []string - for basic
 }
 
 type RuleForwardAsConfig struct {
@@ -320,6 +327,176 @@ func validateVariableMap(variables map[string]string, context string) error {
 	return nil
 }
 
+// ParseValueConstraint converts the raw value constraint (string or []any) into []string.
+func ParseValueConstraint(raw any, context string) ([]string, error) {
+	if raw == nil {
+		return nil, nil
+	}
+
+	switch v := raw.(type) {
+	case string:
+		return []string{v}, nil
+	case []any:
+		if len(v) == 0 {
+			return nil, fmt.Errorf("%s: value constraint array cannot be empty", context)
+		}
+		strs := make([]string, len(v))
+		for i, item := range v {
+			s, ok := item.(string)
+			if !ok {
+				return nil, fmt.Errorf("%s: value constraint array element %d is not a string", context, i)
+			}
+			strs[i] = s
+		}
+		return strs, nil
+	default:
+		return nil, fmt.Errorf("%s: value constraint must be string or array of strings", context)
+	}
+}
+
+// validateAuthDirective validates a single auth directive (match group + forwardAs).
+func validateAuthDirective(directive RuleAuthDirective, index int, context string) error {
+	directiveCtx := fmt.Sprintf("%s.auth[%d]", context, index)
+
+	// Validate match array
+	if len(directive.Match) == 0 {
+		return fmt.Errorf("%s.match: at least one matcher required", directiveCtx)
+	}
+
+	for i, matcher := range directive.Match {
+		if err := validateAuthMatcher(matcher, i, directiveCtx); err != nil {
+			return err
+		}
+	}
+
+	// Check for type: none restrictions
+	hasNone := false
+	hasOther := false
+	for _, matcher := range directive.Match {
+		if strings.ToLower(strings.TrimSpace(matcher.Type)) == "none" {
+			hasNone = true
+		} else {
+			hasOther = true
+		}
+	}
+	if hasNone && hasOther {
+		return fmt.Errorf("%s.match: type 'none' cannot be combined with other types in the same match group", directiveCtx)
+	}
+	if hasNone && len(directive.Match) > 1 {
+		return fmt.Errorf("%s.match: type 'none' must be the only matcher in the group", directiveCtx)
+	}
+
+	// Validate forwardAs array (check for duplicates)
+	if err := validateForwardAsArray(directive.ForwardAs, directiveCtx); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// validateAuthMatcher validates a single matcher in a match group.
+func validateAuthMatcher(matcher RuleAuthMatcher, index int, parentContext string) error {
+	matcherCtx := fmt.Sprintf("%s.match[%d]", parentContext, index)
+
+	// Type required
+	if strings.TrimSpace(matcher.Type) == "" {
+		return fmt.Errorf("%s.type: required", matcherCtx)
+	}
+
+	typ := strings.ToLower(strings.TrimSpace(matcher.Type))
+	switch typ {
+	case "basic", "bearer", "header", "query", "none":
+		// Valid types
+	default:
+		return fmt.Errorf("%s.type: unsupported type %q", matcherCtx, matcher.Type)
+	}
+
+	// Name required for header/query
+	if (typ == "header" || typ == "query") && strings.TrimSpace(matcher.Name) == "" {
+		return fmt.Errorf("%s.name: required for type %s", matcherCtx, typ)
+	}
+
+	// Validate value constraint applicability
+	switch typ {
+	case "header", "query", "bearer":
+		if matcher.Username != nil {
+			return fmt.Errorf("%s.username: constraint not valid for type %s", matcherCtx, typ)
+		}
+		if matcher.Password != nil {
+			return fmt.Errorf("%s.password: constraint not valid for type %s", matcherCtx, typ)
+		}
+		// Validate value constraint structure
+		if matcher.Value != nil {
+			if _, err := ParseValueConstraint(matcher.Value, matcherCtx+".value"); err != nil {
+				return err
+			}
+		}
+
+	case "basic":
+		if matcher.Value != nil {
+			return fmt.Errorf("%s.value: constraint not valid for basic (use username/password)", matcherCtx)
+		}
+		// Validate username constraint structure
+		if matcher.Username != nil {
+			if _, err := ParseValueConstraint(matcher.Username, matcherCtx+".username"); err != nil {
+				return err
+			}
+		}
+		// Validate password constraint structure
+		if matcher.Password != nil {
+			if _, err := ParseValueConstraint(matcher.Password, matcherCtx+".password"); err != nil {
+				return err
+			}
+		}
+
+	case "none":
+		if matcher.Value != nil || matcher.Username != nil || matcher.Password != nil {
+			return fmt.Errorf("%s: value constraints not valid for type none", matcherCtx)
+		}
+	}
+
+	return nil
+}
+
+// validateForwardAsArray checks for duplicate targets in forwardAs array.
+func validateForwardAsArray(forwards []RuleForwardAsConfig, context string) error {
+	if len(forwards) == 0 {
+		// Empty forwardAs is valid (pass-through mode)
+		return nil
+	}
+
+	seen := make(map[string]bool)
+	for i, fwd := range forwards {
+		key := buildForwardKey(fwd)
+		if key == "" {
+			return fmt.Errorf("%s.forwardAs[%d]: invalid forward type", context, i)
+		}
+		if seen[key] {
+			return fmt.Errorf("%s.forwardAs[%d]: duplicate forward target %s", context, i, key)
+		}
+		seen[key] = true
+	}
+
+	return nil
+}
+
+// buildForwardKey creates a unique key for a forward target to detect duplicates.
+func buildForwardKey(fwd RuleForwardAsConfig) string {
+	typ := strings.ToLower(strings.TrimSpace(fwd.Type))
+	switch typ {
+	case "bearer", "basic":
+		return "authorization"
+	case "header":
+		return "header:" + strings.ToLower(strings.TrimSpace(fwd.Name))
+	case "query":
+		return "query:" + strings.TrimSpace(fwd.Name)
+	case "none":
+		return "none"
+	default:
+		return ""
+	}
+}
+
 // Validate enforces invariants that keep the runtime predictable before serving traffic.
 func (c *Config) Validate() error {
 	if c == nil {
@@ -357,6 +534,12 @@ func (c *Config) Validate() error {
 		}
 	}
 	for name, rule := range c.Rules {
+		// Validate rule auth directives (match groups + forwardAs)
+		for i, authDirective := range rule.Auth {
+			if err := validateAuthDirective(authDirective, i, fmt.Sprintf("rules[%s]", name)); err != nil {
+				return err
+			}
+		}
 		// Validate rule cache TTL durations
 		if err := validateCacheTTLConfig(rule.Cache.TTL, fmt.Sprintf("rules[%s].cache.ttl", name)); err != nil {
 			return err
