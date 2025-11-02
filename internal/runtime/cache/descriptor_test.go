@@ -472,3 +472,68 @@ func TestHashUpstreamVariables_SingleRule(t *testing.T) {
 	require.NotEmpty(t, hash)
 	require.Len(t, hash, 16)
 }
+
+func TestHashUpstreamVariables_NestedMapDeterminism(t *testing.T) {
+	// This test verifies the fix for non-deterministic hashing when variables contain maps.
+	// Prior to the fix, fmt.Fprint on map values would produce non-deterministic output
+	// due to Go's randomized map iteration order. Now we use JSON encoding which is deterministic.
+
+	// Create two identical variable sets with nested maps
+	vars1 := map[string]map[string]any{
+		"lookup-user": {
+			"user_id": "123",
+			"metadata": map[string]any{
+				"region": "us-west",
+				"plan":   "pro",
+				"tier":   "premium",
+			},
+			"tags": map[string]string{
+				"department": "engineering",
+				"team":       "platform",
+				"role":       "admin",
+			},
+		},
+	}
+
+	vars2 := map[string]map[string]any{
+		"lookup-user": {
+			"user_id": "123",
+			"metadata": map[string]any{
+				"tier":   "premium",
+				"region": "us-west",
+				"plan":   "pro",
+			},
+			"tags": map[string]string{
+				"role":       "admin",
+				"department": "engineering",
+				"team":       "platform",
+			},
+		},
+	}
+
+	// Compute hashes multiple times to ensure determinism
+	hashes1 := make([]string, 100)
+	hashes2 := make([]string, 100)
+
+	for i := 0; i < 100; i++ {
+		hashes1[i] = HashUpstreamVariables(vars1)
+		hashes2[i] = HashUpstreamVariables(vars2)
+	}
+
+	// All hashes from vars1 should be identical
+	for i := 1; i < len(hashes1); i++ {
+		require.Equal(t, hashes1[0], hashes1[i],
+			"Hash should be deterministic across multiple computations for vars1")
+	}
+
+	// All hashes from vars2 should be identical
+	for i := 1; i < len(hashes2); i++ {
+		require.Equal(t, hashes2[0], hashes2[i],
+			"Hash should be deterministic across multiple computations for vars2")
+	}
+
+	// vars1 and vars2 have the same logical content (just different map iteration order)
+	// so they should produce the same hash
+	require.Equal(t, hashes1[0], hashes2[0],
+		"Logically identical nested maps should produce the same hash regardless of insertion order")
+}

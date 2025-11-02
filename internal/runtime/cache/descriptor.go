@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"sort"
@@ -66,6 +67,18 @@ func (d BackendDescriptor) Hash() string {
 //
 // Returns a hex-encoded hash string suitable for use in cache keys.
 // Returns empty string if upstreamVars is nil or empty.
+// HashUpstreamVariables computes a deterministic hash of all upstream exported variables
+// using FNV-1a. This hash is used in strict cache mode to invalidate caches when upstream
+// rule variables change.
+//
+// The hash is computed from a canonical representation:
+// - Rule names are sorted alphabetically
+// - Variable names within each rule are sorted alphabetically
+// - Variable values are JSON-encoded for deterministic representation (handles nested maps/slices)
+// - Format: ruleName.varName=jsonValue|ruleName.varName=jsonValue|...
+//
+// Returns a hex-encoded hash string suitable for use in cache keys.
+// Returns empty string if upstreamVars is nil or empty.
 func HashUpstreamVariables(upstreamVars map[string]map[string]any) string {
 	if len(upstreamVars) == 0 {
 		return ""
@@ -97,7 +110,18 @@ func HashUpstreamVariables(upstreamVars map[string]map[string]any) string {
 			_, _ = h.Write([]byte("."))
 			_, _ = h.Write([]byte(varName))
 			_, _ = h.Write([]byte("="))
-			_, _ = fmt.Fprint(h, vars[varName])
+
+			// Use JSON encoding for deterministic representation of complex types
+			// json.Marshal produces sorted keys for maps, ensuring determinism
+			valueBytes, err := json.Marshal(vars[varName])
+			if err != nil {
+				// Fallback to empty string if marshaling fails
+				// This shouldn't happen for typical variable types
+				_, _ = h.Write([]byte(""))
+			} else {
+				_, _ = h.Write(valueBytes)
+			}
+
 			_, _ = h.Write([]byte("|"))
 		}
 	}
