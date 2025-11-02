@@ -113,8 +113,8 @@ rules:
     responses:
       pass:
         variables:
-          user_id: variables.user_id
-          tier: variables.tier
+          user_id: variables.local.user_id
+          tier: variables.local.tier
     cache:
       followCacheControl: true
       ttl:
@@ -126,9 +126,9 @@ rules:
     description: "Denies requests from suspended or free-tier accounts."
     conditions:
       pass:
-        - lookup(vars.rules["session-lookup"], "tier") in ["gold", "platinum"]
+        - lookup(variables.rule["session-lookup"], "tier") in ["gold", "platinum"]
       fail:
-        - lookup(vars.rules["session-lookup"], "tier") in ["free", "suspended"]
+        - lookup(variables.rule["session-lookup"], "tier") in ["free", "suspended"]
     responses:
       fail:
         headers:

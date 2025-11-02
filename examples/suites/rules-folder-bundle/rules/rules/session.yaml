@@ -46,10 +46,9 @@ rules:
         - lookup(vars.rules["lookup-session"], "entitlement") == "deny"
     responses:
       fail:
-        headers:
-          custom:
-            X-Entitlement: "denied"
-            X-Tenant-Id: "{{ index .rules \"lookup-session\" \"variables\" \"tenant_id\" }}"
+        variables:
+          entitlement_status: "denied"
+          tenant_id: "{{ index .rules \"lookup-session\" \"variables\" \"tenant_id\" }}"
     cache:
       ttl:
         pass: "0s"

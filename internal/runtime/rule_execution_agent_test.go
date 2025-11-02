@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	runtimemocks "github.com/l0p7/passctrl/internal/mocks/runtime"
-	"github.com/l0p7/passctrl/internal/runtime/forwardpolicy"
 	"github.com/l0p7/passctrl/internal/runtime/pipeline"
 	"github.com/l0p7/passctrl/internal/runtime/rulechain"
 	"github.com/l0p7/passctrl/internal/templates"
@@ -159,21 +158,21 @@ func TestRuleExecutionAgentAuthFailsWhenNoMatch(t *testing.T) {
 	require.Empty(t, state.Rule.Auth.Selected)
 }
 
-func TestRuleExecutionAgentVariableScopes(t *testing.T) {
+func TestRuleExecutionAgentLocalVariables(t *testing.T) {
 	renderer := templates.NewRenderer(nil)
 	defs, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{
 		{
 			Name: "vars-rule",
 			Variables: rulechain.VariablesSpec{
-				Global: map[string]rulechain.VariableSpec{
-					"foo": {From: `"global"`},
+				Variables: map[string]string{
+					"user_id":      `backend.body.userId`,
+					"display_name": `backend.body.displayName`,
+					"cache_key":    `user:{{ .backend.body.userId }}`,
 				},
-				Rule: map[string]rulechain.VariableSpec{
-					"bar": {From: `vars.global.foo + "-rule"`},
-				},
-				Local: map[string]rulechain.VariableSpec{
-					"baz": {From: `vars.rule.bar + "-local"`},
-				},
+			},
+			Backend: rulechain.BackendDefinitionSpec{
+				URL:      "http://backend/api",
+				Accepted: []int{200},
 			},
 		},
 	}, renderer)
@@ -181,7 +180,15 @@ func TestRuleExecutionAgentVariableScopes(t *testing.T) {
 	require.Len(t, defs, 1)
 	def := defs[0]
 
-	backendAgent := newBackendInteractionAgent(nil, nil)
+	// Mock backend response
+	mockClient := runtimemocks.NewMockHTTPDoer(t)
+	mockClient.EXPECT().
+		Do(mock.AnythingOfType("*http.Request")).
+		RunAndReturn(func(req *http.Request) (*http.Response, error) {
+			return newBackendResponse(http.StatusOK, `{"userId":"123","displayName":"Alice"}`, map[string]string{"Content-Type": "application/json"}), nil
+		})
+
+	backendAgent := newBackendInteractionAgent(mockClient, nil)
 	agent := newRuleExecutionAgent(backendAgent, nil, renderer, nil, 0, nil)
 	req := httptest.NewRequest(http.MethodGet, "http://unit.test/request", nil)
 	state := pipeline.NewState(req, "endpoint", "cache-key", "")
@@ -193,29 +200,10 @@ func TestRuleExecutionAgentVariableScopes(t *testing.T) {
 	require.Equal(t, "pass", result.Status)
 	require.Equal(t, "pass", state.Rule.Outcome)
 
-	require.Equal(t, "global", state.Variables.Global["foo"])
-	require.Equal(t, "global-rule", state.Rule.Variables.Rule["bar"])
-	require.Equal(t, "global-rule-local", state.Rule.Variables.Local["baz"])
-	require.Equal(t, "global-rule", state.Variables.Rules["vars-rule"]["bar"])
-	require.Len(t, state.Rule.History, 1)
-	require.Equal(t, "global-rule", state.Rule.History[0].Variables["bar"])
-
-	ctx := state.TemplateContext()
-	varsCtx, ok := ctx["variables"].(map[string]any)
-	require.True(t, ok)
-	require.Equal(t, "global", varsCtx["global"].(map[string]any)["foo"])
-	require.Equal(t, "global-rule", varsCtx["rule"].(map[string]any)["bar"])
-	require.Equal(t, "global-rule-local", varsCtx["local"].(map[string]any)["baz"])
-	rulesCtx, ok := ctx["rules"].(map[string]any)
-	require.True(t, ok)
-	varsRule, ok := rulesCtx["vars-rule"].(map[string]any)
-	require.True(t, ok)
-	require.Equal(t, "global-rule", varsRule["variables"].(map[string]any)["bar"])
-
-	chain, ok := ctx["chain"].([]pipeline.RuleHistoryEntry)
-	require.True(t, ok)
-	require.Len(t, chain, 1)
-	require.Equal(t, "global-rule", chain[0].Variables["bar"])
+	// Check local variables were evaluated
+	require.Equal(t, "123", state.Rule.Variables.Local["user_id"])
+	require.Equal(t, "Alice", state.Rule.Variables.Local["display_name"])
+	require.Equal(t, "user:123", state.Rule.Variables.Local["cache_key"])
 }
 
 func TestRuleExecutionAgentAppliesPassResponse(t *testing.T) {
@@ -224,19 +212,14 @@ func TestRuleExecutionAgentAppliesPassResponse(t *testing.T) {
 		{
 			Name: "response-rule",
 			Variables: rulechain.VariablesSpec{
-				Global: map[string]rulechain.VariableSpec{
-					"foo": {From: `"value"`},
-				},
-				Rule: map[string]rulechain.VariableSpec{
-					"bar": {From: `vars.global.foo`},
+				Variables: map[string]string{
+					"foo": `"value"`,
 				},
 			},
 			Responses: rulechain.ResponsesSpec{
 				Pass: rulechain.ResponseSpec{
-					Headers: forwardpolicy.CategoryConfig{
-						Custom: map[string]string{
-							"X-Custom": "{{ .variables.global.foo }}",
-						},
+					Variables: map[string]string{
+						"custom_value": "{{ .variables.foo }}",
 					},
 				},
 			},
@@ -257,9 +240,8 @@ func TestRuleExecutionAgentAppliesPassResponse(t *testing.T) {
 
 	result := agent.Execute(context.Background(), req, state)
 	require.Equal(t, "pass", result.Status)
-	require.Equal(t, "value", state.Response.Headers["X-Custom"])
+	require.Equal(t, "value", state.Response.Variables["custom_value"])
 	require.Equal(t, "keep", state.Response.Headers["existing"])
-	require.Equal(t, "value", state.Rule.History[0].Variables["bar"])
 }
 
 func TestRuleExecutionAgentAppliesFailResponse(t *testing.T) {
@@ -272,10 +254,8 @@ func TestRuleExecutionAgentAppliesFailResponse(t *testing.T) {
 			},
 			Responses: rulechain.ResponsesSpec{
 				Fail: rulechain.ResponseSpec{
-					Headers: forwardpolicy.CategoryConfig{
-						Custom: map[string]string{
-							"X-Fail": "{{ .rule.Outcome }}",
-						},
+					Variables: map[string]string{
+						"fail_reason": "{{ .rule.Outcome }}",
 					},
 				},
 			},
@@ -296,20 +276,17 @@ func TestRuleExecutionAgentAppliesFailResponse(t *testing.T) {
 	result := agent.Execute(context.Background(), req, state)
 	require.Equal(t, "fail", result.Status)
 	require.Equal(t, "fail", state.Rule.Outcome)
-	require.Equal(t, "fail", state.Response.Headers["X-Fail"])
-	require.Equal(t, "fail", state.Response.Headers["X-PassCtrl-Outcome"])
+	require.Equal(t, "fail", state.Response.Variables["fail_reason"])
 }
 
-func TestRuleExecutionAgentAggregatesPassHeaders(t *testing.T) {
+func TestRuleExecutionAgentAggregatesPassVariables(t *testing.T) {
 	renderer := templates.NewRenderer(nil)
 	defs, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{
 		{
 			Name: "rule-one",
 			Responses: rulechain.ResponsesSpec{
 				Pass: rulechain.ResponseSpec{
-					Headers: forwardpolicy.CategoryConfig{
-						Custom: map[string]string{"X-First": "one"},
-					},
+					Variables: map[string]string{"first": "\"one\""},
 				},
 			},
 		},
@@ -317,9 +294,7 @@ func TestRuleExecutionAgentAggregatesPassHeaders(t *testing.T) {
 			Name: "rule-two",
 			Responses: rulechain.ResponsesSpec{
 				Pass: rulechain.ResponseSpec{
-					Headers: forwardpolicy.CategoryConfig{
-						Custom: map[string]string{"X-Second": "two"},
-					},
+					Variables: map[string]string{"second": "\"two\""},
 				},
 			},
 		},
@@ -337,9 +312,8 @@ func TestRuleExecutionAgentAggregatesPassHeaders(t *testing.T) {
 
 	result := agent.Execute(context.Background(), req, state)
 	require.Equal(t, "pass", result.Status)
-	require.Equal(t, "one", state.Response.Headers["X-First"])
-	require.Equal(t, "two", state.Response.Headers["X-Second"])
-	require.Equal(t, "pass", state.Response.Headers["X-PassCtrl-Outcome"])
+	require.Equal(t, "one", state.Response.Variables["first"])
+	require.Equal(t, "two", state.Response.Variables["second"])
 }
 
 func TestRuleExecutionAgentAppliesErrorResponse(t *testing.T) {
@@ -352,10 +326,8 @@ func TestRuleExecutionAgentAppliesErrorResponse(t *testing.T) {
 			},
 			Responses: rulechain.ResponsesSpec{
 				Error: rulechain.ResponseSpec{
-					Headers: forwardpolicy.CategoryConfig{
-						Custom: map[string]string{
-							"X-Error": "rule-{{ .rule.Outcome }}",
-						},
+					Variables: map[string]string{
+						"error_info": "rule-{{ .rule.Outcome }}",
 					},
 				},
 			},
@@ -376,8 +348,7 @@ func TestRuleExecutionAgentAppliesErrorResponse(t *testing.T) {
 	result := agent.Execute(context.Background(), req, state)
 	require.Equal(t, "error", result.Status)
 	require.Equal(t, "error", state.Rule.Outcome)
-	require.Equal(t, "rule-error", state.Response.Headers["X-Error"])
-	require.Equal(t, "error", state.Response.Headers["X-PassCtrl-Outcome"])
+	require.Equal(t, "rule-error", state.Response.Variables["error_info"])
 }
 
 func compileBackendOnlyRule(t *testing.T, url string, accepted []int) rulechain.Definition {
@@ -449,7 +420,7 @@ func TestRuleExecutionAgentExportedVariables(t *testing.T) {
 				Accepted: []int{200},
 			},
 			Variables: rulechain.VariablesSpec{
-				LocalV2: map[string]string{
+				Variables: map[string]string{
 					"raw_id":    "backend.body.userId",
 					"raw_email": "backend.body.email",
 				},

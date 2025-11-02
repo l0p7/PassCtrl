@@ -104,9 +104,9 @@ rules:
     responses:
       pass:
         variables:
-          validated_token: variables.validated_token
-          subscription_plan: variables.subscription_plan
-          subject: variables.subject
+          validated_token: variables.local.validated_token
+          subscription_plan: variables.local.subscription_plan
+          subject: variables.local.subject
     cache:
       followCacheControl: true
       ttl:
@@ -118,16 +118,16 @@ rules:
     description: "Ensures the identity API flagged the account as active."
     conditions:
       pass:
-        - lookup(vars.rules, "introspect-bearer-token") != {} && lookup(vars.rules["introspect-bearer-token"], "validated_token") != "" && lookup(vars.rules["introspect-bearer-token"], "subscription_plan") in ["plus", "enterprise"]
+        - lookup(variables.rule, "introspect-bearer-token") != {} && lookup(variables.rule["introspect-bearer-token"], "validated_token") != "" && lookup(variables.rule["introspect-bearer-token"], "subscription_plan") in ["plus", "enterprise"]
       fail:
-        - lookup(vars.rules["introspect-bearer-token"], "subscription_plan") == "expired"
-        - lookup(vars.rules, "introspect-bearer-token") == {} || lookup(vars.rules["introspect-bearer-token"], "validated_token") == ""
+        - lookup(variables.rule["introspect-bearer-token"], "subscription_plan") == "expired"
+        - lookup(variables.rule, "introspect-bearer-token") == {} || lookup(variables.rule["introspect-bearer-token"], "validated_token") == ""
     responses:
       fail:
         headers:
           custom:
             X-PassCtrl-Reason: "subscription check failed"
-            X-PassCtrl-Plan: "{{ index .rules \"introspect-bearer-token\" \"variables\" \"subscription_plan\" }}"
+            X-PassCtrl-Plan: "{{ index .variables.rule \"introspect-bearer-token\" \"subscription_plan\" }}"
     cache:
       ttl:
         pass: "0s"

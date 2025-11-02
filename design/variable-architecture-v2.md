@@ -19,7 +19,7 @@ Variables support both CEL and Go Templates, detected automatically:
 
 - **Template** (contains `{{`): String interpolation and transformation
   ```yaml
-  cache_key: "user:{{ .backend.body.userId }}:{{ .vars.tenant }}"
+  cache_key: "user:{{ .backend.body.userId }}:{{ .variables.endpoint.tenant }}"
   email_lower: "{{ .backend.body.email | lower }}"
   ```
 
@@ -65,7 +65,7 @@ endpoints:
 
 **Evaluation**: Once per request, before rule execution.
 
-**Access**: `.vars.<name>` in all rule contexts
+**Access**: `.variables.endpoint.<name>` in all rule contexts
 
 ## 2. Local Variables
 
@@ -76,7 +76,7 @@ endpoints:
 rules:
   lookup-user:
     backendApi:
-      url: "{{ .vars.api_base }}/validate"
+      url: "{{ .variables.endpoint.api_base }}/validate"
     variables:
       # CEL - type-preserving extraction
       raw_user_id: backend.body.userId
@@ -87,7 +87,7 @@ rules:
 
       # Template - string construction
       display_name: "{{ .backend.body.firstName }} {{ .backend.body.lastName }}"
-      cache_key: "user:{{ .backend.body.userId }}:{{ .vars.tenant_id }}"
+      cache_key: "user:{{ .backend.body.userId }}:{{ .variables.endpoint.tenant_id }}"
       email_lower: "{{ .backend.body.email | lower | trim }}"
 ```
 
@@ -96,18 +96,18 @@ rules:
 - `backend.status`
 - `backend.headers["name"]`
 - `auth.input.*`
-- `vars.*` (endpoint variables)
+- `variables.endpoint.*` (endpoint variables)
 - `request.*`
 
 **Template Context:**
 - `{{ .backend.body.firstName }}`
 - `{{ .backend.status }}`
 - `{{ .auth.input.token }}`
-- `{{ .vars.api_base }}`
+- `{{ .variables.endpoint.api_base }}`
 
 **Evaluation**: After backend call, before conditions.
 
-**Access**: `.variables.<name>` within the rule only.
+**Access**: `.variables.local.<name>` within the rule only.
 
 **Lifecycle**: Ephemeral - not cached, not visible to other rules.
 
@@ -127,12 +127,12 @@ rules:
       pass:
         headers:
           custom:
-            X-User-ID: "{{ .variables.temp_id }}"
+            X-User-ID: "{{ .variables.local.temp_id }}"
         variables:
           # Export to other rules
-          user_id: variables.temp_id
-          email: "{{ .variables.temp_email | lower }}"
-          tier: variables.temp_tier
+          user_id: variables.local.temp_id
+          email: "{{ .variables.local.temp_email | lower }}"
+          tier: variables.local.temp_tier
       fail:
         variables:
           error_code: backend.body.errorCode
@@ -140,17 +140,17 @@ rules:
 ```
 
 **CEL Context:**
-- `.variables.*` (local variables)
+- `.variables.local.*` (local variables)
 - `.backend.*`
 - `.auth.*`
-- `.vars.*` (endpoint variables)
+- `.variables.endpoint.*` (endpoint variables)
 
 **Template Context:**
 - Same as above with `{{ }}` syntax
 
 **Evaluation**: After conditions determine outcome.
 
-**Access**: `.rules.<rule-name>.variables.<name>` in subsequent rules.
+**Access**: `.variables.rule.<rule-name>.<name>` in subsequent rules.
 
 **Lifecycle**: Cached with rule outcome, available to all later rules.
 
@@ -181,12 +181,12 @@ rules:
       token_scopes: backend.body.scopes
     conditions:
       pass:
-        - variables.token_user_id != ""
+        - variables.local.token_user_id != ""
     responses:
       pass:
         variables:
-          user_id: variables.token_user_id
-          scopes: variables.token_scopes
+          user_id: variables.local.token_user_id
+          scopes: variables.local.token_scopes
     cache:
       passTTL: "5m"
       failTTL: "30s"
@@ -194,15 +194,15 @@ rules:
   fetch-user-profile:
     backendApi:
       # Uses exported variable from validate-token
-      url: "{{ .vars.api_base }}/users/{{ .rules.validate-token.variables.user_id }}"
+      url: "{{ .variables.endpoint.api_base }}/users/{{ .variables.rule.validate-token.user_id }}"
     variables:
       profile_tier: backend.body.subscription.tier
       profile_status: backend.body.status
     responses:
       pass:
         variables:
-          tier: variables.profile_tier
-          status: variables.profile_status
+          tier: variables.local.profile_tier
+          status: variables.local.profile_status
     cache:
       passTTL: "10m"
 
@@ -210,9 +210,9 @@ rules:
     conditions:
       pass:
         # Uses exported variables from both previous rules
-        - '"admin" in rules["validate-token"].variables.scopes'
-        - 'rules["fetch-user-profile"].variables.status == "active"'
-        - 'rules["fetch-user-profile"].variables.tier in ["premium", "enterprise"]'
+        - '"admin" in variables.rule["validate-token"].scopes'
+        - 'variables.rule["fetch-user-profile"].status == "active"'
+        - 'variables.rule["fetch-user-profile"].tier in ["premium", "enterprise"]'
 ```
 
 ### Example 2: Conditional Exports
@@ -221,7 +221,7 @@ rules:
 rules:
   lookup-session:
     backendApi:
-      url: "{{ .vars.api_base }}/sessions/{{ .auth.input.token }}"
+      url: "{{ .variables.endpoint.api_base }}/sessions/{{ .auth.input.token }}"
     variables:
       session_user: backend.body.userId
       session_status: backend.body.status
@@ -229,13 +229,13 @@ rules:
     responses:
       pass:
         variables:
-          user_id: variables.session_user
-          expires_at: variables.session_expires
+          user_id: variables.local.session_user
+          expires_at: variables.local.session_expires
       fail:
         # Different variables exported on failure
         variables:
           failure_reason: "session_expired"
-          expired_at: variables.session_expires
+          expired_at: variables.local.session_expires
 ```
 
 ## Caching Integration
@@ -264,10 +264,10 @@ type BackendDescriptor struct {
 rules:
   fetch-permissions:
     backendApi:
-      url: "{{ .vars.api_base }}/users/{{ .rules.lookup-user.variables.user_id }}/perms"
+      url: "{{ .variables.endpoint.api_base }}/users/{{ .variables.rule.lookup-user.user_id }}/perms"
       headers:
         custom:
-          x-tenant: "{{ .vars.tenant }}"
+          x-tenant: "{{ .variables.endpoint.tenant }}"
 ```
 
 Cache key includes hash of:
@@ -301,7 +301,7 @@ rules:
     responses:
       pass:
         variables:
-          user_id: variables.temp_id  # This IS cached
+          user_id: variables.local.temp_id  # This IS cached
     cache:
       passTTL: "5m"
       failTTL: "30s"
@@ -351,8 +351,8 @@ rules:
       pass:
         variables:
           # Exported (shared)
-          user_id: variables.temp_user_id
-          tier: variables.temp_tier
+          user_id: variables.local.temp_user_id
+          tier: variables.local.temp_tier
 ```
 
 ### Key Differences
@@ -362,8 +362,9 @@ rules:
 | Scopes | `global`, `rule`, `local` | `endpoint`, `local`, `exported` |
 | Export | Implicit (all global vars) | Explicit (responses.*.variables) |
 | Cache | All variables cached | Only exported vars cached |
-| Access | `.vars.global.name` | `.rules.<rule>.variables.name` |
-| Endpoint vars | Not supported | `.vars.name` |
+| Access (endpoint) | Not supported | `.variables.endpoint.name` |
+| Access (local) | `.variables.local.name` | `.variables.local.name` |
+| Access (exported) | `.vars.global.name` | `.variables.rule.<rule>.name` |
 | Syntax | CEL only with `from:` | Hybrid CEL/Template |
 
 ## Implementation Notes

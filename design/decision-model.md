@@ -46,15 +46,12 @@ previous one and emits a typed result that downstream stages can reference.
     CEL programs that inspect response headers/bodies to override outcomes. Helper functions such as `lookup(map, key)` return
     `null` for missing entries so conditions can probe optional headers, query parameters, or backend payloads without raising
     evaluation errors.
-  - **responses** — pass/fail/error response descriptors containing header directives only. Header values may use Go templates (with Sprig helpers) independent of the rule-condition pipeline.
-  - **variables** — extractions scoped as `global`, `rule`, or `local` for sharing data between rules. Each `from` directive is a CEL program evaluated against the rule context.
-- Variable scopes behave as follows:
-  - `global` variables are visible to all rules as `.variables.<name>` (or `variables.<name>`) and may be overwritten by later
-    rules that export a value with the same key.
-  - `rule` variables appear to other rules as `rules.<ruleName>.variables.<name>` and resolve within the rule itself as
-    `.variables.<name>`.
-  - `local` variables exist only for the rule that defined them (`.variables.<name>` inside the rule) and are never exposed to
-    subsequent rules.
+  - **responses** — pass/fail/error response descriptors for exporting variables to subsequent rules. Only variables from the winning outcome are exported and cached. Variable expressions support hybrid CEL/Template evaluation (auto-detected by `{{` presence).
+  - **variables** — local/temporary variables for intermediate calculations within a rule. These variables are NOT cached and NOT exported to other rules. They use hybrid CEL/Template evaluation and are only accessible via `.variables.<name>` within the same rule.
+- Variable system consists of three tiers:
+  - **Endpoint variables** (`.vars.*`) - Configuration-level values defined in endpoint config, available to all rules
+  - **Local variables** (`.variables.*`) - Rule-scoped temporaries defined in `variables:` block, ephemeral and not exported
+  - **Exported variables** (`.rules.<ruleName>.variables.*`) - Cross-rule data defined in `responses.<outcome>.variables:`, cached with the rule outcome and accessible to subsequent rules and endpoint response templates
 - Outcomes are `Pass`, `Fail`, or `Error`. Only `Pass` allows evaluation to continue. Errors short-circuit to the response
   policy’s `error` branch.
 

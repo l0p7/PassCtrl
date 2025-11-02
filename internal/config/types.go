@@ -228,8 +228,7 @@ type RuleResponsesConfig struct {
 }
 
 type RuleResponseConfig struct {
-	Headers   ForwardRuleCategoryConfig `koanf:"headers"`
-	Variables map[string]string         `koanf:"variables"`
+	Variables map[string]string `koanf:"variables"` // Exported to subsequent rules AND endpoint response templates
 }
 
 // RuleVariablesConfig defines local variables scoped to the rule.

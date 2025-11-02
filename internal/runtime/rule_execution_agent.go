@@ -44,11 +44,6 @@ type ruleAuthForward struct {
 	Password string
 }
 
-type ruleResponseApplication struct {
-	ruleName string
-	response rulechain.ResponseDefinition
-}
-
 // renderedBackendRequest holds a fully-rendered backend request ready for HTTP execution.
 // All templates have been evaluated and auth has been applied.
 type renderedBackendRequest struct {
@@ -118,7 +113,6 @@ func (a *ruleExecutionAgent) Execute(ctx context.Context, _ *http.Request, state
 	history := make([]pipeline.RuleHistoryEntry, 0, len(plan.Rules))
 	var finalOutcome string
 	var finalReason string
-	passResponses := make([]ruleResponseApplication, 0, len(plan.Rules))
 
 	for _, def := range plan.Rules {
 		// Reset cache state before evaluating each rule
@@ -129,7 +123,7 @@ func (a *ruleExecutionAgent) Execute(ctx context.Context, _ *http.Request, state
 		state.Cache.Stored = false
 
 		start := time.Now()
-		outcome, reason, response := a.evaluateRule(ctx, def, state)
+		outcome, reason, _ := a.evaluateRule(ctx, def, state)
 		entry := pipeline.RuleHistoryEntry{
 			Name:      def.Name,
 			Outcome:   outcome,
@@ -146,26 +140,10 @@ func (a *ruleExecutionAgent) Execute(ctx context.Context, _ *http.Request, state
 		state.Rule.Reason = reason
 
 		if outcome == "pass" {
-			if response != nil && responseHasOverrides(*response) {
-				passResponses = append(passResponses, ruleResponseApplication{
-					ruleName: def.Name,
-					response: *response,
-				})
-			}
 			continue
 		}
 
-		if response != nil && responseHasOverrides(*response) {
-			a.applyRuleResponse(def.Name, *response, state)
-		}
 		break
-	}
-
-	if finalOutcome == "pass" && len(passResponses) > 0 {
-		// Apply pass responses in declaration order so headers accumulate across the chain.
-		for _, resp := range passResponses {
-			a.applyRuleResponse(resp.ruleName, resp.response, state)
-		}
 	}
 
 	if finalOutcome == "" && len(history) == 0 {
@@ -198,6 +176,10 @@ func (a *ruleExecutionAgent) Execute(ctx context.Context, _ *http.Request, state
 
 // finishRule evaluates exported variables and returns the outcome
 func (a *ruleExecutionAgent) finishRule(def rulechain.Definition, outcome, reason string, state *pipeline.State) (string, string, *rulechain.ResponseDefinition) {
+	// Set outcome and reason before evaluating variables so they're available in template context
+	state.Rule.Outcome = outcome
+	state.Rule.Reason = reason
+
 	resp := selectRuleResponse(def, outcome)
 	if err := a.evaluateExportedVariables(def.Name, resp, state); err != nil {
 		// Log error but don't fail the rule - exported variable evaluation is best-effort
@@ -1048,8 +1030,8 @@ func buildActivation(state *pipeline.State) map[string]any {
 			"accepted":  state.Backend.Accepted,
 			"pages":     backendPagesActivation(state.Backend.Pages),
 		},
-		"vars": state.VariablesContext(),
-		"now":  time.Now().UTC(),
+		"variables": state.VariablesContext(),
+		"now":       time.Now().UTC(),
 	}
 	return activation
 }
@@ -1099,103 +1081,31 @@ func selectRuleResponse(def rulechain.Definition, outcome string) *rulechain.Res
 	}
 }
 
-func responseHasOverrides(resp rulechain.ResponseDefinition) bool {
-	if len(resp.Headers.Allow) > 0 || len(resp.Headers.Strip) > 0 || len(resp.Headers.Custom) > 0 {
-		return true
-	}
-	return false
-}
-
 func (a *ruleExecutionAgent) evaluateRuleVariables(def rulechain.Definition, state *pipeline.State) error {
-	vars := def.Variables
-	hasV1 := len(vars.Global) > 0 || len(vars.Rule) > 0 || len(vars.Local) > 0
-	hasV2 := len(vars.LocalV2) > 0
-
-	if !hasV1 && !hasV2 {
+	if len(def.Variables.Variables) == 0 {
 		return nil
 	}
 
-	if state.Variables.Global == nil {
-		state.Variables.Global = make(map[string]any)
-	}
-	if state.Variables.Rules == nil {
-		state.Variables.Rules = make(map[string]map[string]any)
-	}
-	if state.Rule.Variables.Rule == nil {
-		state.Rule.Variables.Rule = make(map[string]any)
-	} else {
-		for k := range state.Rule.Variables.Rule {
-			delete(state.Rule.Variables.Rule, k)
-		}
-	}
+	// Initialize local variables map
 	if state.Rule.Variables.Local == nil {
 		state.Rule.Variables.Local = make(map[string]any)
 	} else {
+		// Clear previous local variables
 		for k := range state.Rule.Variables.Local {
 			delete(state.Rule.Variables.Local, k)
 		}
 	}
 
-	// V1 evaluation (legacy)
-	evaluateScope := func(scope string, defs map[string]rulechain.VariableDefinition, assign func(string, any)) error {
-		if len(defs) == 0 {
-			return nil
-		}
-		keys := make([]string, 0, len(defs))
-		for name := range defs {
-			keys = append(keys, name)
-		}
-		sort.Strings(keys)
-		for _, name := range keys {
-			defn := defs[name]
-			activation := buildActivation(state)
-			value, err := defn.Program.Eval(activation)
-			if err != nil {
-				return fmt.Errorf("%s.%s: %w", scope, name, err)
-			}
-			assign(name, value)
-		}
-		return nil
-	}
-
-	if err := evaluateScope("global", vars.Global, func(name string, value any) {
-		state.Variables.Global[name] = value
-	}); err != nil {
-		return err
-	}
-
-	if err := evaluateScope("rule", vars.Rule, func(name string, value any) {
-		state.Rule.Variables.Rule[name] = value
-	}); err != nil {
-		return err
-	}
-
-	if trimmed := strings.TrimSpace(def.Name); trimmed != "" {
-		if len(state.Rule.Variables.Rule) > 0 {
-			state.Variables.Rules[trimmed] = cloneAnyMap(state.Rule.Variables.Rule)
-		} else {
-			delete(state.Variables.Rules, trimmed)
-		}
-	}
-
-	if err := evaluateScope("local", vars.Local, func(name string, value any) {
-		state.Rule.Variables.Local[name] = value
-	}); err != nil {
-		return err
-	}
-
-	// V2 evaluation (hybrid CEL/Template for local variables)
-	if hasV2 {
-		if err := a.evaluateLocalVariablesV2(vars.LocalV2, state); err != nil {
-			return fmt.Errorf("local variables: %w", err)
-		}
+	// Evaluate local variables using hybrid CEL/Template evaluator (auto-detected by {{ presence)
+	if err := a.evaluateLocalVariables(def.Variables.Variables, state); err != nil {
+		return fmt.Errorf("local variables: %w", err)
 	}
 
 	return nil
 }
 
-// evaluateLocalVariablesV2 evaluates v2 local variables using hybrid CEL/Template evaluator
-func (a *ruleExecutionAgent) evaluateLocalVariablesV2(localVars map[string]string, state *pipeline.State) error {
+// evaluateLocalVariables evaluates local variables using hybrid CEL/Template evaluator (auto-detected by {{ presence)
+func (a *ruleExecutionAgent) evaluateLocalVariables(localVars map[string]string, state *pipeline.State) error {
 	if len(localVars) == 0 {
 		return nil
 	}
@@ -1260,15 +1170,21 @@ func buildRuleContext(state *pipeline.State) map[string]any {
 		"query":   toAnyMap(state.Raw.Query),
 	}
 
-	// Variables context includes already-evaluated local variables
+	// Variables context - hybrid structure for maximum flexibility:
+	// - Flat access to local variables (e.g., .variables.raw_id)
+	// - Nested access to global/rule variables (e.g., .variables.global.foo)
 	variables := cloneAnyMap(state.Rule.Variables.Local)
+	variables["global"] = cloneAnyMap(state.Variables.Global)
+	variables["rule"] = cloneAnyMap(state.Rule.Variables.Rule)
+	variables["local"] = cloneAnyMap(state.Rule.Variables.Local)
 
 	return map[string]any{
 		"backend":   backend,
 		"auth":      auth,
-		"vars":      state.VariablesContext(),
+		"vars":      state.VariablesContext(), // Full variable hierarchy
 		"request":   request,
-		"variables": variables,
+		"variables": variables,  // Hybrid: flat local + nested global/rule
+		"rule":      state.Rule, // Rule state for templates to access .rule.Outcome, etc.
 	}
 }
 
@@ -1312,146 +1228,16 @@ func (a *ruleExecutionAgent) evaluateExportedVariables(ruleName string, resp *ru
 	}
 	state.Variables.Rules[ruleName] = exported
 
+	// Also store in state.Response.Variables for endpoint response templates
+	// Accumulate variables across the chain - each rule adds its exported variables
+	if state.Response.Variables == nil {
+		state.Response.Variables = make(map[string]any)
+	}
+	for k, v := range exported {
+		state.Response.Variables[k] = v // Later rules can override earlier rules' variables
+	}
+
 	return nil
-}
-
-func (a *ruleExecutionAgent) applyRuleResponse(ruleName string, resp rulechain.ResponseDefinition, state *pipeline.State) {
-	if state == nil {
-		return
-	}
-	if !responseHasOverrides(resp) {
-		return
-	}
-
-	if state.Response.Headers == nil {
-		state.Response.Headers = make(map[string]string)
-	}
-
-	headers := make(map[string]string)
-	keyMap := make(map[string]string)
-
-	mergeHeaders := func(source map[string]string, overwrite bool) {
-		for key, value := range source {
-			trimmedKey := strings.TrimSpace(key)
-			trimmedValue := strings.TrimSpace(value)
-			if trimmedKey == "" {
-				continue
-			}
-			lower := strings.ToLower(trimmedKey)
-			if !overwrite {
-				if _, ok := headers[lower]; ok {
-					continue
-				}
-			}
-			headers[lower] = trimmedValue
-			keyMap[lower] = trimmedKey
-		}
-	}
-
-	mergeHeaders(state.Backend.Headers, false)
-	mergeHeaders(state.Response.Headers, true)
-
-	if len(resp.Headers.Allow) > 0 {
-		allowed := make(map[string]string)
-		allowedKeys := make(map[string]string)
-		for _, name := range resp.Headers.Allow {
-			trimmed := strings.TrimSpace(name)
-			if trimmed == "" {
-				continue
-			}
-			if trimmed == "*" {
-				allowed = headers
-				allowedKeys = keyMap
-				break
-			}
-			lower := strings.ToLower(trimmed)
-			if value, ok := headers[lower]; ok {
-				allowed[lower] = value
-				allowedKeys[lower] = keyMap[lower]
-			}
-		}
-		headers = allowed
-		keyMap = allowedKeys
-	}
-
-	if len(resp.Headers.Strip) > 0 {
-		for _, name := range resp.Headers.Strip {
-			lower := strings.ToLower(strings.TrimSpace(name))
-			if lower == "" {
-				continue
-			}
-			delete(headers, lower)
-			delete(keyMap, lower)
-		}
-	}
-
-	if len(resp.Headers.Custom) > 0 {
-		keys := make([]string, 0, len(resp.Headers.Custom))
-		for name := range resp.Headers.Custom {
-			keys = append(keys, name)
-		}
-		sort.Strings(keys)
-		for _, name := range keys {
-			trimmedName := strings.TrimSpace(name)
-			if trimmedName == "" {
-				continue
-			}
-			lower := strings.ToLower(trimmedName)
-			value := strings.TrimSpace(resp.Headers.Custom[name])
-			tmpl := resp.HeaderTemplates[name]
-			if tmpl != nil {
-				rendered, err := tmpl.Render(state.TemplateContext())
-				if err != nil {
-					a.logTemplateError("rule response header template rendering failed", ruleName, trimmedName, err, state)
-					continue
-				}
-				if candidate := strings.TrimSpace(rendered); candidate != "" {
-					value = candidate
-				}
-			}
-			if value == "" {
-				delete(headers, lower)
-				delete(keyMap, lower)
-				continue
-			}
-			headers[lower] = value
-			keyMap[lower] = trimmedName
-		}
-	}
-
-	finalHeaders := make(map[string]string, len(headers)+1)
-	for lower, value := range headers {
-		key := keyMap[lower]
-		if key == "" {
-			key = lower
-		}
-		finalHeaders[key] = value
-	}
-	finalHeaders["X-PassCtrl-Outcome"] = state.Rule.Outcome
-	state.Response.Headers = finalHeaders
-}
-
-func (a *ruleExecutionAgent) logTemplateError(message, ruleName, key string, err error, state *pipeline.State) {
-	logger := a.logger
-	if logger == nil {
-		logger = slog.Default()
-	}
-	logger = logger.With(slog.String("agent", a.Name()))
-	if state != nil {
-		if state.Endpoint != "" {
-			logger = logger.With(slog.String("endpoint", state.Endpoint))
-		}
-		if state.CorrelationID != "" {
-			logger = logger.With(slog.String("correlation_id", state.CorrelationID))
-		}
-	}
-	if ruleName != "" {
-		logger = logger.With(slog.String("rule", ruleName))
-	}
-	if key != "" {
-		logger = logger.With(slog.String("key", key))
-	}
-	logger.Warn(message, slog.Any("error", err))
 }
 
 func resetBackendState(state *pipeline.BackendState) {

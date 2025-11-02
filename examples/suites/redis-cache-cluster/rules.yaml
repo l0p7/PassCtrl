@@ -77,9 +77,8 @@ rules:
         - lookup(vars.rules["fetch-profile"], "plan") == "free"
     responses:
       fail:
-        headers:
-          custom:
-            X-PassCtrl-Plan: "{{ index .rules \"fetch-profile\" \"variables\" \"plan\" }}"
+        variables:
+          passctrl_plan: "{{ index .rules \"fetch-profile\" \"variables\" \"plan\" }}"
     cache:
       ttl:
         pass: "0s"

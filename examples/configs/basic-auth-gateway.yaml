@@ -40,6 +40,10 @@ endpoints:
     rules:
       - name: require-basic-login
     responsePolicy:
+      pass:
+        headers:
+          custom:
+            X-Auth-Result: "{{ .response.auth_result }}"
       fail:
         status: 401
         body: |
@@ -47,6 +51,9 @@ endpoints:
             "error": "authentication required",
             "endpoint": "{{ .endpoint }}"
           }
+        headers:
+          custom:
+            X-Auth-Result: "{{ .response.auth_result }}"
       error:
         status: 500
         body: |
@@ -66,13 +73,11 @@ rules:
             password: "{{ .auth.input.basic.password }}"
     responses:
       pass:
-        headers:
-          custom:
-            X-Auth-Result: "authenticated"
+        variables:
+          auth_result: "authenticated"
       fail:
-        headers:
-          custom:
-            X-Auth-Result: "invalid credentials"
+        variables:
+          auth_result: "invalid credentials"
     cache:
       ttl:
         pass: "0s"

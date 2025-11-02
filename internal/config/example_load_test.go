@@ -74,8 +74,8 @@ func TestLoadExampleConfigs(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			configPath := filepath.Join(projectRoot, tc.path)
 
-			// Set required env var for rules folder
-			t.Setenv("PASSCTRL_SERVER__RULES__RULESFOLDER", t.TempDir())
+			// Disable rules folder to use inline rules from the config file
+			t.Setenv("PASSCTRL_SERVER__RULES__RULESFOLDER", "")
 
 			loader := NewLoader("PASSCTRL", configPath)
 			cfg, err := loader.Load(context.Background())

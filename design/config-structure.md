@@ -250,32 +250,21 @@ rules:
       pass: []                         # optional — CEL predicates overriding pass; compiled at load and executed against the rule activation
       fail: []                         # optional — CEL predicates overriding fail; compiled at load and executed against the rule activation
       error: []                        # optional — CEL predicates overriding error; compiled at load and executed against the rule activation
-    responses:                         # optional — defaults to endpoint headers
+    responses:                         # optional — outcome-specific variable exports
       pass:
-        headers:
-          allow: []                    # optional — start from backend/endpoint headers before stripping (literal names)
-          strip: []                    # optional
-          custom: {}                   # optional — values may be templates/JMESPath
+        variables:                     # optional — exported to subsequent rules AND endpoint response templates
+          user_id: backend.body.userId        # CEL or template expression
+          tier: backend.body.tier
+          display_name: backend.body.displayName
+          email: backend.body.email
       fail:
-        headers:
-          allow: []                    # optional — start from backend/endpoint headers before stripping (literal names)
-          strip: []                    # optional
-          custom: {}                   # optional — values rendered via templates
+        variables: {}                  # optional — exported to subsequent rules AND endpoint templates
       error:
-        headers:
-          allow: []                    # optional — start from backend/endpoint headers before stripping (literal names)
-          strip: []                    # optional
-          custom: {}                   # optional — values rendered via templates
-    variables:                         # optional — share data between rules
-      global:                          # optional — `.variables.<name>` everywhere
-        subjectID:
-          from: ""                     # optional — CEL program projecting values into `variables.global`
-      rule:                            # optional — `rules.<rule>.variables.<name>` externally
-        enriched:
-          from: ""                     # optional — CEL program projecting values into `variables.rule`
-      local:                           # optional — visible only inside this rule
-        debugInfo:
-          from: ""                     # optional — CEL program projecting values into `variables.local`
+        variables: {}                  # optional — exported to subsequent rules AND endpoint templates
+    variables:                         # optional — local/temporary variables for rule logic only (not cached, not exported)
+      temp_user_id: backend.body.userId           # CEL expression (no {{)
+      temp_tier: backend.body.tier
+      cache_key: "user:{{ .backend.body.userId }}"  # Template (contains {{)
     cache:                             # optional — decision memoization
       followCacheControl: false        # optional — honor backend cache headers
       passTTL: 0s                      # optional — cache duration for pass outcomes
@@ -327,6 +316,129 @@ rules:
   - Only the winning group's `forwardAs` outputs are then applied to the backend request
   - Fail-closed: missing credentials fail evaluation; no implicit forwarding
   - This ensures credentials don't leak through unintended paths
+
+### Response Model & Variable Separation
+
+PassCtrl enforces clear separation between rule chain logic and endpoint response formatting:
+
+**Rule Outcomes are Trinary**:
+- Rules produce exactly one outcome: `pass`, `fail`, or `error`
+- No other data flows directly from rules to client responses
+- Endpoints use these outcomes to select which `responsePolicy.pass/fail/error` block to execute
+
+**Endpoints Own Response Format**:
+- Status codes, headers, and body templates are defined entirely in endpoint `responsePolicy` blocks
+- Rules cannot override or suggest status codes or body content
+- Endpoints control the complete client-facing response structure
+
+**Two Types of Variables**:
+
+1. **Local Variables** (`variables`):
+   - Purpose: Temporary calculations within a single rule
+   - Scope: Available only within the defining rule (for conditions, backend templates, exported variables)
+   - Cached: **No** — ephemeral, discarded after rule evaluation
+   - Access: Rules can reference via `variables.<name>`, endpoints cannot access
+   - Examples: intermediate calculations, cache keys, formatted strings
+
+2. **Exported Variables** (`responses.pass/fail/error.variables`):
+   - Purpose: Share data with subsequent rules AND endpoint response templates
+   - Scope: Available to subsequent rules via `.rules.<rule>.variables.<name>` AND to endpoint templates via `.response.<name>`
+   - Cached: **Yes** — stored with decision outcomes for cache replay
+   - Access: Both rule chain and endpoint response rendering
+   - Examples: user IDs, display names, email addresses, tier levels, session IDs
+   - Extraction: Same hybrid CEL/Template evaluation as local variables (auto-detected by `{{` presence)
+
+**Template Context in Endpoint Responses**:
+
+Endpoint `responsePolicy.pass/fail/error` templates have access to:
+- `.endpoint` — endpoint name
+- `.correlationId` — request correlation ID
+- `.auth.input.*` — matched credentials from admission
+- `.backend.*` — backend response from decisive rule (status, headers, body if JSON-parsed)
+- `.response.*` — exported variables from decisive rule via `responses.*.variables`
+- Standard helpers: `lookup()`, Sprig functions, `env` (if allowed)
+
+**Example**:
+
+```yaml
+rules:
+  lookup-user:
+    backendApi:
+      url: "https://users.internal/api/lookup"
+      method: GET
+    variables:
+      # Local temporaries (not cached, not exported)
+      temp_user_id: backend.body.userId
+      temp_tier: backend.body.tier
+    responses:
+      pass:
+        # Exported to subsequent rules AND endpoint response templates
+        variables:
+          user_id: variables.temp_user_id
+          tier: variables.temp_tier
+          display_name: backend.body.displayName
+          email: backend.body.email
+          account_status: backend.body.status
+
+endpoints:
+  api-gateway:
+    rules:
+      - name: lookup-user
+    responsePolicy:
+      pass:
+        status: 200
+        headers:
+          custom:
+            X-User-ID: "{{ .response.display_name }}"
+            X-Account-Status: "{{ .response.account_status }}"
+        body: |
+          {
+            "user": "{{ .response.display_name }}",
+            "email": "{{ .response.email }}",
+            "status": "{{ .response.account_status }}"
+          }
+      fail:
+        status: 403
+        body: '{"error": "user lookup failed"}'
+```
+
+**Migration from Old Model**:
+
+The old model allowed rules to set headers directly, mixing response formatting with authorization logic. The new model enforces complete separation:
+
+Old model (REMOVED):
+```yaml
+rules:
+  my-rule:
+    responses:
+      pass:
+        headers:  # ❌ Rules can no longer set headers
+          custom:
+            X-User-ID: "{{ .backend.body.userId }}"
+```
+
+New model:
+```yaml
+rules:
+  my-rule:
+    responses:
+      pass:
+        variables:  # ✅ Export data for endpoint use
+          user_id: backend.body.userId
+
+endpoints:
+  my-endpoint:
+    responsePolicy:
+      pass:
+        headers:  # ✅ Endpoint constructs all headers
+          custom:
+            X-User-ID: "{{ .response.user_id }}"
+```
+
+**Key Changes**:
+- **Rules**: Only export variables; no header/status/body configuration
+- **Endpoints**: Own complete response format using exported variables
+- **Benefit**: Clear separation of concerns (authorization logic vs response formatting)
 - CEL conditions execute against the activation assembled in `internal/runtime/rule_execution_agent.go`.
   Expressions should reference the documented maps (`raw`, `admission`, `forward`,
   `backend`, `vars`, `now`) instead of the early `request.*` identifiers so

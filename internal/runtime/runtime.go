@@ -1024,20 +1024,15 @@ func buildRuleResponsesSpec(cfg config.RuleResponsesConfig) rulechain.ResponsesS
 
 func buildRuleResponseSpec(cfg config.RuleResponseConfig) rulechain.ResponseSpec {
 	return rulechain.ResponseSpec{
-		Headers: forwardpolicy.CategoryConfig{
-			Allow:  append([]string{}, cfg.Headers.Allow...),
-			Strip:  append([]string{}, cfg.Headers.Strip...),
-			Custom: cloneStringMap(cfg.Headers.Custom),
-		},
 		Variables: cloneStringMap(cfg.Variables),
 	}
 }
 
 func buildRuleVariablesSpec(cfg config.RuleVariablesConfig) rulechain.VariablesSpec {
-	// V2 schema: cfg is map[string]string for local variables
-	// These will be evaluated with hybrid CEL/Template evaluator
+	// cfg is map[string]string for local/temporary variables
+	// Evaluated with hybrid CEL/Template evaluator (auto-detected by {{ presence)
 	return rulechain.VariablesSpec{
-		LocalV2: cfg,
+		Variables: cfg,
 	}
 }
 
