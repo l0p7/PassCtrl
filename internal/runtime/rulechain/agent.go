@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"sort"
 	"strings"
 	"time"
 
@@ -13,6 +12,20 @@ import (
 	"github.com/l0p7/passctrl/internal/runtime/pipeline"
 	"github.com/l0p7/passctrl/internal/templates"
 )
+
+// CacheTTLSpec defines TTLs for different rule outcomes.
+type CacheTTLSpec struct {
+	Pass  string // Duration: "5m", "30s", etc.
+	Fail  string // Duration: "30s", "1m", etc.
+	Error string // Always "0s" - errors never cached
+}
+
+// CacheConfigSpec defines per-rule caching configuration.
+type CacheConfigSpec struct {
+	FollowCacheControl bool         // Parse backend Cache-Control header
+	TTL                CacheTTLSpec // TTLs per outcome
+	Strict             *bool        // Include upstream variables in cache key (default: true)
+}
 
 // DefinitionSpec captures the declarative rule definition loaded from
 // configuration prior to compilation.
@@ -27,6 +40,7 @@ type DefinitionSpec struct {
 	Variables    VariablesSpec
 	FailMessage  string
 	ErrorMessage string
+	Cache        CacheConfigSpec
 }
 
 // ConditionSpec groups the CEL expressions that govern rule outcomes.
@@ -63,12 +77,13 @@ type ConditionPrograms struct {
 	Error []expr.Program
 }
 
-// ResponseSpec captures templating controls for rule-level response overrides.
+// ResponseSpec captures rule-level response variable exports.
+// Status, Body, BodyFile, and Headers are no longer supported and will cause compilation errors if specified.
 type ResponseSpec struct {
-	Status   int
-	Body     string
-	BodyFile string
-	Headers  forwardpolicy.CategoryConfig
+	Status    int               // Deprecated: will error if non-zero
+	Body      string            // Deprecated: will error if non-empty
+	BodyFile  string            // Deprecated: will error if non-empty
+	Variables map[string]string // Exported to subsequent rules AND endpoint response templates
 }
 
 // ResponsesSpec groups the rule-level response overrides per outcome.
@@ -78,22 +93,21 @@ type ResponsesSpec struct {
 	Error ResponseSpec
 }
 
-// VariablesSpec holds the CEL extraction expressions for each scope.
+// VariablesSpec holds variable expressions for rule-local temporary calculations.
+// These variables are evaluated during rule execution and stored in state.Rule.Variables.Local.
+// They are NOT cached and NOT exported to subsequent rules or endpoint templates.
+// For sharing data, use responses.pass/fail/error.variables instead.
 type VariablesSpec struct {
-	Global map[string]VariableSpec
-	Rule   map[string]VariableSpec
-	Local  map[string]VariableSpec
+	// Variables holds local/temporary variable expressions for hybrid CEL/Template evaluation
+	// Auto-detected by presence of {{ for templates, otherwise treated as CEL
+	Variables map[string]string
 }
 
-// VariableSpec captures the CEL expression used to populate a variable.
-type VariableSpec struct {
-	From string
-}
-
-// ResponseDefinition stores compiled response overrides for an outcome.
+// ResponseDefinition stores compiled response configuration for an outcome.
 type ResponseDefinition struct {
-	Headers         forwardpolicy.CategoryConfig
-	HeaderTemplates map[string]*templates.Template
+	// ExportedVariables holds variable expressions to evaluate after outcome is determined
+	// Evaluated with hybrid CEL/Template evaluator, accessible to subsequent rules AND endpoint response templates
+	ExportedVariables map[string]string
 }
 
 // ResponsesDefinition groups compiled response overrides per outcome.
@@ -103,17 +117,11 @@ type ResponsesDefinition struct {
 	Error ResponseDefinition
 }
 
-// VariableDefinition stores the compiled CEL program for a variable export.
-type VariableDefinition struct {
-	Source  string
-	Program expr.Program
-}
-
-// VariablesDefinition exposes compiled variable programs for each scope.
+// VariablesDefinition stores compiled variable expressions for rule-local temporary calculations.
+// Variables use hybrid CEL/Template evaluation (auto-detected by {{ presence).
 type VariablesDefinition struct {
-	Global map[string]VariableDefinition
-	Rule   map[string]VariableDefinition
-	Local  map[string]VariableDefinition
+	// Variables holds local/temporary variable expressions for hybrid CEL/Template evaluation
+	Variables map[string]string
 }
 
 // Definition represents a fully compiled rule that can be executed by the rule
@@ -132,6 +140,7 @@ type Definition struct {
 	PassTemplate  *templates.Template
 	FailTemplate  *templates.Template
 	ErrorTemplate *templates.Template
+	Cache         CacheConfigSpec
 }
 
 // ExecutionPlan records the rule definitions that should be evaluated for the
@@ -166,25 +175,11 @@ func NewAgent(rules []Definition) *Agent {
 // Name identifies the rule chain agent.
 func (a *Agent) Name() string { return "rule_chain" }
 
-// Execute decides whether rules should run or if a cached decision is
-// sufficient, short-circuiting on cache hits or admission failures.
+// Execute decides whether rules should run, short-circuiting on admission failures.
 func (a *Agent) Execute(_ context.Context, _ *http.Request, state *pipeline.State) pipeline.Result {
 	state.Rule.EvaluatedAt = time.Now().UTC()
 	state.Rule.History = nil
 	state.SetPlan(ExecutionPlan{})
-
-	if state.Cache.Hit {
-		state.Rule.Outcome = state.Cache.Decision
-		state.Rule.Reason = "decision replayed from cache"
-		state.Rule.FromCache = true
-		state.Rule.Executed = false
-		state.Rule.ShouldExecute = false
-		return pipeline.Result{
-			Name:    a.Name(),
-			Status:  "cached",
-			Details: state.Rule.Reason,
-		}
-	}
 
 	if !state.Admission.Authenticated {
 		state.Rule.Outcome = "fail"
@@ -268,15 +263,12 @@ func compileDefinition(env *expr.Environment, spec DefinitionSpec, renderer *tem
 	if err != nil {
 		return Definition{}, err
 	}
-	backend := buildBackendDefinition(spec.Backend)
-	responses, err := compileResponseDefinitions(ruleName, spec.Responses, renderer)
+	backend := buildBackendDefinition(spec.Backend, renderer)
+	responses, err := compileResponseDefinitions(spec.Responses)
 	if err != nil {
 		return Definition{}, fmt.Errorf("responses: %w", err)
 	}
-	variables, err := compileVariableDefinitions(env, spec.Variables)
-	if err != nil {
-		return Definition{}, fmt.Errorf("variables: %w", err)
-	}
+	variables := compileVariableDefinitions(spec.Variables)
 
 	compileName := ruleName
 	if compileName == "" {
@@ -293,6 +285,7 @@ func compileDefinition(env *expr.Environment, spec DefinitionSpec, renderer *tem
 		Variables:    variables,
 		FailMessage:  strings.TrimSpace(spec.FailMessage),
 		ErrorMessage: strings.TrimSpace(spec.ErrorMessage),
+		Cache:        spec.Cache,
 	}
 	if renderer != nil {
 		if tmpl, err := renderer.CompileInline(fmt.Sprintf("%s:pass", compileName), spec.PassMessage); err != nil {
@@ -361,16 +354,16 @@ func compilePrograms(env *expr.Environment, expressions []string) ([]expr.Progra
 	return programs, nil
 }
 
-func compileResponseDefinitions(ruleName string, spec ResponsesSpec, renderer *templates.Renderer) (ResponsesDefinition, error) {
-	pass, err := compileResponseDefinition(ruleName, "pass", spec.Pass, renderer)
+func compileResponseDefinitions(spec ResponsesSpec) (ResponsesDefinition, error) {
+	pass, err := compileResponseDefinition("pass", spec.Pass)
 	if err != nil {
 		return ResponsesDefinition{}, fmt.Errorf("pass: %w", err)
 	}
-	fail, err := compileResponseDefinition(ruleName, "fail", spec.Fail, renderer)
+	fail, err := compileResponseDefinition("fail", spec.Fail)
 	if err != nil {
 		return ResponsesDefinition{}, fmt.Errorf("fail: %w", err)
 	}
-	errorDef, err := compileResponseDefinition(ruleName, "error", spec.Error, renderer)
+	errorDef, err := compileResponseDefinition("error", spec.Error)
 	if err != nil {
 		return ResponsesDefinition{}, fmt.Errorf("error: %w", err)
 	}
@@ -381,7 +374,8 @@ func compileResponseDefinitions(ruleName string, spec ResponsesSpec, renderer *t
 	}, nil
 }
 
-func compileResponseDefinition(ruleName, category string, spec ResponseSpec, renderer *templates.Renderer) (ResponseDefinition, error) {
+func compileResponseDefinition(category string, spec ResponseSpec) (ResponseDefinition, error) {
+	// Rules no longer define status, body, or headers - only variables
 	if spec.Status != 0 {
 		return ResponseDefinition{}, fmt.Errorf("rule responses no longer support status overrides (found %s.status)", category)
 	}
@@ -390,86 +384,18 @@ func compileResponseDefinition(ruleName, category string, spec ResponseSpec, ren
 	}
 
 	def := ResponseDefinition{
-		Headers: forwardpolicy.CategoryConfig{
-			Allow:  append([]string{}, spec.Headers.Allow...),
-			Strip:  append([]string{}, spec.Headers.Strip...),
-			Custom: cloneStringMap(spec.Headers.Custom),
-		},
-		HeaderTemplates: map[string]*templates.Template{},
-	}
-
-	if renderer == nil {
-		return def, nil
-	}
-
-	ruleLabel := strings.TrimSpace(ruleName)
-	if ruleLabel == "" {
-		ruleLabel = "rule"
-	}
-	prefix := fmt.Sprintf("%s:%s:response", ruleLabel, strings.ToLower(category))
-
-	if len(def.Headers.Custom) > 0 {
-		keys := make([]string, 0, len(def.Headers.Custom))
-		for k := range def.Headers.Custom {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, key := range keys {
-			value := def.Headers.Custom[key]
-			tmpl, err := renderer.CompileInline(fmt.Sprintf("%s:header:%s", prefix, key), value)
-			if err != nil {
-				return ResponseDefinition{}, fmt.Errorf("header %s template: %w", key, err)
-			}
-			def.HeaderTemplates[key] = tmpl
-		}
+		ExportedVariables: cloneStringMap(spec.Variables),
 	}
 
 	return def, nil
 }
 
-func compileVariableDefinitions(env *expr.Environment, spec VariablesSpec) (VariablesDefinition, error) {
-	def := VariablesDefinition{
-		Global: make(map[string]VariableDefinition),
-		Rule:   make(map[string]VariableDefinition),
-		Local:  make(map[string]VariableDefinition),
+func compileVariableDefinitions(spec VariablesSpec) VariablesDefinition {
+	// Variables use hybrid CEL/Template evaluation (no pre-compilation needed)
+	// Expressions are stored as-is and evaluated at runtime
+	return VariablesDefinition{
+		Variables: cloneStringMap(spec.Variables),
 	}
-
-	if err := compileVariableMap(env, spec.Global, def.Global, "global"); err != nil {
-		return VariablesDefinition{}, err
-	}
-	if err := compileVariableMap(env, spec.Rule, def.Rule, "rule"); err != nil {
-		return VariablesDefinition{}, err
-	}
-	if err := compileVariableMap(env, spec.Local, def.Local, "local"); err != nil {
-		return VariablesDefinition{}, err
-	}
-
-	return def, nil
-}
-
-func compileVariableMap(env *expr.Environment, specs map[string]VariableSpec, target map[string]VariableDefinition, scope string) error {
-	if len(specs) == 0 {
-		return nil
-	}
-	for name, variable := range specs {
-		trimmedName := strings.TrimSpace(name)
-		if trimmedName == "" {
-			return fmt.Errorf("%s: variable name required", scope)
-		}
-		exprSrc := strings.TrimSpace(variable.From)
-		if exprSrc == "" {
-			continue
-		}
-		program, err := env.CompileValue(exprSrc)
-		if err != nil {
-			return fmt.Errorf("%s.%s: %w", scope, trimmedName, err)
-		}
-		target[trimmedName] = VariableDefinition{
-			Source:  exprSrc,
-			Program: program,
-		}
-	}
-	return nil
 }
 
 func cloneStringMap(in map[string]string) map[string]string {

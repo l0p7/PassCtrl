@@ -20,9 +20,10 @@ endpoints:
     description: "Protects the /auth endpoint with HTTP Basic credentials."
     authentication:
       required: true
-      allow: ["basic"]
-      challenge: "Basic realm=\"Internal\""
-      basic:
+      allow:
+        authorization: ["basic"]
+      challenge:
+        type: basic
         realm: "Internal"
         charset: "UTF-8"
     forwardRequestPolicy:
@@ -39,6 +40,10 @@ endpoints:
     rules:
       - name: require-basic-login
     responsePolicy:
+      pass:
+        headers:
+          custom:
+            X-Auth-Result: "{{ .response.auth_result }}"
       fail:
         status: 401
         body: |
@@ -46,6 +51,9 @@ endpoints:
             "error": "authentication required",
             "endpoint": "{{ .endpoint }}"
           }
+        headers:
+          custom:
+            X-Auth-Result: "{{ .response.auth_result }}"
       error:
         status: 500
         body: |
@@ -57,19 +65,21 @@ rules:
   require-basic-login:
     description: "Accepts known Basic credentials and denies everything else."
     auth:
-      - type: basic
+      - match:
+          - type: basic
         forwardAs:
-          type: basic
-          user: "{{ .auth.input.user }}"
-          password: "{{ .auth.input.password }}"
+          - type: basic
+            user: "{{ .auth.input.basic.user }}"
+            password: "{{ .auth.input.basic.password }}"
     responses:
       pass:
-        headers:
-          custom:
-            X-Auth-Result: "authenticated"
+        variables:
+          auth_result: "authenticated"
       fail:
-        headers:
-          custom:
-            X-Auth-Result: "invalid credentials"
+        variables:
+          auth_result: "invalid credentials"
     cache:
-      resultTTL: "0s"
+      ttl:
+        pass: "0s"
+        fail: "0s"
+        error: "0s"

@@ -22,30 +22,35 @@ rules:
       fail:
         - lookup(backend.body, "active") != true
     variables:
-      global:
-        user_id:
-          from: backend.body.userId
-        tenant_id:
-          from: backend.body.tenant
-        entitlement:
-          from: backend.body.entitlement
+      user_id: backend.body.userId
+      tenant_id: backend.body.tenant
+      entitlement: backend.body.entitlement
+    responses:
+      pass:
+        variables:
+          user_id: variables.user_id
+          tenant_id: variables.tenant_id
+          entitlement: variables.entitlement
     cache:
-      passTTL: "2m"
-      failTTL: "30s"
+      ttl:
+        pass: "2m"
+        fail: "30s"
+        error: "0s"
 
   require-entitlement:
     description: "Allows requests only when the session advertises an allow entitlement."
     conditions:
       pass:
-        - lookup(vars.global, "entitlement") == "allow"
+        - lookup(vars.rules["lookup-session"], "entitlement") == "allow"
       fail:
-        - lookup(vars.global, "entitlement") == "deny"
+        - lookup(vars.rules["lookup-session"], "entitlement") == "deny"
     responses:
       fail:
-        headers:
-          custom:
-            X-Entitlement: "denied"
-            X-Tenant-Id: "{{ index .vars.global \"tenant_id\" }}"
+        variables:
+          entitlement_status: "denied"
+          tenant_id: "{{ index .rules \"lookup-session\" \"variables\" \"tenant_id\" }}"
     cache:
-      passTTL: "0s"
-      failTTL: "0s"
+      ttl:
+        pass: "0s"
+        fail: "0s"
+        error: "0s"

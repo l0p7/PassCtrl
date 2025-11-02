@@ -275,15 +275,10 @@ func validateRuleExpressions(cfg RuleConfig, env *expr.Environment) error {
 	if err := validateConditionList(env, "error", cfg.Conditions.Error); err != nil {
 		return err
 	}
-	if err := validateVariableScope(env, "global", cfg.Variables.Global); err != nil {
-		return err
-	}
-	if err := validateVariableScope(env, "rule", cfg.Variables.Rule); err != nil {
-		return err
-	}
-	if err := validateVariableScope(env, "local", cfg.Variables.Local); err != nil {
-		return err
-	}
+	// TODO(PassCtrl-40): Implement v2 variable validation for local variables
+	// cfg.Variables is now map[string]string for local variables only
+	// Validation will be updated when implementing hybrid CEL/Template evaluation
+	_ = cfg.Variables
 	return nil
 }
 
@@ -295,22 +290,6 @@ func validateConditionList(env *expr.Environment, name string, expressions []str
 		}
 		if _, err := env.Compile(trimmed); err != nil {
 			return fmt.Errorf("conditions.%s[%d]: %w", name, idx, err)
-		}
-	}
-	return nil
-}
-
-func validateVariableScope(env *expr.Environment, scope string, variables map[string]RuleVariableSpec) error {
-	if len(variables) == 0 {
-		return nil
-	}
-	for name, spec := range variables {
-		trimmed := strings.TrimSpace(spec.From)
-		if trimmed == "" {
-			continue
-		}
-		if _, err := env.CompileValue(trimmed); err != nil {
-			return fmt.Errorf("variables.%s[%s]: %w", scope, name, err)
 		}
 	}
 	return nil

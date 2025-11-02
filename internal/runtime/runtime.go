@@ -22,10 +22,10 @@ import (
 	"github.com/l0p7/passctrl/internal/metrics"
 	"github.com/l0p7/passctrl/internal/runtime/admission"
 	"github.com/l0p7/passctrl/internal/runtime/cache"
+	"github.com/l0p7/passctrl/internal/runtime/endpointvars"
 	"github.com/l0p7/passctrl/internal/runtime/forwardpolicy"
 	"github.com/l0p7/passctrl/internal/runtime/pipeline"
 	"github.com/l0p7/passctrl/internal/runtime/responsepolicy"
-	"github.com/l0p7/passctrl/internal/runtime/resultcaching"
 	"github.com/l0p7/passctrl/internal/runtime/rulechain"
 	"github.com/l0p7/passctrl/internal/templates"
 )
@@ -71,8 +71,9 @@ type Pipeline struct {
 }
 
 type endpointRuntime struct {
-	name   string
-	agents []pipeline.Agent
+	name       string
+	authConfig admission.Config
+	agents     []pipeline.Agent
 }
 
 type endpointContextKey struct{}
@@ -347,7 +348,7 @@ func (p *Pipeline) ServeAuth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	correlationID := p.requestCorrelationID(r)
-	cacheKey := p.deriveCacheKey(r, endpointName)
+	cacheKey := p.deriveCacheKey(r, endpointRuntime)
 	state := pipeline.NewState(r, endpointName, cacheKey, correlationID)
 
 	reqLogger := p.logger.With(
@@ -356,29 +357,6 @@ func (p *Pipeline) ServeAuth(w http.ResponseWriter, r *http.Request) {
 	)
 
 	p.logDebugRequestSnapshot(r, reqLogger, state)
-
-	lookupStart := time.Now()
-	entry, ok, err := p.cache.Lookup(r.Context(), cacheKey)
-	if p.metrics != nil {
-		result := metrics.CacheLookupMiss
-		if err != nil {
-			result = metrics.CacheLookupError
-		} else if ok {
-			result = metrics.CacheLookupHit
-		}
-		p.metrics.ObserveCacheLookup(endpointName, result, time.Since(lookupStart))
-	}
-	if err != nil {
-		reqLogger.Error("cache lookup failed", slog.Any("error", err), slog.String("cache_key", cacheKey))
-	} else if ok {
-		state.Cache.Hit = true
-		state.Cache.Decision = entry.Decision
-		state.Cache.Stored = true
-		state.Cache.StoredAt = entry.StoredAt
-		state.Cache.ExpiresAt = entry.ExpiresAt
-		state.Response = resultcaching.ResponseFromCache(entry.Response)
-		state.Rule.Outcome = entry.Decision
-	}
 
 	for _, ag := range endpointRuntime.agents {
 		// Agents publish their observable state via the shared pipeline.State.
@@ -534,8 +512,14 @@ func (p *Pipeline) ServeExplain(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (p *Pipeline) deriveCacheKey(r *http.Request, endpoint string) string {
-	raw := cacheKeyFromRequest(r, endpoint)
+func (p *Pipeline) deriveCacheKey(r *http.Request, ep *endpointRuntime) string {
+	// Disable caching for endpoints that allow anonymous authentication
+	// to prevent cache poisoning when rules use request-specific data
+	if ep.authConfig.Allow.None {
+		return ""
+	}
+
+	raw := cacheKeyFromRequest(r, ep.name, &ep.authConfig)
 	sum := sha256.Sum256(append(p.cacheSalt, []byte(raw)...))
 	encoded := base64.RawURLEncoding.EncodeToString(sum[:])
 	return fmt.Sprintf("%s:%d:%s", p.cacheNamespace, p.cacheEpoch, encoded)
@@ -639,29 +623,42 @@ func (p *Pipeline) installFallbackEndpoint() {
 		slog.String("agent", "rule_execution"),
 		slog.String("endpoint", "default"),
 	)
+	backendInteractionLogger := p.logger.With(
+		slog.String("agent", "backend_interaction"),
+		slog.String("endpoint", "default"),
+	)
 	trusted := defaultTrustedNetworks()
+	defaultAuthConfig := admission.Config{
+		Required: false,
+		Allow: admission.AllowConfig{
+			Authorization: []string{"basic", "bearer"},
+		},
+	}
+	fwdLogger := p.logger.With(
+		slog.String("agent", "forward_request_policy"),
+		slog.String("endpoint", "default"),
+	)
+	fwdPolicy, err := forwardpolicy.New(forwardpolicy.DefaultConfig(), p.templateRenderer, fwdLogger)
+	if err != nil {
+		p.logger.Error("failed to create forward policy agent for default endpoint", slog.String("error", err.Error()))
+		fwdPolicy, _ = forwardpolicy.New(forwardpolicy.DefaultConfig(), nil, fwdLogger)
+	}
+
+	// Create backend interaction agent with HTTP client
+	backendAgent := newBackendInteractionAgent(&http.Client{Timeout: 10 * time.Second}, backendInteractionLogger)
+
 	agents := []pipeline.Agent{
 		&serverAgent{},
-		admission.New(trusted, false, admission.Config{
-			Required: false,
-			Allow: admission.AllowConfig{
-				Authorization: []string{"basic", "bearer"},
-			},
-		}),
-		forwardpolicy.New(forwardpolicy.DefaultConfig()),
+		admission.New(trusted, false, defaultAuthConfig),
+		fwdPolicy,
 		rulechain.NewAgent(rulechain.DefaultDefinitions(p.templateRenderer)),
-		newRuleExecutionAgent(nil, ruleExecutionLogger, p.templateRenderer),
+		newRuleExecutionAgent(backendAgent, ruleExecutionLogger, p.templateRenderer, p.cache, p.cacheTTL, p.metrics),
 		responsepolicy.NewWithConfig(responsepolicy.Config{Endpoint: "default", Renderer: p.templateRenderer}),
-		resultcaching.New(resultcaching.Config{
-			Cache:   p.cache,
-			TTL:     p.cacheTTL,
-			Logger:  p.logger.With(slog.String("agent", "result_caching"), slog.String("endpoint", "default")),
-			Metrics: p.metrics,
-		}),
 	}
 	runtime := &endpointRuntime{
-		name:   "default",
-		agents: p.instrumentAgents("default", agents),
+		name:       "default",
+		authConfig: defaultAuthConfig,
+		agents:     p.instrumentAgents("default", agents),
 	}
 	p.endpoints[strings.ToLower(runtime.name)] = runtime
 	p.defaultEndpoint = runtime
@@ -719,22 +716,48 @@ func (p *Pipeline) buildEndpointRuntime(name string, cfg config.EndpointConfig, 
 		ruleDefs = append(ruleDefs, def)
 	}
 
-	ttl := p.cacheTTL
-	if cfg.Cache.ResultTTL != "" {
-		if parsed, err := time.ParseDuration(cfg.Cache.ResultTTL); err == nil && parsed > 0 {
-			ttl = parsed
-		} else if err != nil {
-			p.logger.Warn("invalid endpoint cache ttl", slog.String("endpoint", trimmed), slog.String("value", cfg.Cache.ResultTTL), slog.Any("error", err))
+	trusted := append(defaultTrustedNetworks(), admission.ParseCIDRs(cfg.ForwardProxyPolicy.TrustedProxyIPs)...)
+	authConfig := admissionConfigFromEndpoint(cfg.Authentication)
+
+	// Build endpoint variables agent (evaluates endpoint.variables before rules)
+	var endpointVarsAgent pipeline.Agent
+	if len(cfg.Variables) > 0 {
+		evAgent, err := endpointvars.New(cfg.Variables, p.templateRenderer, p.logger.With(slog.String("agent", "endpoint_variables"), slog.String("endpoint", trimmed)))
+		if err != nil {
+			return nil, fmt.Errorf("build endpoint variables agent: %w", err)
 		}
+		endpointVarsAgent = evAgent
 	}
 
-	trusted := append(defaultTrustedNetworks(), admission.ParseCIDRs(cfg.ForwardProxyPolicy.TrustedProxyIPs)...)
+	fwdPolicy, err := forwardpolicy.New(
+		forwardPolicyFromConfig(cfg.ForwardRequestPolicy),
+		p.templateRenderer,
+		p.logger.With(slog.String("agent", "forward_request_policy"), slog.String("endpoint", trimmed)),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("build forward policy agent: %w", err)
+	}
+
 	agents := []pipeline.Agent{
 		&serverAgent{},
-		admission.New(trusted, cfg.ForwardProxyPolicy.DevelopmentMode, admissionConfigFromEndpoint(cfg.Authentication)),
-		forwardpolicy.New(forwardPolicyFromConfig(cfg.ForwardRequestPolicy)),
+		admission.New(trusted, cfg.ForwardProxyPolicy.DevelopmentMode, authConfig),
+		fwdPolicy,
+	}
+
+	// Add endpoint variables agent if configured
+	if endpointVarsAgent != nil {
+		agents = append(agents, endpointVarsAgent)
+	}
+
+	// Create backend interaction agent with HTTP client
+	backendAgent := newBackendInteractionAgent(
+		&http.Client{Timeout: 10 * time.Second},
+		p.logger.With(slog.String("agent", "backend_interaction"), slog.String("endpoint", trimmed)),
+	)
+
+	agents = append(agents,
 		rulechain.NewAgent(ruleDefs),
-		newRuleExecutionAgent(nil, p.logger.With(slog.String("agent", "rule_execution"), slog.String("endpoint", trimmed)), p.templateRenderer),
+		newRuleExecutionAgent(backendAgent, p.logger.With(slog.String("agent", "rule_execution"), slog.String("endpoint", trimmed)), p.templateRenderer, p.cache, p.cacheTTL, p.metrics),
 		responsepolicy.NewWithConfig(responsepolicy.Config{
 			Endpoint: trimmed,
 			Renderer: p.templateRenderer,
@@ -769,15 +792,13 @@ func (p *Pipeline) buildEndpointRuntime(name string, cfg config.EndpointConfig, 
 				},
 			},
 		}),
-		resultcaching.New(resultcaching.Config{
-			Cache:   p.cache,
-			TTL:     ttl,
-			Logger:  p.logger.With(slog.String("agent", "result_caching"), slog.String("endpoint", trimmed)),
-			Metrics: p.metrics,
-		}),
-	}
+	)
 
-	runtime := &endpointRuntime{name: trimmed, agents: p.instrumentAgents(trimmed, agents)}
+	runtime := &endpointRuntime{
+		name:       trimmed,
+		authConfig: authConfig,
+		agents:     p.instrumentAgents(trimmed, agents),
+	}
 	if p.defaultEndpoint == nil {
 		p.defaultEndpoint = runtime
 	}
@@ -937,17 +958,57 @@ func buildRuleAuthSpec(directives []config.RuleAuthDirective) []rulechain.AuthDi
 	}
 	specs := make([]rulechain.AuthDirectiveSpec, 0, len(directives))
 	for _, directive := range directives {
+		// Convert matchers
+		matchers := make([]rulechain.AuthMatcherSpec, 0, len(directive.Match))
+		for _, m := range directive.Match {
+			matcher := rulechain.AuthMatcherSpec{
+				Type: strings.TrimSpace(m.Type),
+				Name: strings.TrimSpace(m.Name),
+			}
+
+			// Parse value constraints
+			if m.Value != nil {
+				values, err := config.ParseValueConstraint(m.Value, "auth.match.value")
+				if err != nil {
+					// Skip this directive if parsing fails (validation should have caught this)
+					continue
+				}
+				matcher.Value = values
+			}
+			if m.Username != nil {
+				values, err := config.ParseValueConstraint(m.Username, "auth.match.username")
+				if err != nil {
+					continue
+				}
+				matcher.Username = values
+			}
+			if m.Password != nil {
+				values, err := config.ParseValueConstraint(m.Password, "auth.match.password")
+				if err != nil {
+					continue
+				}
+				matcher.Password = values
+			}
+
+			matchers = append(matchers, matcher)
+		}
+
+		// Convert forwards
+		forwards := make([]rulechain.AuthForwardSpec, 0, len(directive.ForwardAs))
+		for _, f := range directive.ForwardAs {
+			forwards = append(forwards, rulechain.AuthForwardSpec{
+				Type:     strings.TrimSpace(f.Type),
+				Name:     f.Name,
+				Value:    f.Value,
+				Token:    f.Token,
+				User:     f.User,
+				Password: f.Password,
+			})
+		}
+
 		specs = append(specs, rulechain.AuthDirectiveSpec{
-			Type: strings.TrimSpace(directive.Type),
-			Name: strings.TrimSpace(directive.Name),
-			Forward: rulechain.AuthForwardSpec{
-				Type:     strings.TrimSpace(directive.ForwardAs.Type),
-				Name:     directive.ForwardAs.Name,
-				Value:    directive.ForwardAs.Value,
-				Token:    directive.ForwardAs.Token,
-				User:     directive.ForwardAs.User,
-				Password: directive.ForwardAs.Password,
-			},
+			Match:     matchers,
+			ForwardAs: forwards,
 		})
 	}
 	return specs
@@ -963,31 +1024,16 @@ func buildRuleResponsesSpec(cfg config.RuleResponsesConfig) rulechain.ResponsesS
 
 func buildRuleResponseSpec(cfg config.RuleResponseConfig) rulechain.ResponseSpec {
 	return rulechain.ResponseSpec{
-		Headers: forwardpolicy.CategoryConfig{
-			Allow:  append([]string{}, cfg.Headers.Allow...),
-			Strip:  append([]string{}, cfg.Headers.Strip...),
-			Custom: cloneStringMap(cfg.Headers.Custom),
-		},
+		Variables: cloneStringMap(cfg.Variables),
 	}
 }
 
 func buildRuleVariablesSpec(cfg config.RuleVariablesConfig) rulechain.VariablesSpec {
+	// cfg is map[string]string for local/temporary variables
+	// Evaluated with hybrid CEL/Template evaluator (auto-detected by {{ presence)
 	return rulechain.VariablesSpec{
-		Global: buildRuleVariableMap(cfg.Global),
-		Rule:   buildRuleVariableMap(cfg.Rule),
-		Local:  buildRuleVariableMap(cfg.Local),
+		Variables: cfg,
 	}
-}
-
-func buildRuleVariableMap(cfg map[string]config.RuleVariableSpec) map[string]rulechain.VariableSpec {
-	if len(cfg) == 0 {
-		return nil
-	}
-	out := make(map[string]rulechain.VariableSpec, len(cfg))
-	for name, spec := range cfg {
-		out[name] = rulechain.VariableSpec{From: spec.From}
-	}
-	return out
 }
 
 func admissionConfigFromEndpoint(cfg config.EndpointAuthenticationConfig) admission.Config {

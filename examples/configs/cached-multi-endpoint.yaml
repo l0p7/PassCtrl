@@ -22,8 +22,9 @@ endpoints:
     description: "Default endpoint for browser traffic with cached rule outcomes."
     authentication:
       required: false
-      allow: ["bearer", "header"]
-      header: ["x-session-token"]
+      allow:
+        authorization: ["bearer"]
+        header: ["x-session-token"]
     forwardRequestPolicy:
       headers:
         allow: ["x-request-id", "x-session-token"]
@@ -59,8 +60,11 @@ endpoints:
     description: "Privileged path that bypasses caching and requires explicit endpoint selection."
     authentication:
       required: true
-      allow: ["bearer"]
-      challenge: "Bearer realm=\"Admin\""
+      allow:
+        authorization: ["bearer"]
+      challenge:
+        type: bearer
+        realm: "Admin"
     forwardProxyPolicy:
       trustedProxyIPs: ["10.10.0.0/16"]
       developmentMode: false
@@ -104,39 +108,46 @@ rules:
       error:
         - backend.status >= 500
     variables:
-      global:
-        user_id:
-          from: backend.body.userId
-        tier:
-          from: backend.body.tier
+      user_id: backend.body.userId
+      tier: backend.body.tier
+    responses:
+      pass:
+        variables:
+          user_id: variables.local.user_id
+          tier: variables.local.tier
     cache:
-      passTTL: "5m"
-      failTTL: "30s"
       followCacheControl: true
+      ttl:
+        pass: "5m"
+        fail: "30s"
+        error: "0s"
 
   enforce-customer-tier:
     description: "Denies requests from suspended or free-tier accounts."
     conditions:
       pass:
-        - lookup(vars.global, "tier") in ["gold", "platinum"]
+        - lookup(variables.rule["session-lookup"], "tier") in ["gold", "platinum"]
       fail:
-        - lookup(vars.global, "tier") in ["free", "suspended"]
+        - lookup(variables.rule["session-lookup"], "tier") in ["free", "suspended"]
     responses:
       fail:
         headers:
           custom:
-            X-PassCtrl-Tier: "{{ index .vars.global \"tier\" }}"
+            X-PassCtrl-Tier: "{{ index .rules \"session-lookup\" \"variables\" \"tier\" }}"
     cache:
-      passTTL: "0s"
-      failTTL: "0s"
+      ttl:
+        pass: "0s"
+        fail: "0s"
+        error: "0s"
 
   audit-token-check:
     description: "Validates admin bearer tokens without caching."
     auth:
-      - type: bearer
+      - match:
+          - type: bearer
         forwardAs:
-          type: bearer
-          token: "{{ .auth.input.token }}"
+          - type: bearer
+            token: "{{ .auth.input.bearer.token }}"
     backendApi:
       url: "https://audit.internal/v1/validate"
       method: POST
@@ -144,11 +155,11 @@ rules:
         allow: []
         strip: []
         custom:
-          authorization: "Bearer {{ .auth.input.token }}"
+          authorization: "Bearer {{ .auth.input.bearer.token }}"
           content-type: "application/json"
       body: |
         {
-          "token": "{{ .auth.input.token }}"
+          "token": "{{ .auth.input.bearer.token }}"
         }
       acceptedStatuses: [200]
     conditions:
@@ -159,5 +170,7 @@ rules:
       error:
         - backend.status >= 500
     cache:
-      passTTL: "0s"
-      failTTL: "0s"
+      ttl:
+        pass: "0s"
+        fail: "0s"
+        error: "0s"

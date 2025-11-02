@@ -1,6 +1,6 @@
 # System Agents
 
-PassCtrl models the runtime as a collaboration between seven specialised agents. Each agent aligns with the building blocks
+PassCtrl models the runtime as a collaboration between eight specialised agents. Each agent aligns with the building blocks
 summarized in the main README and expanded upon in the `design/` documents. The sections below capture the contract, inputs,
 outputs, and operational concerns for each participant.
 
@@ -56,37 +56,72 @@ outputs, and operational concerns for each participant.
   - Record its decisions so caching and response policy can prove which inputs influenced downstream outcomes.
 
 ## 4. Rule Chain Agent
-- **Purpose**: Orchestrate ordered rule execution, enforce short-circuit semantics, and manage scoped variables.
-- **Inputs**: Curated request view, global variables from prior evaluations (including cache hits), endpoint rule list.
-- **Outputs**: Aggregate rule history, merged variables, final chain outcome (`Pass`, `Fail`, or `Error`).
+- **Purpose**: Orchestrate ordered rule execution, enforce short-circuit semantics, and manage exported variables.
+- **Inputs**: Curated request view, endpoint variables, exported variables from prior rules (including cache hits), endpoint rule list.
+- **Outputs**: Aggregate rule history, accumulated exported variables, final chain outcome (`Pass`, `Fail`, or `Error`).
 - **Key Behaviors**:
   - Evaluate rules sequentially; stop on first non-pass result while capturing per-rule outcomes, durations, and variables for auditing.
   - Track per-rule latency, outcomes, exported variables, cache participation, and backend call summaries.
-  - Surface variables to later rules using the `global`, `rule`, and `local` scopes defined in the design.
+  - Accumulate exported variables from each rule (via `responses.<outcome>.variables`) and make them available to subsequent rules via `.rules.<ruleName>.variables.*`.
 
 ## 5. Rule Execution Agent
-- **Purpose**: Execute an individual rule from credential intake through backend interaction, condition evaluation, and
-  response assembly.
+- **Purpose**: Orchestrate an individual rule's evaluation from credential intake through condition evaluation and
+  response assembly, delegating backend HTTP execution to the Backend Interaction Agent.
 - **Inputs**: Rule configuration, curated request view, scoped variables, optional cached decision hints.
 - **Outputs**: Rule outcome, rendered responses (status, headers, bodies), exported variables.
 - **Key Behaviors**:
-  - Accept credentials via the ordered `auth` directives, with optional `forwardAs` transformations.
-  - Evaluate rule authentication directives sequentially, forwarding the first matched credential (or failing early when none
-    match and no `type: none` fallback exists) according to the configured `forwardAs` block.
-  - Render backend requests using templated fields, invoke the API, and evaluate pass/fail/error conditions via CEL.
-  - Honor rule-level caching directives and ensure error outcomes bypass caching.
-  - Evaluate declarative `whenAll`/`failWhen`/`errorWhen` condition blocks sourced from the chain agent, populating execution history and per-rule reasons for downstream explanation.
+  - Accept credentials via ordered **match groups**, where each group contains a `match` array (credential matchers with AND logic)
+    and optional `forwardAs` array (credential outputs).
+  - **Extract credentials** from admission state, organizing them by type (bearer, basic, headers map, query map) for efficient matching.
+  - **Evaluate match groups sequentially** (OR between groups, AND within groups): for each group, check if ALL matchers succeed;
+    first complete match wins. Each matcher specifies type, optional name, and optional value constraints (literal or regex patterns).
+  - **Value matching**: For matchers with value constraints, test credential values against literal strings or compiled regex patterns
+    (delimited by `/`). Multiple patterns use OR logic (any match succeeds).
+  - **Build template context** from all matched credentials in winning group, exposing `.auth.input.bearer.token`,
+    `.auth.input.basic.user/.password`, `.auth.input.header['x-name']` (lowercase keys), `.auth.input.query['param']`.
+  - **Render credential outputs**: When `forwardAs` is present, render each output using Go templates. When `forwardAs` is omitted,
+    enable **pass-through mode** by reconstructing forwards from matched credentials.
+  - **Strip all credential sources** mentioned in ANY match group from forwarded request, then apply winning group's outputs
+    (explicit credential stripping for fail-closed security).
+  - Render backend request templates (URL, method, headers, query params, body) using curated context and matched credentials,
+    producing fully-rendered request descriptor for Backend Interaction Agent.
+  - Delegate HTTP execution and pagination to Backend Interaction Agent, receiving populated backend state in return.
+  - Evaluate pass/fail/error conditions via CEL using backend responses and scoped variables.
+  - Honor rule-level caching directives (checking before backend calls, storing after evaluation); error outcomes bypass caching.
+  - Evaluate declarative `whenAll`/`failWhen`/`errorWhen` condition blocks, populating execution history and per-rule reasons.
+  - **Extract variables** via `variables` (local temporaries) and `responses.*.variables` (exported):
+    - **Local variables** (`variables`): Temporary calculations available only within the rule, not cached or exported
+    - **Exported variables** (`responses.pass/fail/error.variables`): Shared with subsequent rules AND available to endpoint response templates. Cached with decision outcomes.
 
-## 6. Response Policy Agent
-- **Purpose**: Render the final `/auth` response (pass, fail, or error) using endpoint policy, rule outputs, and curated context.
-- **Inputs**: Chain outcome, decisive rule response payload, endpoint response policy configuration, stored variables.
+## 6. Backend Interaction Agent
+- **Purpose**: Execute HTTP requests to backend APIs with pagination support, capturing responses and errors without evaluating policy logic.
+- **Inputs**: Fully-rendered backend request descriptor (`method`, `url`, `headers`, `query`, `body`), backend configuration (accepted statuses, pagination settings), pipeline state.
+- **Outputs**: Populated `state.Backend.*` fields including status, headers, body (parsed JSON when applicable), pagination results, and any execution errors.
+- **Key Behaviors**:
+  - Accept pre-rendered request descriptors from the Rule Execution Agent—no template evaluation, credential matching, or condition logic.
+  - Execute HTTP requests using the configured client with context deadline enforcement and timeout handling.
+  - Implement pagination protocols (link-header per RFC 5988, with future support for token and cursor-based pagination) with safety bounds (max pages, visited URL tracking to prevent loops).
+  - Parse JSON responses automatically when content-type indicates JSON, normalizing numbers for consistent CEL evaluation.
+  - Respect backend `acceptedStatuses` configuration to determine success vs. failure without policy evaluation.
+  - Capture per-page state during pagination, exposing all pages and the last page's details to the Rule Execution Agent for condition evaluation.
+  - Handle network errors, timeouts, malformed responses, and oversized bodies gracefully, recording errors in `state.Backend.Error` for the Rule Execution Agent to convert into policy outcomes.
+  - Emit structured logs with `agent: "backend_interaction"` labels, tracking HTTP method, URL, status, latency, pagination metrics, and correlation IDs.
+  - Never cache responses, evaluate conditions, or make policy decisions—purely responsible for reliable HTTP execution and response capture.
+
+## 7. Response Policy Agent
+- **Purpose**: Render the final `/auth` response (pass, fail, or error) using endpoint policy and variables explicitly exported by the decisive rule.
+- **Inputs**: Chain outcome (pass/fail/error), endpoint response policy configuration, exported variables from decisive rule.
 - **Outputs**: HTTP response for the caller, including status, headers, and body.
 - **Key Behaviors**:
-  - Default to canonical forward-auth statuses when overrides are absent.
-  - Respect rule- and endpoint-level header directives, using templates for rendered values.
+  - **Endpoints own the response format entirely**: status codes, headers, and body templates are defined in endpoint `responsePolicy.pass/fail/error` blocks.
+  - Default to canonical forward-auth statuses (200 OK for pass, 403 Forbidden for fail, 502 Bad Gateway for error) when overrides are absent.
+  - **Exported variables are available to endpoint templates**: Rules export variables via `responses.pass/fail/error.variables` blocks. These variables are shared with subsequent rules AND available to endpoint response templates via `.response.*` context.
+  - **Local variables are NOT exposed**: Variables used for temporary calculations (`variables` block) remain internal to the rule and are not accessible to endpoints.
+  - Render status, headers, and body using Go templates with access to: `.endpoint`, `.correlationId`, `.auth.input.*`, `.backend.*` (from decisive rule), `.response.*` (exported variables from decisive rule), and standard context fields.
+  - Apply header allow/strip/custom directives to control which headers from previous processing stages reach the client.
   - Emit structured logs tying the response to the chain history and curated request view.
 
-## 7. Result Caching Agent
+## 8. Result Caching Agent
 - **Purpose**: Memoise rule and endpoint decisions while upholding strict invariants around error handling and payload storage.
 - **Inputs**: Rule/endpoint `cache` blocks, backend cache headers (when `followCacheControl` is true), decision artifacts.
 - **Outputs**: Cached pass/fail outcomes, reused variables, audit records noting cache hits or misses.

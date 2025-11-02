@@ -3,8 +3,8 @@ endpoints:
     description: "Protects a single-page application by combining session lookup and entitlement checks."
     authentication:
       required: true
-      allow: ["header"]
-      header: ["x-session-token"]
+      allow:
+        header: ["x-session-token"]
     forwardProxyPolicy:
       trustedProxyIPs: ["10.0.0.0/8", "192.168.0.0/16"]
       developmentMode: false

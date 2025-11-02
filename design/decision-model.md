@@ -27,14 +27,18 @@ previous one and emits a typed result that downstream stages can reference.
 ## Stage 3: Rule Evaluation
 - Execute ordered, named rules sourced from the endpoint’s `rules` list.
 - Each rule may include:
-  - **auth** — an ordered list of accepted credential directives. Each entry names a source `type`
-    (`basic`, `bearer`, `header`, `query`, or `none`), optional selector attributes such as `name`, and an inline `forwardAs`
-    block when the credential should be transformed before reaching the backend. Entries are evaluated sequentially; the first
-    directive that matches a captured credential is used. Omitting `forwardAs` forwards the credential in its original shape
-    (e.g., Basic remains Basic). When present, `forwardAs` may declare a new credential `type` and populate fields such as
-    `token`, `user`, `password`, `name`, or `value` using Go templates (with Sprig helpers). The matched credential is surfaced
-    to templates and CEL as `.auth.input.*`, and the synthesized outbound credential appears under `.auth.forward.*`. If no entry
-    matches and no directive specifies `type: none`, the rule fails before any backend call occurs.
+  - **auth** — an ordered array of **match groups**, where each group contains a `match` array of credential matchers and an
+    optional `forwardAs` array of credential outputs. Match groups implement **AND logic within groups, OR logic between groups**:
+    within a single group, ALL matchers must succeed; groups are evaluated sequentially until one fully matches. Each matcher
+    specifies a `type` (`basic`, `bearer`, `header`, `query`, or `none`), optional selector attributes like `name`, and optional
+    **value constraints** (literal strings or regex patterns delimited by `/`) to filter credentials by their values. When a group
+    matches, all matched credentials become accessible via `.auth.input.*` (e.g., `.auth.input.bearer.token`,
+    `.auth.input.basic.user`, `.auth.input.header['x-name']`, `.auth.input.query['param']`). The `forwardAs` array contains
+    multiple credential outputs (each specifying `type` and type-specific fields like `token`, `user`, `password`, `name`, `value`)
+    rendered via Go templates with Sprig helpers. Omitting `forwardAs` enables **pass-through mode** where matched credentials
+    forward unchanged. **Credential stripping** is explicit: all credential sources mentioned in ANY match group are stripped from
+    the forwarded request before the winning group's outputs are applied. If no group matches and no `type: none` is present, the
+    rule fails before any backend call occurs. The synthesized outbound credentials appear under `.auth.forward.*` for CEL access.
   - **backendApi** — the target URL, HTTP method, accepted response status codes, pagination behavior, and the same
     allow/strip/custom controls for headers and query parameters used by the forward policy. Header and query names are literal,
     while request bodies and custom values are rendered via Go templates (with Sprig helpers).
@@ -42,15 +46,12 @@ previous one and emits a typed result that downstream stages can reference.
     CEL programs that inspect response headers/bodies to override outcomes. Helper functions such as `lookup(map, key)` return
     `null` for missing entries so conditions can probe optional headers, query parameters, or backend payloads without raising
     evaluation errors.
-  - **responses** — pass/fail/error response descriptors containing header directives only. Header values may use Go templates (with Sprig helpers) independent of the rule-condition pipeline.
-  - **variables** — extractions scoped as `global`, `rule`, or `local` for sharing data between rules. Each `from` directive is a CEL program evaluated against the rule context.
-- Variable scopes behave as follows:
-  - `global` variables are visible to all rules as `.variables.<name>` (or `variables.<name>`) and may be overwritten by later
-    rules that export a value with the same key.
-  - `rule` variables appear to other rules as `rules.<ruleName>.variables.<name>` and resolve within the rule itself as
-    `.variables.<name>`.
-  - `local` variables exist only for the rule that defined them (`.variables.<name>` inside the rule) and are never exposed to
-    subsequent rules.
+  - **responses** — pass/fail/error response descriptors for exporting variables to subsequent rules. Only variables from the winning outcome are exported and cached. Variable expressions support hybrid CEL/Template evaluation (auto-detected by `{{` presence).
+  - **variables** — local/temporary variables for intermediate calculations within a rule. These variables are NOT cached and NOT exported to other rules. They use hybrid CEL/Template evaluation and are only accessible via `.variables.<name>` within the same rule.
+- Variable system consists of three tiers:
+  - **Endpoint variables** (`.vars.*`) - Configuration-level values defined in endpoint config, available to all rules
+  - **Local variables** (`.variables.*`) - Rule-scoped temporaries defined in `variables:` block, ephemeral and not exported
+  - **Exported variables** (`.rules.<ruleName>.variables.*`) - Cross-rule data defined in `responses.<outcome>.variables:`, cached with the rule outcome and accessible to subsequent rules and endpoint response templates
 - Outcomes are `Pass`, `Fail`, or `Error`. Only `Pass` allows evaluation to continue. Errors short-circuit to the response
   policy’s `error` branch.
 

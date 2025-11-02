@@ -22,7 +22,7 @@ func NewEnvironment() (*Environment, error) {
 		cel.Variable("admission", cel.MapType(cel.StringType, cel.DynType)),
 		cel.Variable("forward", cel.MapType(cel.StringType, cel.DynType)),
 		cel.Variable("backend", cel.MapType(cel.StringType, cel.DynType)),
-		cel.Variable("vars", cel.MapType(cel.StringType, cel.DynType)),
+		cel.Variable("variables", cel.MapType(cel.StringType, cel.DynType)),
 		cel.Variable("now", cel.DynType),
 		cel.Function("lookup",
 			cel.Overload("lookup_map_string",

@@ -8,6 +8,7 @@ import (
 
 	"github.com/l0p7/passctrl/internal/runtime/forwardpolicy"
 	"github.com/l0p7/passctrl/internal/runtime/pipeline"
+	"github.com/l0p7/passctrl/internal/templates"
 	"github.com/stretchr/testify/require"
 )
 
@@ -35,7 +36,7 @@ func TestBuildBackendDefinitionAndSelection(t *testing.T) {
 		},
 	}
 
-	backend := buildBackendDefinition(spec)
+	backend := buildBackendDefinition(spec, nil)
 
 	require.Equal(t, "https://api.example.com/resource", backend.URL)
 	require.Equal(t, http.MethodPost, backend.Method)
@@ -49,7 +50,7 @@ func TestBuildBackendDefinitionAndSelection(t *testing.T) {
 		"x-auth":   "token",
 		"x-remove": "to-be-removed",
 		"x-ignore": "value",
-	})
+	}, nil)
 
 	require.Len(t, headers, 2)
 	require.Equal(t, "token", headers["x-auth"])
@@ -60,7 +61,7 @@ func TestBuildBackendDefinitionAndSelection(t *testing.T) {
 	queries := backend.SelectQuery(map[string]string{
 		"limit": "10",
 		"page":  "3",
-	})
+	}, nil)
 
 	require.Equal(t, "100", queries["limit"])
 	_, ok = queries["page"]
@@ -110,4 +111,96 @@ func TestBackendDefinitionIsConfigured(t *testing.T) {
 	require.False(t, backend.IsConfigured())
 	backend.URL = "https://api.example.com"
 	require.True(t, backend.IsConfigured())
+}
+
+func TestBackendDefinitionWithTemplates(t *testing.T) {
+	renderer := templates.NewRenderer(nil)
+
+	spec := BackendDefinitionSpec{
+		URL:    "https://api.example.com",
+		Method: "POST",
+		Headers: forwardpolicy.CategoryConfig{
+			Custom: map[string]string{
+				"Authorization": `Bearer {{ index .raw.Headers "authorization" | replace "Basic " "" }}`,
+				"X-Trace-ID":    `{{ index .raw.Headers "x-request-id" }}`,
+			},
+		},
+		Query: forwardpolicy.CategoryConfig{
+			Custom: map[string]string{
+				"token": `{{ index .raw.Headers "authorization" }}`,
+				"page":  `{{ index .raw.Query "offset" | default "1" }}`,
+			},
+		},
+	}
+
+	backend := buildBackendDefinition(spec, renderer)
+
+	// Create a state with raw request data
+	req := httptest.NewRequest(http.MethodPost, "https://example.com?offset=5", http.NoBody)
+	req.Header.Set("Authorization", "Basic user123")
+	req.Header.Set("X-Request-ID", "trace-abc")
+	state := pipeline.NewState(req, "test", "test|key", "")
+
+	// Test template rendering for headers
+	headers := backend.SelectHeaders(map[string]string{}, state)
+	require.Equal(t, "Bearer user123", headers["authorization"])
+	require.Equal(t, "trace-abc", headers["x-trace-id"])
+
+	// Test template rendering for query parameters
+	query := backend.SelectQuery(map[string]string{}, state)
+	require.Equal(t, "Basic user123", query["token"])
+	require.Equal(t, "5", query["page"])
+}
+
+func TestBackendDefinitionTemplatesFallbackOnError(t *testing.T) {
+	renderer := templates.NewRenderer(nil)
+
+	spec := BackendDefinitionSpec{
+		URL: "https://api.example.com",
+		Headers: forwardpolicy.CategoryConfig{
+			Custom: map[string]string{
+				"X-Static": "fallback-value",
+			},
+		},
+	}
+
+	backend := buildBackendDefinition(spec, renderer)
+
+	req := httptest.NewRequest(http.MethodGet, "https://example.com", http.NoBody)
+	state := pipeline.NewState(req, "test", "test|key", "")
+
+	headers := backend.SelectHeaders(map[string]string{}, state)
+	// Should use static value when no template is present
+	require.Equal(t, "fallback-value", headers["x-static"])
+}
+
+func TestBackendDefinitionTemplatesHandleEmptyResults(t *testing.T) {
+	renderer := templates.NewRenderer(nil)
+
+	spec := BackendDefinitionSpec{
+		URL: "https://api.example.com",
+		Headers: forwardpolicy.CategoryConfig{
+			Custom: map[string]string{
+				"X-Missing": `{{ index .raw.Headers "non-existent" }}`,
+			},
+		},
+		Query: forwardpolicy.CategoryConfig{
+			Custom: map[string]string{
+				"missing": `{{ index .raw.Query "non-existent" }}`,
+			},
+		},
+	}
+
+	backend := buildBackendDefinition(spec, renderer)
+
+	req := httptest.NewRequest(http.MethodGet, "https://example.com", http.NoBody)
+	state := pipeline.NewState(req, "test", "test|key", "")
+
+	headers := backend.SelectHeaders(map[string]string{}, state)
+	// Empty template results should be stripped
+	require.NotContains(t, headers, "x-missing")
+
+	query := backend.SelectQuery(map[string]string{}, state)
+	// Empty template results should be stripped
+	require.NotContains(t, query, "missing")
 }

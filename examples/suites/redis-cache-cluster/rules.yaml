@@ -3,8 +3,11 @@ endpoints:
     description: "Relies on Redis-backed caches to reuse profile lookups."
     authentication:
       required: true
-      allow: ["bearer"]
-      challenge: "Bearer realm=\"External\""
+      allow:
+        authorization: ["bearer"]
+      challenge:
+        type: bearer
+        realm: "External"
     forwardRequestPolicy:
       headers:
         allow: ["authorization", "x-request-id"]
@@ -51,28 +54,33 @@ rules:
         - lookup(backend.body, "active") == false
         - backend.status == 404
     variables:
-      global:
-        user_id:
-          from: backend.body.id
-        plan:
-          from: backend.body.plan
+      user_id: backend.body.id
+      plan: backend.body.plan
+    responses:
+      pass:
+        variables:
+          user_id: variables.user_id
+          plan: variables.plan
     cache:
       followCacheControl: true
-      passTTL: "5m"
-      failTTL: "45s"
+      ttl:
+        pass: "5m"
+        fail: "45s"
+        error: "0s"
 
   check-tier:
     description: "Requires a paid subscription level before allowing access."
     conditions:
       pass:
-        - lookup(vars.global, "plan") in ["plus", "enterprise"]
+        - lookup(vars.rules["fetch-profile"], "plan") in ["plus", "enterprise"]
       fail:
-        - lookup(vars.global, "plan") == "free"
+        - lookup(vars.rules["fetch-profile"], "plan") == "free"
     responses:
       fail:
-        headers:
-          custom:
-            X-PassCtrl-Plan: "{{ index .vars.global \"plan\" }}"
+        variables:
+          passctrl_plan: "{{ index .rules \"fetch-profile\" \"variables\" \"plan\" }}"
     cache:
-      passTTL: "0s"
-      failTTL: "0s"
+      ttl:
+        pass: "0s"
+        fail: "0s"
+        error: "0s"

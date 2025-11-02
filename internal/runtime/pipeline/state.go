@@ -84,6 +84,7 @@ type RuleHistoryEntry struct {
 	Reason    string         `json:"reason,omitempty"`
 	Duration  time.Duration  `json:"duration"`
 	Variables map[string]any `json:"variables,omitempty"`
+	FromCache bool           `json:"fromCache,omitempty"`
 }
 
 // RuleAuthState surfaces the matched authentication directive and forwarding
@@ -96,15 +97,17 @@ type RuleAuthState struct {
 
 // RuleVariableState captures the rule and local variable scopes for the active rule.
 type RuleVariableState struct {
-	Rule  map[string]any `json:"rule"`
-	Local map[string]any `json:"local"`
+	Rule     map[string]any `json:"rule"`
+	Local    map[string]any `json:"local"`
+	Exported map[string]any `json:"exported"`
 }
 
 // ResponseState is the HTTP response composed for the caller.
 type ResponseState struct {
-	Status  int               `json:"status"`
-	Message string            `json:"message"`
-	Headers map[string]string `json:"headers"`
+	Status    int               `json:"status"`
+	Message   string            `json:"message"`
+	Headers   map[string]string `json:"headers"`
+	Variables map[string]any    `json:"variables"` // Exported variables from decisive rule's responses.*.variables
 }
 
 // CacheState captures cache participation information for the request.
@@ -260,6 +263,19 @@ func (s *State) TemplateContext() map[string]any {
 	if s == nil {
 		return map[string]any{}
 	}
+	// Build response context with variables flattened to top level
+	responseCtx := map[string]any{
+		"status":  s.Response.Status,
+		"message": s.Response.Message,
+		"headers": s.Response.Headers,
+	}
+	// Flatten response variables to .response.<varname> for endpoint templates
+	if s.Response.Variables != nil {
+		for k, v := range s.Response.Variables {
+			responseCtx[k] = v
+		}
+	}
+
 	ctx := map[string]any{
 		"endpoint":      s.Endpoint,
 		"correlationId": s.CorrelationID,
@@ -268,22 +284,13 @@ func (s *State) TemplateContext() map[string]any {
 		"admission":     s.Admission,
 		"forward":       s.Forward,
 		"rule":          s.Rule,
-		"response":      s.Response,
+		"response":      responseCtx,
 		"cache":         s.Cache,
 		"backend":       s.Backend,
 	}
 	ctx["auth"] = s.Rule.Auth.templateContext()
-	vars := s.VariablesContext()
-	ctx["variables"] = vars
-	ctx["vars"] = vars
+	ctx["variables"] = s.VariablesContext()
 	ctx["chain"] = s.Rule.History
-	rules := make(map[string]any, len(s.Variables.Rules))
-	for name, vars := range s.Variables.Rules {
-		rules[name] = map[string]any{
-			"variables": cloneAnyMap(vars),
-		}
-	}
-	ctx["rules"] = rules
 	ctx["state"] = s
 	return ctx
 }
@@ -307,24 +314,21 @@ func (a RuleAuthState) templateContext() map[string]any {
 func (s *State) VariablesContext() map[string]any {
 	if s == nil {
 		return map[string]any{
-			"global": map[string]any{},
-			"rule":   map[string]any{},
-			"local":  map[string]any{},
-			"rules":  map[string]any{},
+			"endpoint": map[string]any{},
+			"local":    map[string]any{},
+			"rule":     map[string]any{},
 		}
 	}
-	global := cloneAnyMap(s.Variables.Global)
-	rule := cloneAnyMap(s.Rule.Variables.Rule)
+	endpoint := cloneAnyMap(s.Variables.Global)
 	local := cloneAnyMap(s.Rule.Variables.Local)
 	rules := make(map[string]any, len(s.Variables.Rules))
 	for name, vars := range s.Variables.Rules {
 		rules[name] = cloneAnyMap(vars)
 	}
 	return map[string]any{
-		"global": global,
-		"rule":   rule,
-		"local":  local,
-		"rules":  rules,
+		"endpoint": endpoint,
+		"local":    local,
+		"rule":     rules,
 	}
 }
 

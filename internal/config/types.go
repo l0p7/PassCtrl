@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // Config holds every server-level option plus nested endpoint artifacts once they are loaded.
@@ -97,6 +98,7 @@ type DefinitionSkip struct {
 // consistent representation even while their execution logic is still landing.
 type EndpointConfig struct {
 	Description          string                             `koanf:"description"`
+	Variables            map[string]string                  `koanf:"variables"`
 	Authentication       EndpointAuthenticationConfig       `koanf:"authentication"`
 	ForwardProxyPolicy   EndpointForwardProxyPolicyConfig   `koanf:"forwardProxyPolicy"`
 	ForwardRequestPolicy EndpointForwardRequestPolicyConfig `koanf:"forwardRequestPolicy"`
@@ -175,9 +177,16 @@ type RuleConfig struct {
 }
 
 type RuleAuthDirective struct {
-	Type      string              `koanf:"type"`
-	Name      string              `koanf:"name"`
-	ForwardAs RuleForwardAsConfig `koanf:"forwardAs"`
+	Match     []RuleAuthMatcher     `koanf:"match"`
+	ForwardAs []RuleForwardAsConfig `koanf:"forwardAs"`
+}
+
+type RuleAuthMatcher struct {
+	Type     string `koanf:"type"`     // basic|bearer|header|query|none
+	Name     string `koanf:"name"`     // Required for header/query
+	Value    any    `koanf:"value"`    // string or []string - for header/query/bearer (regex or literal)
+	Username any    `koanf:"username"` // string or []string - for basic
+	Password any    `koanf:"password"` // string or []string - for basic
 }
 
 type RuleForwardAsConfig struct {
@@ -219,23 +228,272 @@ type RuleResponsesConfig struct {
 }
 
 type RuleResponseConfig struct {
-	Headers ForwardRuleCategoryConfig `koanf:"headers"`
+	Variables map[string]string `koanf:"variables"` // Exported to subsequent rules AND endpoint response templates
 }
 
-type RuleVariablesConfig struct {
-	Global map[string]RuleVariableSpec `koanf:"global"`
-	Rule   map[string]RuleVariableSpec `koanf:"rule"`
-	Local  map[string]RuleVariableSpec `koanf:"local"`
-}
+// RuleVariablesConfig defines local variables scoped to the rule.
+// Variables are either CEL expressions or Go templates (detected by presence of {{).
+// Local variables are available within the rule for conditions and exported variables,
+// but are not exported to other rules or cached.
+type RuleVariablesConfig map[string]string
 
 type RuleVariableSpec struct {
 	From string `koanf:"from"`
 }
 
 type RuleCacheConfig struct {
-	FollowCacheControl bool   `koanf:"followCacheControl"`
-	PassTTL            string `koanf:"passTTL"`
-	FailTTL            string `koanf:"failTTL"`
+	FollowCacheControl bool               `koanf:"followCacheControl"`
+	TTL                RuleCacheTTLConfig `koanf:"ttl"`
+	Strict             *bool              `koanf:"strict"` // nil = true (default)
+}
+
+type RuleCacheTTLConfig struct {
+	Pass  string `koanf:"pass"`  // Duration: "5m", "30s", etc.
+	Fail  string `koanf:"fail"`  // Duration: "30s", "1m", etc.
+	Error string `koanf:"error"` // Always "0s" - errors never cached
+}
+
+// IsStrict returns true if the cache key should include upstream variable hashes.
+// Defaults to true (safe mode) if not explicitly set.
+func (c RuleCacheConfig) IsStrict() bool {
+	if c.Strict == nil {
+		return true
+	}
+	return *c.Strict
+}
+
+// GetTTL returns the configured TTL for the given outcome.
+// Error outcomes always return 0 (never cached).
+func (c RuleCacheConfig) GetTTL(outcome string) time.Duration {
+	if outcome == "error" {
+		return 0
+	}
+
+	var durationStr string
+	switch outcome {
+	case "pass":
+		durationStr = c.TTL.Pass
+	case "fail":
+		durationStr = c.TTL.Fail
+	default:
+		return 0
+	}
+
+	if durationStr == "" {
+		return 0
+	}
+
+	duration, err := time.ParseDuration(durationStr)
+	if err != nil {
+		return 0
+	}
+	return duration
+}
+
+// validateCacheTTLConfig validates that TTL duration strings are parseable.
+func validateCacheTTLConfig(ttl RuleCacheTTLConfig, context string) error {
+	if ttl.Pass != "" {
+		if _, err := time.ParseDuration(ttl.Pass); err != nil {
+			return fmt.Errorf("%s.pass: invalid duration %q: %w", context, ttl.Pass, err)
+		}
+	}
+	if ttl.Fail != "" {
+		if _, err := time.ParseDuration(ttl.Fail); err != nil {
+			return fmt.Errorf("%s.fail: invalid duration %q: %w", context, ttl.Fail, err)
+		}
+	}
+	if ttl.Error != "" {
+		if _, err := time.ParseDuration(ttl.Error); err != nil {
+			return fmt.Errorf("%s.error: invalid duration %q: %w", context, ttl.Error, err)
+		}
+	}
+	return nil
+}
+
+// validateVariableMap validates variable expressions (CEL or Template).
+// Variables can be empty (validation is lenient - runtime will catch evaluation errors).
+func validateVariableMap(variables map[string]string, context string) error {
+	// Variable expressions are validated at runtime during compilation
+	// This validation just ensures the map structure is valid
+	// Empty expressions are allowed (will be caught during rule compilation)
+	for name, expr := range variables {
+		if strings.TrimSpace(name) == "" {
+			return fmt.Errorf("%s: empty variable name not allowed", context)
+		}
+		// Expression can be empty or whitespace - runtime will handle it
+		_ = expr
+	}
+	return nil
+}
+
+// ParseValueConstraint converts the raw value constraint (string or []any) into []string.
+func ParseValueConstraint(raw any, context string) ([]string, error) {
+	if raw == nil {
+		return nil, nil
+	}
+
+	switch v := raw.(type) {
+	case string:
+		return []string{v}, nil
+	case []any:
+		if len(v) == 0 {
+			return nil, fmt.Errorf("%s: value constraint array cannot be empty", context)
+		}
+		strs := make([]string, len(v))
+		for i, item := range v {
+			s, ok := item.(string)
+			if !ok {
+				return nil, fmt.Errorf("%s: value constraint array element %d is not a string", context, i)
+			}
+			strs[i] = s
+		}
+		return strs, nil
+	default:
+		return nil, fmt.Errorf("%s: value constraint must be string or array of strings", context)
+	}
+}
+
+// validateAuthDirective validates a single auth directive (match group + forwardAs).
+func validateAuthDirective(directive RuleAuthDirective, index int, context string) error {
+	directiveCtx := fmt.Sprintf("%s.auth[%d]", context, index)
+
+	// Validate match array
+	if len(directive.Match) == 0 {
+		return fmt.Errorf("%s.match: at least one matcher required", directiveCtx)
+	}
+
+	for i, matcher := range directive.Match {
+		if err := validateAuthMatcher(matcher, i, directiveCtx); err != nil {
+			return err
+		}
+	}
+
+	// Check for type: none restrictions
+	hasNone := false
+	hasOther := false
+	for _, matcher := range directive.Match {
+		if strings.ToLower(strings.TrimSpace(matcher.Type)) == "none" {
+			hasNone = true
+		} else {
+			hasOther = true
+		}
+	}
+	if hasNone && hasOther {
+		return fmt.Errorf("%s.match: type 'none' cannot be combined with other types in the same match group", directiveCtx)
+	}
+	if hasNone && len(directive.Match) > 1 {
+		return fmt.Errorf("%s.match: type 'none' must be the only matcher in the group", directiveCtx)
+	}
+
+	// Validate forwardAs array (check for duplicates)
+	if err := validateForwardAsArray(directive.ForwardAs, directiveCtx); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// validateAuthMatcher validates a single matcher in a match group.
+func validateAuthMatcher(matcher RuleAuthMatcher, index int, parentContext string) error {
+	matcherCtx := fmt.Sprintf("%s.match[%d]", parentContext, index)
+
+	// Type required
+	if strings.TrimSpace(matcher.Type) == "" {
+		return fmt.Errorf("%s.type: required", matcherCtx)
+	}
+
+	typ := strings.ToLower(strings.TrimSpace(matcher.Type))
+	switch typ {
+	case "basic", "bearer", "header", "query", "none":
+		// Valid types
+	default:
+		return fmt.Errorf("%s.type: unsupported type %q", matcherCtx, matcher.Type)
+	}
+
+	// Name required for header/query
+	if (typ == "header" || typ == "query") && strings.TrimSpace(matcher.Name) == "" {
+		return fmt.Errorf("%s.name: required for type %s", matcherCtx, typ)
+	}
+
+	// Validate value constraint applicability
+	switch typ {
+	case "header", "query", "bearer":
+		if matcher.Username != nil {
+			return fmt.Errorf("%s.username: constraint not valid for type %s", matcherCtx, typ)
+		}
+		if matcher.Password != nil {
+			return fmt.Errorf("%s.password: constraint not valid for type %s", matcherCtx, typ)
+		}
+		// Validate value constraint structure
+		if matcher.Value != nil {
+			if _, err := ParseValueConstraint(matcher.Value, matcherCtx+".value"); err != nil {
+				return err
+			}
+		}
+
+	case "basic":
+		if matcher.Value != nil {
+			return fmt.Errorf("%s.value: constraint not valid for basic (use username/password)", matcherCtx)
+		}
+		// Validate username constraint structure
+		if matcher.Username != nil {
+			if _, err := ParseValueConstraint(matcher.Username, matcherCtx+".username"); err != nil {
+				return err
+			}
+		}
+		// Validate password constraint structure
+		if matcher.Password != nil {
+			if _, err := ParseValueConstraint(matcher.Password, matcherCtx+".password"); err != nil {
+				return err
+			}
+		}
+
+	case "none":
+		if matcher.Value != nil || matcher.Username != nil || matcher.Password != nil {
+			return fmt.Errorf("%s: value constraints not valid for type none", matcherCtx)
+		}
+	}
+
+	return nil
+}
+
+// validateForwardAsArray checks for duplicate targets in forwardAs array.
+func validateForwardAsArray(forwards []RuleForwardAsConfig, context string) error {
+	if len(forwards) == 0 {
+		// Empty forwardAs is valid (pass-through mode)
+		return nil
+	}
+
+	seen := make(map[string]bool)
+	for i, fwd := range forwards {
+		key := buildForwardKey(fwd)
+		if key == "" {
+			return fmt.Errorf("%s.forwardAs[%d]: invalid forward type", context, i)
+		}
+		if seen[key] {
+			return fmt.Errorf("%s.forwardAs[%d]: duplicate forward target %s", context, i, key)
+		}
+		seen[key] = true
+	}
+
+	return nil
+}
+
+// buildForwardKey creates a unique key for a forward target to detect duplicates.
+func buildForwardKey(fwd RuleForwardAsConfig) string {
+	typ := strings.ToLower(strings.TrimSpace(fwd.Type))
+	switch typ {
+	case "bearer", "basic":
+		return "authorization"
+	case "header":
+		return "header:" + strings.ToLower(strings.TrimSpace(fwd.Name))
+	case "query":
+		return "query:" + strings.TrimSpace(fwd.Name)
+	case "none":
+		return "none"
+	default:
+		return ""
+	}
 }
 
 // Validate enforces invariants that keep the runtime predictable before serving traffic.
@@ -267,6 +525,36 @@ func (c *Config) Validate() error {
 	}
 	for name, endpoint := range c.Endpoints {
 		if err := validateEndpointAuthentication(name, endpoint.Authentication); err != nil {
+			return err
+		}
+		// Validate endpoint variables (CEL or Template expressions)
+		if err := validateVariableMap(endpoint.Variables, fmt.Sprintf("endpoints[%s].variables", name)); err != nil {
+			return err
+		}
+	}
+	for name, rule := range c.Rules {
+		// Validate rule auth directives (match groups + forwardAs)
+		for i, authDirective := range rule.Auth {
+			if err := validateAuthDirective(authDirective, i, fmt.Sprintf("rules[%s]", name)); err != nil {
+				return err
+			}
+		}
+		// Validate rule cache TTL durations
+		if err := validateCacheTTLConfig(rule.Cache.TTL, fmt.Sprintf("rules[%s].cache.ttl", name)); err != nil {
+			return err
+		}
+		// Validate rule local variables (CEL or Template expressions)
+		if err := validateVariableMap(rule.Variables, fmt.Sprintf("rules[%s].variables", name)); err != nil {
+			return err
+		}
+		// Validate response exported variables
+		if err := validateVariableMap(rule.Responses.Pass.Variables, fmt.Sprintf("rules[%s].responses.pass.variables", name)); err != nil {
+			return err
+		}
+		if err := validateVariableMap(rule.Responses.Fail.Variables, fmt.Sprintf("rules[%s].responses.fail.variables", name)); err != nil {
+			return err
+		}
+		if err := validateVariableMap(rule.Responses.Error.Variables, fmt.Sprintf("rules[%s].responses.error.variables", name)); err != nil {
 			return err
 		}
 	}

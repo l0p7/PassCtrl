@@ -26,8 +26,11 @@ endpoints:
     description: "Validates bearer tokens via the identity API before granting access."
     authentication:
       required: true
-      allow: ["bearer"]
-      challenge: "Bearer realm=\"Identity\""
+      allow:
+        authorization: ["bearer"]
+      challenge:
+        type: bearer
+        realm: "Identity"
     forwardProxyPolicy:
       trustedProxyIPs: ["10.0.0.0/8", "192.168.0.0/16"]
       developmentMode: false
@@ -67,10 +70,11 @@ rules:
   introspect-bearer-token:
     description: "Calls the identity service to validate the inbound bearer token."
     auth:
-      - type: bearer
+      - match:
+          - type: bearer
         forwardAs:
-          type: bearer
-          token: "{{ .auth.input.token }}"
+          - type: bearer
+            token: "{{ .auth.input.bearer.token }}"
     backendApi:
       url: "https://identity.internal/api/v1/introspect"
       method: POST
@@ -79,11 +83,11 @@ rules:
         allow: []
         strip: []
         custom:
-          authorization: "Bearer {{ .auth.input.token }}"
+          authorization: "Bearer {{ .auth.input.bearer.token }}"
           content-type: "application/json"
       body: |
         {
-          "token": "{{ .auth.input.token }}"
+          "token": "{{ .auth.input.bearer.token }}"
         }
       acceptedStatuses: [200]
     conditions:
@@ -94,32 +98,38 @@ rules:
       error:
         - backend.status >= 500
     variables:
-      global:
-        validated_token:
-          from: backend.body.token
-        subscription_plan:
-          from: backend.body.plan
-        subject:
-          from: backend.body.sub
+      validated_token: backend.body.token
+      subscription_plan: backend.body.plan
+      subject: backend.body.sub
+    responses:
+      pass:
+        variables:
+          validated_token: variables.local.validated_token
+          subscription_plan: variables.local.subscription_plan
+          subject: variables.local.subject
     cache:
-      passTTL: "90s"
-      failTTL: "0s"
       followCacheControl: true
+      ttl:
+        pass: "90s"
+        fail: "0s"
+        error: "0s"
 
   require-active-subscription:
     description: "Ensures the identity API flagged the account as active."
     conditions:
       pass:
-        - lookup(vars.global, "validated_token") != "" && lookup(vars.global, "subscription_plan") in ["plus", "enterprise"]
+        - lookup(variables.rule, "introspect-bearer-token") != {} && lookup(variables.rule["introspect-bearer-token"], "validated_token") != "" && lookup(variables.rule["introspect-bearer-token"], "subscription_plan") in ["plus", "enterprise"]
       fail:
-        - lookup(vars.global, "subscription_plan") == "expired"
-        - lookup(vars.global, "validated_token") == ""
+        - lookup(variables.rule["introspect-bearer-token"], "subscription_plan") == "expired"
+        - lookup(variables.rule, "introspect-bearer-token") == {} || lookup(variables.rule["introspect-bearer-token"], "validated_token") == ""
     responses:
       fail:
         headers:
           custom:
             X-PassCtrl-Reason: "subscription check failed"
-            X-PassCtrl-Plan: "{{ index .vars.global \"subscription_plan\" }}"
+            X-PassCtrl-Plan: "{{ index .variables.rule \"introspect-bearer-token\" \"subscription_plan\" }}"
     cache:
-      passTTL: "0s"
-      failTTL: "0s"
+      ttl:
+        pass: "0s"
+        fail: "0s"
+        error: "0s"

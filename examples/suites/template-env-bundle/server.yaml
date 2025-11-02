@@ -27,9 +27,10 @@ endpoints:
     description: "Renders environment-derived deny messages and forwards curated headers."
     authentication:
       required: true
-      allow: ["basic"]
-      challenge: "Basic realm=\"Env Demo\""
-      basic:
+      allow:
+        authorization: ["basic"]
+      challenge:
+        type: basic
         realm: "Env Demo"
         charset: "UTF-8"
     forwardRequestPolicy:
@@ -50,6 +51,9 @@ endpoints:
       fail:
         status: 403
         bodyFile: "deny.json.tmpl"
+        headers:
+          custom:
+            X-Support-Contact: "{{ .response.support_contact }}"
       error:
         status: 502
         body: |
@@ -70,6 +74,5 @@ rules:
         - admission.authenticated == false
     responses:
       fail:
-        headers:
-          custom:
-            X-Support-Contact: "{{ env \"SUPPORT_EMAIL\" }}"
+        variables:
+          support_contact: "{{ env \"SUPPORT_EMAIL\" }}"

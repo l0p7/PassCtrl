@@ -30,7 +30,7 @@ var bearerOnlyAdmission = admission.Config{
 }
 
 func newTestPipelineState(req *http.Request) *pipeline.State {
-	return pipeline.NewState(req, "test", cacheKeyFromRequest(req, "test"), "")
+	return pipeline.NewState(req, "test", cacheKeyFromRequest(req, "test", &bearerOnlyAdmission), "")
 }
 
 func TestNewPipelineState(t *testing.T) {
@@ -40,7 +40,7 @@ func TestNewPipelineState(t *testing.T) {
 
 	state := newTestPipelineState(req)
 
-	require.Equal(t, "bearer-token|test|/v1/auth", state.CacheKey())
+	require.Equal(t, "auth:bearer-token|test|/v1/auth", state.CacheKey())
 	require.Equal(t, http.MethodPost, state.Raw.Method)
 	require.Equal(t, "bearer-token", state.Raw.Headers["authorization"])
 	require.NotNil(t, state.Response.Headers)
@@ -243,19 +243,6 @@ func TestAdmissionAgentExecute(t *testing.T) {
 }
 
 func TestRuleChainAgentExecute(t *testing.T) {
-	t.Run("cached", func(t *testing.T) {
-		state := &pipeline.State{}
-		state.Cache.Hit = true
-		state.Cache.Decision = "pass"
-
-		agent := rulechain.NewAgent(rulechain.DefaultDefinitions(nil))
-		res := agent.Execute(context.Background(), nil, state)
-
-		require.Equal(t, "cached", res.Status)
-		require.Equal(t, "pass", state.Rule.Outcome)
-		require.True(t, state.Rule.FromCache)
-	})
-
 	t.Run("admission failure", func(t *testing.T) {
 		state := &pipeline.State{}
 		state.Admission.Authenticated = false
@@ -284,7 +271,8 @@ func TestRuleChainAgentExecute(t *testing.T) {
 
 func TestRuleExecutionAgentExecute(t *testing.T) {
 	newAgent := func(client httpDoer) *ruleExecutionAgent {
-		return newRuleExecutionAgent(client, nil, nil)
+		backendAgent := newBackendInteractionAgent(client, nil)
+		return newRuleExecutionAgent(backendAgent, nil, nil, nil, 0, nil)
 	}
 
 	t.Run("skip on cache", func(t *testing.T) {
@@ -561,7 +549,8 @@ func TestRuleExecutionAgentExecute(t *testing.T) {
 		state.Rule.ShouldExecute = true
 		state.SetPlan(rulechain.ExecutionPlan{Rules: defs})
 
-		res := newRuleExecutionAgent(mockClient, nil, renderer).Execute(context.Background(), nil, state)
+		backendAgent := newBackendInteractionAgent(mockClient, nil)
+		res := newRuleExecutionAgent(backendAgent, nil, renderer, nil, 0, nil).Execute(context.Background(), nil, state)
 		require.Equal(t, "pass", res.Status)
 		require.Equal(t, "pass", state.Rule.Outcome)
 		require.Len(t, state.Rule.History, 2)
