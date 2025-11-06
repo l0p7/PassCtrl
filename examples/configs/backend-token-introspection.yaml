@@ -12,11 +12,6 @@ server:
   rules:
     rulesFolder: ""
     rulesFile: ""
-  cache:
-    backend: memory
-    ttlSeconds: 60
-    keySalt: "demo"
-    epoch: 0
   templates:
     templatesFolder: "./templates"
     templatesAllowEnv: false
@@ -36,15 +31,6 @@ endpoints:
       developmentMode: false
     forwardRequestPolicy:
       forwardProxyHeaders: true
-      headers:
-        allow: ["x-request-id", "x-forwarded-for", "x-forwarded-proto"]
-        strip: ["authorization"]
-        custom:
-          x-trace-id: "{{ index .raw.headers \"x-request-id\" }}"
-      query:
-        allow: ["trace_id"]
-        strip: []
-        custom: {}
     rules:
       - name: introspect-bearer-token
       - name: require-active-subscription
@@ -53,6 +39,9 @@ endpoints:
         status: 200
       fail:
         status: 403
+        headers:
+          X-PassCtrl-Reason: "{{ .response.failure_reason }}"
+          X-PassCtrl-Plan: "{{ .response.subscription_plan }}"
         body: |
           {
             "error": "access denied"
@@ -80,11 +69,11 @@ rules:
       method: POST
       forwardProxyHeaders: true
       headers:
-        allow: []
-        strip: []
-        custom:
-          authorization: "Bearer {{ .auth.input.bearer.token }}"
-          content-type: "application/json"
+        content-type: "application/json"
+        x-request-id: null  # Copy from raw request
+        x-trace-id: "{{ .raw.headers.x-request-id }}"  # Template value
+      query:
+        trace_id: null  # Copy from raw request
       body: |
         {
           "token": "{{ .auth.input.bearer.token }}"
@@ -104,32 +93,27 @@ rules:
     responses:
       pass:
         variables:
-          validated_token: variables.local.validated_token
-          subscription_plan: variables.local.subscription_plan
-          subject: variables.local.subject
+          validated_token: variables.validated_token
+          subscription_plan: variables.subscription_plan
+          subject: variables.subject
     cache:
       followCacheControl: true
-      ttl:
-        pass: "90s"
-        fail: "0s"
-        error: "0s"
+      passTTL: "90s"
+      failTTL: "0s"
 
   require-active-subscription:
     description: "Ensures the identity API flagged the account as active."
     conditions:
       pass:
-        - lookup(variables.rule, "introspect-bearer-token") != {} && lookup(variables.rule["introspect-bearer-token"], "validated_token") != "" && lookup(variables.rule["introspect-bearer-token"], "subscription_plan") in ["plus", "enterprise"]
+        - 'lookup(lookup(variables.rule, "introspect-bearer-token"), "validated_token") != "" && lookup(lookup(variables.rule, "introspect-bearer-token"), "subscription_plan") in ["plus", "enterprise"]'
       fail:
-        - lookup(variables.rule["introspect-bearer-token"], "subscription_plan") == "expired"
-        - lookup(variables.rule, "introspect-bearer-token") == {} || lookup(variables.rule["introspect-bearer-token"], "validated_token") == ""
+        - 'lookup(lookup(variables.rule, "introspect-bearer-token"), "subscription_plan") == "expired"'
+        - 'lookup(lookup(variables.rule, "introspect-bearer-token"), "validated_token") == ""'
     responses:
       fail:
-        headers:
-          custom:
-            X-PassCtrl-Reason: "subscription check failed"
-            X-PassCtrl-Plan: "{{ index .variables.rule \"introspect-bearer-token\" \"subscription_plan\" }}"
+        variables:
+          failure_reason: "subscription check failed"
+          subscription_plan: "{{ .rules.introspect-bearer-token.variables.subscription_plan }}"
     cache:
-      ttl:
-        pass: "0s"
-        fail: "0s"
-        error: "0s"
+      passTTL: "0s"
+      failTTL: "0s"

@@ -47,13 +47,14 @@ outputs, and operational concerns for each participant.
   - Emit structured telemetry identifying client metadata, authentication outcome, and proxy evaluation.
 
 ## 3. Forward Request Policy Agent
-- **Purpose**: Curate which headers and query parameters rules and backends may see, preserving intent transparency.
-- **Inputs**: Admission snapshot (`rawState`), endpoint `forwardRequestPolicy` directives.
-- **Outputs**: Curated request view shared with every rule, plus the sanitized proxy metadata (`X-Forwarded-*` and RFC7239 `Forwarded`) when `forwardProxyHeaders` is enabled.
+- **Purpose**: Sanitize and forward proxy metadata headers when configured.
+- **Inputs**: Admission snapshot (`rawState`), endpoint `forwardRequestPolicy.forwardProxyHeaders` flag.
+- **Outputs**: Sanitized proxy metadata (`X-Forwarded-*` and RFC7239 `Forwarded`) stored in `state.Forward.Headers` when `forwardProxyHeaders` is enabled.
 - **Key Behaviors**:
-  - Apply allow/strip/custom directives with the documented template evaluation order.
-  - Persist the curated view for audit logs and rule variable extraction.
-  - Record its decisions so caching and response policy can prove which inputs influenced downstream outcomes.
+  - When `forwardProxyHeaders: true`, sanitize and forward `X-Forwarded-For`, `X-Forwarded-Proto`, `X-Forwarded-Host`, and `Forwarded` headers.
+  - Skip empty or whitespace-only values during sanitization.
+  - Normalize all header names to lowercase for consistent access.
+  - Header and query parameter selection for backends is handled directly by backend definitions using **null-copy semantics**: `nil` value copies from raw request, non-nil value uses static string or template expression.
 
 ## 4. Rule Chain Agent
 - **Purpose**: Orchestrate ordered rule execution, enforce short-circuit semantics, and manage exported variables.
@@ -118,7 +119,8 @@ outputs, and operational concerns for each participant.
   - **Exported variables are available to endpoint templates**: Rules export variables via `responses.pass/fail/error.variables` blocks. These variables are shared with subsequent rules AND available to endpoint response templates via `.response.*` context.
   - **Local variables are NOT exposed**: Variables used for temporary calculations (`variables` block) remain internal to the rule and are not accessible to endpoints.
   - Render status, headers, and body using Go templates with access to: `.endpoint`, `.correlationId`, `.auth.input.*`, `.backend.*` (from decisive rule), `.response.*` (exported variables from decisive rule), and standard context fields.
-  - Apply header allow/strip/custom directives to control which headers from previous processing stages reach the client.
+  - Apply **null-copy semantics** for response headers: `nil` value copies from raw request headers, non-nil value uses static string or template expression. Empty template results are omitted from the response.
+  - Automatically add `X-PassCtrl-Outcome` header containing the rule outcome (pass/fail/error) when outcome is present.
   - Emit structured logs tying the response to the chain history and curated request view.
 
 ## 8. Result Caching Agent

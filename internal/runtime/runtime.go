@@ -638,10 +638,10 @@ func (p *Pipeline) installFallbackEndpoint() {
 		slog.String("agent", "forward_request_policy"),
 		slog.String("endpoint", "default"),
 	)
-	fwdPolicy, err := forwardpolicy.New(forwardpolicy.DefaultConfig(), p.templateRenderer, fwdLogger)
+	fwdPolicy, err := forwardpolicy.New(forwardpolicy.DefaultConfig(), fwdLogger)
 	if err != nil {
 		p.logger.Error("failed to create forward policy agent for default endpoint", slog.String("error", err.Error()))
-		fwdPolicy, _ = forwardpolicy.New(forwardpolicy.DefaultConfig(), nil, fwdLogger)
+		fwdPolicy, _ = forwardpolicy.New(forwardpolicy.DefaultConfig(), fwdLogger)
 	}
 
 	// Create backend interaction agent with HTTP client
@@ -731,7 +731,6 @@ func (p *Pipeline) buildEndpointRuntime(name string, cfg config.EndpointConfig, 
 
 	fwdPolicy, err := forwardpolicy.New(
 		forwardPolicyFromConfig(cfg.ForwardRequestPolicy),
-		p.templateRenderer,
 		p.logger.With(slog.String("agent", "forward_request_policy"), slog.String("endpoint", trimmed)),
 	)
 	if err != nil {
@@ -765,31 +764,19 @@ func (p *Pipeline) buildEndpointRuntime(name string, cfg config.EndpointConfig, 
 				Status:   cfg.ResponsePolicy.Pass.Status,
 				Body:     cfg.ResponsePolicy.Pass.Body,
 				BodyFile: cfg.ResponsePolicy.Pass.BodyFile,
-				Headers: forwardpolicy.CategoryConfig{
-					Allow:  append([]string{}, cfg.ResponsePolicy.Pass.Headers.Allow...),
-					Strip:  append([]string{}, cfg.ResponsePolicy.Pass.Headers.Strip...),
-					Custom: cloneStringMap(cfg.ResponsePolicy.Pass.Headers.Custom),
-				},
+				Headers:  cloneHeaderMap(cfg.ResponsePolicy.Pass.Headers),
 			},
 			Fail: responsepolicy.CategoryConfig{
 				Status:   cfg.ResponsePolicy.Fail.Status,
 				Body:     cfg.ResponsePolicy.Fail.Body,
 				BodyFile: cfg.ResponsePolicy.Fail.BodyFile,
-				Headers: forwardpolicy.CategoryConfig{
-					Allow:  append([]string{}, cfg.ResponsePolicy.Fail.Headers.Allow...),
-					Strip:  append([]string{}, cfg.ResponsePolicy.Fail.Headers.Strip...),
-					Custom: cloneStringMap(cfg.ResponsePolicy.Fail.Headers.Custom),
-				},
+				Headers:  cloneHeaderMap(cfg.ResponsePolicy.Fail.Headers),
 			},
 			Error: responsepolicy.CategoryConfig{
 				Status:   cfg.ResponsePolicy.Error.Status,
 				Body:     cfg.ResponsePolicy.Error.Body,
 				BodyFile: cfg.ResponsePolicy.Error.BodyFile,
-				Headers: forwardpolicy.CategoryConfig{
-					Allow:  append([]string{}, cfg.ResponsePolicy.Error.Headers.Allow...),
-					Strip:  append([]string{}, cfg.ResponsePolicy.Error.Headers.Strip...),
-					Custom: cloneStringMap(cfg.ResponsePolicy.Error.Headers.Custom),
-				},
+				Headers:  cloneHeaderMap(cfg.ResponsePolicy.Error.Headers),
 			},
 		}),
 	)
@@ -822,16 +809,6 @@ func (p *Pipeline) requestCorrelationID(r *http.Request) string {
 func forwardPolicyFromConfig(cfg config.EndpointForwardRequestPolicyConfig) forwardpolicy.Config {
 	return forwardpolicy.Config{
 		ForwardProxyHeaders: cfg.ForwardProxyHeaders,
-		Headers: forwardpolicy.CategoryConfig{
-			Allow:  append([]string{}, cfg.Headers.Allow...),
-			Strip:  append([]string{}, cfg.Headers.Strip...),
-			Custom: cloneStringMap(cfg.Headers.Custom),
-		},
-		Query: forwardpolicy.CategoryConfig{
-			Allow:  append([]string{}, cfg.Query.Allow...),
-			Strip:  append([]string{}, cfg.Query.Strip...),
-			Custom: cloneStringMap(cfg.Query.Custom),
-		},
 	}
 }
 
@@ -842,6 +819,23 @@ func cloneStringMap(in map[string]string) map[string]string {
 	out := make(map[string]string, len(in))
 	for k, v := range in {
 		out[k] = v
+	}
+	return out
+}
+
+func cloneHeaderMap(in map[string]*string) map[string]*string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]*string, len(in))
+	for k, v := range in {
+		if v == nil {
+			out[k] = nil
+		} else {
+			// Clone the string pointer
+			val := *v
+			out[k] = &val
+		}
 	}
 	return out
 }
@@ -915,19 +909,11 @@ func compileConfiguredRules(rules map[string]config.RuleConfig, renderer *templa
 				URL:                 cfg.BackendAPI.URL,
 				Method:              cfg.BackendAPI.Method,
 				ForwardProxyHeaders: cfg.BackendAPI.ForwardProxyHeaders,
-				Headers: forwardpolicy.CategoryConfig{
-					Allow:  append([]string{}, cfg.BackendAPI.Headers.Allow...),
-					Strip:  append([]string{}, cfg.BackendAPI.Headers.Strip...),
-					Custom: cloneStringMap(cfg.BackendAPI.Headers.Custom),
-				},
-				Query: forwardpolicy.CategoryConfig{
-					Allow:  append([]string{}, cfg.BackendAPI.Query.Allow...),
-					Strip:  append([]string{}, cfg.BackendAPI.Query.Strip...),
-					Custom: cloneStringMap(cfg.BackendAPI.Query.Custom),
-				},
-				Body:     cfg.BackendAPI.Body,
-				BodyFile: cfg.BackendAPI.BodyFile,
-				Accepted: append([]int{}, cfg.BackendAPI.AcceptedStatuses...),
+				Headers:             cloneHeaderMap(cfg.BackendAPI.Headers),
+				Query:               cloneHeaderMap(cfg.BackendAPI.Query),
+				Body:                cfg.BackendAPI.Body,
+				BodyFile:            cfg.BackendAPI.BodyFile,
+				Accepted:            append([]int{}, cfg.BackendAPI.AcceptedStatuses...),
 				Pagination: rulechain.BackendPaginationSpec{
 					Type:     cfg.BackendAPI.Pagination.Type,
 					MaxPages: cfg.BackendAPI.Pagination.MaxPages,

@@ -18,11 +18,11 @@ previous one and emits a typed result that downstream stages can reference.
   rules to decide how to treat missing credentials.
 
 ## Stage 2: Forward Request Policy
-- Start with the raw request snapshot and determine which headers and query parameters rules may see.
-- Support an explicit `forwardProxyHeaders` toggle to decide whether sanitized proxy metadata is exposed downstream.
-- Apply `allowHeaders` / `stripHeaders` / `customHeaders` (and their query equivalents) to produce the curated request view shared
-  with every rule and backend call.
-- Persist this curated view so later stages know exactly which client-supplied fields influenced decisions.
+- Start with the raw request snapshot.
+- Support an explicit `forwardProxyHeaders` toggle to decide whether sanitized proxy metadata (`X-Forwarded-*` and RFC7239
+  `Forwarded`) is exposed downstream.
+- Backend request headers and query parameters use **null-copy semantics**: `nil` value copies from raw request, non-nil value
+  uses static string or rendered template expression. This model eliminates the need for intermediate curation layers.
 
 ## Stage 3: Rule Evaluation
 - Execute ordered, named rules sourced from the endpoint’s `rules` list.
@@ -39,9 +39,10 @@ previous one and emits a typed result that downstream stages can reference.
     forward unchanged. **Credential stripping** is explicit: all credential sources mentioned in ANY match group are stripped from
     the forwarded request before the winning group's outputs are applied. If no group matches and no `type: none` is present, the
     rule fails before any backend call occurs. The synthesized outbound credentials appear under `.auth.forward.*` for CEL access.
-  - **backendApi** — the target URL, HTTP method, accepted response status codes, pagination behavior, and the same
-    allow/strip/custom controls for headers and query parameters used by the forward policy. Header and query names are literal,
-    while request bodies and custom values are rendered via Go templates (with Sprig helpers).
+  - **backendApi** — the target URL, HTTP method, accepted response status codes, pagination behavior, and null-copy header/query
+    configuration. Headers and query parameters use null-copy semantics (`nil` = copy from raw, non-nil = static/template value).
+    Request bodies and header/query values are rendered via Go templates with Sprig helpers. Authorization headers are forbidden
+    in `backendApi.headers` and must flow through `auth.forwardAs` for proper credential stripping.
   - **conditions** — pass/fail/error predicates. By default the backend response status drives pass/fail, but authors may supply
     CEL programs that inspect response headers/bodies to override outcomes. Helper functions such as `lookup(map, key)` return
     `null` for missing entries so conditions can probe optional headers, query parameters, or backend payloads without raising
@@ -60,11 +61,13 @@ previous one and emits a typed result that downstream stages can reference.
   every rule succeeded, `fail` triggers when a rule returns a failure result, and `error` captures invalid configuration or rule
   errors.
 - Within each category, allow templates to read the original raw request snapshot plus any variables emitted by rules.
-- Provide `allowHeaders` / `stripHeaders` / `customHeaders` tooling and `body`/`bodyFile` templating to construct the final HTTP
-  response. Endpoint response policy owns status codes and bodies, while rule responses may layer additional headers via their
-  `responses.*.headers` directives. Header overrides may use Go templates (with Sprig) or JMESPath expressions.
-- Default behavior, when a category is unspecified, returns the canonical forward-auth statuses (200 on pass, 401/403 on fail,
-  5xx on error). The `/auth` response body remains minimal (outcome, message, endpoint, correlation ID, cache flag) to avoid
+- Response headers use **null-copy semantics** (`nil` = copy from raw request, non-nil = static/template value), and
+  `body`/`bodyFile` templating constructs the final HTTP response body. Endpoint response policy owns status codes and bodies,
+  while rule responses may layer additional headers via their `responses.*.headers` directives. Header values and bodies are
+  rendered via Go templates with Sprig helpers. The response agent automatically adds an `X-PassCtrl-Outcome` header containing
+  the rule outcome (pass/fail/error).
+- Default behavior, when a category is unspecified, returns the canonical forward-auth statuses (200 on pass, 403 on fail,
+  502 on error). The `/auth` response body remains minimal (outcome, message, endpoint, correlation ID, cache flag) to avoid
   exposing internal state; use `/explain` and logs for detailed diagnostics.
 
 ## Stage 5: Result Caching

@@ -11,11 +11,6 @@ server:
   rules:
     rulesFolder: ""
     rulesFile: ""
-  cache:
-    backend: memory
-    ttlSeconds: 300
-    keySalt: "shared-salt"
-    epoch: 1
 
 endpoints:
   shared-default:
@@ -26,15 +21,7 @@ endpoints:
         authorization: ["bearer"]
         header: ["x-session-token"]
     forwardRequestPolicy:
-      headers:
-        allow: ["x-request-id", "x-session-token"]
-        strip: []
-        custom:
-          x-session-segment: "browser"
-      query:
-        allow: ["locale"]
-        strip: ["debug"]
-        custom: {}
+      forwardProxyHeaders: false
     rules:
       - name: session-lookup
       - name: enforce-customer-tier
@@ -43,6 +30,8 @@ endpoints:
         status: 200
       fail:
         status: 403
+        headers:
+          X-PassCtrl-Tier: "{{ .response.customer_tier }}"
         body: |
           {
             "error": "access denied"
@@ -70,15 +59,6 @@ endpoints:
       developmentMode: false
     forwardRequestPolicy:
       forwardProxyHeaders: true
-      headers:
-        allow: ["x-request-id", "x-forwarded-for", "x-forwarded-proto"]
-        strip: []
-        custom:
-          x-admin-endpoint: "true"
-      query:
-        allow: []
-        strip: []
-        custom: {}
     rules:
       - name: audit-token-check
     responsePolicy:
@@ -96,9 +76,11 @@ rules:
       url: "https://session.internal/v1/lookup"
       method: GET
       headers:
-        allow: ["x-session-token"]
-        strip: []
-        custom: {}
+        x-request-id: null  # Copy from raw request
+        x-session-token: null  # Copy from raw request
+        x-session-segment: "browser"  # Static value
+      query:
+        locale: null  # Copy from raw request
       acceptedStatuses: [200]
     conditions:
       pass:
@@ -113,32 +95,27 @@ rules:
     responses:
       pass:
         variables:
-          user_id: variables.local.user_id
-          tier: variables.local.tier
+          user_id: variables.user_id
+          tier: variables.tier
     cache:
       followCacheControl: true
-      ttl:
-        pass: "5m"
-        fail: "30s"
-        error: "0s"
+      passTTL: "5m"
+      failTTL: "30s"
 
   enforce-customer-tier:
     description: "Denies requests from suspended or free-tier accounts."
     conditions:
       pass:
-        - lookup(variables.rule["session-lookup"], "tier") in ["gold", "platinum"]
+        - 'lookup(lookup(variables.rule, "session-lookup"), "tier") in ["gold", "platinum"]'
       fail:
-        - lookup(variables.rule["session-lookup"], "tier") in ["free", "suspended"]
+        - 'lookup(lookup(variables.rule, "session-lookup"), "tier") in ["free", "suspended"]'
     responses:
       fail:
-        headers:
-          custom:
-            X-PassCtrl-Tier: "{{ index .rules \"session-lookup\" \"variables\" \"tier\" }}"
+        variables:
+          customer_tier: "{{ .rules.session-lookup.variables.tier }}"
     cache:
-      ttl:
-        pass: "0s"
-        fail: "0s"
-        error: "0s"
+      passTTL: "0s"
+      failTTL: "0s"
 
   audit-token-check:
     description: "Validates admin bearer tokens without caching."
@@ -151,12 +128,11 @@ rules:
     backendApi:
       url: "https://audit.internal/v1/validate"
       method: POST
+      forwardProxyHeaders: true  # Forward X-Forwarded-* headers
       headers:
-        allow: []
-        strip: []
-        custom:
-          authorization: "Bearer {{ .auth.input.bearer.token }}"
-          content-type: "application/json"
+        content-type: "application/json"
+        x-request-id: null  # Copy from raw request
+        x-admin-endpoint: "true"  # Static value to indicate admin path
       body: |
         {
           "token": "{{ .auth.input.bearer.token }}"
@@ -170,7 +146,5 @@ rules:
       error:
         - backend.status >= 500
     cache:
-      ttl:
-        pass: "0s"
-        fail: "0s"
-        error: "0s"
+      passTTL: "0s"
+      failTTL: "0s"

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/l0p7/passctrl/internal/expr"
-	"github.com/l0p7/passctrl/internal/runtime/forwardpolicy"
 	"github.com/l0p7/passctrl/internal/runtime/pipeline"
 	"github.com/l0p7/passctrl/internal/templates"
 )
@@ -56,8 +55,8 @@ type BackendDefinitionSpec struct {
 	URL                 string
 	Method              string
 	ForwardProxyHeaders bool
-	Headers             forwardpolicy.CategoryConfig
-	Query               forwardpolicy.CategoryConfig
+	Headers             map[string]*string
+	Query               map[string]*string
 	Body                string
 	BodyFile            string
 	Accepted            []int
@@ -220,8 +219,8 @@ func DefaultDefinitions(renderer *templates.Renderer) []Definition {
 		{
 			Name: "allow-when-not-denied",
 			Conditions: ConditionSpec{
-				Fail:  []string{`forward.headers["x-passctrl-deny"] == "true"`},
-				Error: []string{`forward.query["error"] == "true"`},
+				Fail:  []string{`lookup(forward.headers, "x-passctrl-deny") == "true"`},
+				Error: []string{`lookup(forward.query, "error") == "true"`},
 			},
 			PassMessage: "rule accepted the curated request",
 		},

@@ -7,12 +7,12 @@ observability, and predictable request handling.
 
 ## Architectural Pillars
 - **Admission & Raw State** – authenticate requests early, enforce trusted proxies, and persist immutable snapshots for auditing.
-- **Forward Request Policy** – curate headers and query parameters that downstream rules and backends may see, with explicit
-  allow/strip/custom directives.
+- **Forward Request Policy** – sanitize proxy metadata headers (`X-Forwarded-*` and RFC7239 `Forwarded`) when configured.
+  Backend headers and query parameters use null-copy semantics (`nil` = copy from raw, non-nil = static/template value).
 - **Rule Chain** – evaluate ordered, named rules that can transform credentials, call backends (with pagination), set variables,
   and emit pass/fail/error results.
-- **Response Policy** – render pass/fail/error responses using curated context and rule outputs while preserving default
-  forward-auth semantics when overrides are omitted.
+- **Response Policy** – render pass/fail/error responses using null-copy semantics for headers, template-driven bodies, and
+  rule-exported variables while preserving default forward-auth statuses when overrides are omitted.
 - **Result Caching** – memoize decisions for bounded durations without storing backend bodies, and never cache 5xx/error outcomes.
 
 These cooperating agents are documented in detail inside `design/` and mirror the runtime structure described in

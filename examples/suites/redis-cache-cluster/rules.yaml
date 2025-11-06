@@ -10,14 +10,11 @@ endpoints:
         realm: "External"
     forwardRequestPolicy:
       headers:
-        allow: ["authorization", "x-request-id"]
-        strip: []
-        custom:
-          x-user-segment: "external"
+        authorization: null
+        x-request-id: null
+        x-user-segment: "external"
       query:
-        allow: ["trace"]
-        strip: []
-        custom: {}
+        trace: null
     rules:
       - name: fetch-profile
       - name: check-tier
@@ -30,7 +27,7 @@ endpoints:
         body: |
           {
             "error": "tier restriction",
-            "reason": "{{ .rule.reason }}"
+            "reason": "{{ .response.tier_restriction_reason }}"
           }
     cache:
       resultTTL: "120s"
@@ -42,10 +39,7 @@ rules:
       url: "https://profile.internal/v2/profile"
       method: GET
       headers:
-        allow: []
-        strip: []
-        custom:
-          authorization: "Bearer {{ .auth.input.token }}"
+        authorization: "Bearer {{ .auth.input.bearer.token }}"
       acceptedStatuses: [200, 404]
     conditions:
       pass:
@@ -63,24 +57,21 @@ rules:
           plan: variables.plan
     cache:
       followCacheControl: true
-      ttl:
-        pass: "5m"
-        fail: "45s"
-        error: "0s"
+      passTTL: "5m"
+      failTTL: "45s"
 
   check-tier:
     description: "Requires a paid subscription level before allowing access."
     conditions:
       pass:
-        - lookup(vars.rules["fetch-profile"], "plan") in ["plus", "enterprise"]
+        - lookup(lookup(variables.rule, "fetch-profile"), "plan") in ["plus", "enterprise"]
       fail:
-        - lookup(vars.rules["fetch-profile"], "plan") == "free"
+        - lookup(lookup(variables.rule, "fetch-profile"), "plan") == "free"
     responses:
       fail:
         variables:
-          passctrl_plan: "{{ index .rules \"fetch-profile\" \"variables\" \"plan\" }}"
+          tier_restriction_reason: "plan upgrade required"
+          passctrl_plan: "{{ .rules.fetch-profile.variables.plan }}"
     cache:
-      ttl:
-        pass: "0s"
-        fail: "0s"
-        error: "0s"
+      passTTL: "0s"
+      failTTL: "0s"

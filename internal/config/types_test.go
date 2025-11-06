@@ -124,6 +124,114 @@ func TestConfigValidate(t *testing.T) {
 		}
 		require.NoError(t, validVars.Validate())
 	})
+
+	// Test authorization header validation
+	t.Run("authorization header in backendApi headers forbidden", func(t *testing.T) {
+		authHeader := strPtr("Bearer token")
+		invalidAuth := DefaultConfig()
+		invalidAuth.Endpoints = map[string]EndpointConfig{
+			"test": {
+				Authentication: EndpointAuthenticationConfig{
+					Allow: EndpointAuthAllowConfig{Authorization: []string{"bearer"}},
+				},
+			},
+		}
+		invalidAuth.Rules = map[string]RuleConfig{
+			"test-rule": {
+				BackendAPI: RuleBackendConfig{
+					URL:    "https://backend.example/verify",
+					Method: "POST",
+					Headers: map[string]*string{
+						"authorization": authHeader, // Forbidden - must use auth.forwardAs
+					},
+				},
+			},
+		}
+		err := invalidAuth.Validate()
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "authorization header forbidden")
+		require.Contains(t, err.Error(), "use auth.forwardAs instead")
+	})
+
+	t.Run("authorization header case-insensitive validation", func(t *testing.T) {
+		authHeader := strPtr("Bearer token")
+		invalidAuth := DefaultConfig()
+		invalidAuth.Endpoints = map[string]EndpointConfig{
+			"test": {
+				Authentication: EndpointAuthenticationConfig{
+					Allow: EndpointAuthAllowConfig{Authorization: []string{"bearer"}},
+				},
+			},
+		}
+		invalidAuth.Rules = map[string]RuleConfig{
+			"test-rule": {
+				BackendAPI: RuleBackendConfig{
+					URL:    "https://backend.example/verify",
+					Method: "POST",
+					Headers: map[string]*string{
+						"Authorization": authHeader, // Mixed case - still forbidden
+					},
+				},
+			},
+		}
+		err := invalidAuth.Validate()
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "authorization header forbidden")
+	})
+
+	t.Run("authorization header with whitespace validation", func(t *testing.T) {
+		authHeader := strPtr("Bearer token")
+		invalidAuth := DefaultConfig()
+		invalidAuth.Endpoints = map[string]EndpointConfig{
+			"test": {
+				Authentication: EndpointAuthenticationConfig{
+					Allow: EndpointAuthAllowConfig{Authorization: []string{"bearer"}},
+				},
+			},
+		}
+		invalidAuth.Rules = map[string]RuleConfig{
+			"test-rule": {
+				BackendAPI: RuleBackendConfig{
+					URL:    "https://backend.example/verify",
+					Method: "POST",
+					Headers: map[string]*string{
+						"  Authorization  ": authHeader, // Whitespace - still forbidden
+					},
+				},
+			},
+		}
+		err := invalidAuth.Validate()
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "authorization header forbidden")
+	})
+
+	t.Run("other headers allowed in backendApi", func(t *testing.T) {
+		validBackend := DefaultConfig()
+		validBackend.Endpoints = map[string]EndpointConfig{
+			"test": {
+				Authentication: EndpointAuthenticationConfig{
+					Allow: EndpointAuthAllowConfig{Authorization: []string{"bearer"}},
+				},
+			},
+		}
+		validBackend.Rules = map[string]RuleConfig{
+			"test-rule": {
+				BackendAPI: RuleBackendConfig{
+					URL:    "https://backend.example/verify",
+					Method: "POST",
+					Headers: map[string]*string{
+						"x-request-id": strPtr("{{ .raw.headers.x-request-id }}"),
+						"content-type": strPtr("application/json"),
+					},
+				},
+			},
+		}
+		require.NoError(t, validBackend.Validate())
+	})
+}
+
+func strPtr(s string) *string {
+	return &s
 }
 
 func TestDefaultConfigValues(t *testing.T) {

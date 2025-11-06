@@ -6,7 +6,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/l0p7/passctrl/internal/runtime/forwardpolicy"
 	"github.com/l0p7/passctrl/internal/runtime/pipeline"
 	"github.com/l0p7/passctrl/internal/templates"
 )
@@ -25,15 +24,15 @@ type CategoryConfig struct {
 	Status   int
 	Body     string
 	BodyFile string
-	Headers  forwardpolicy.CategoryConfig
+	Headers  map[string]*string
 }
 
 // compiledCategory stores compiled templates and header directives.
 type compiledCategory struct {
 	status  int
 	body    *templates.Template
-	headers forwardpolicy.CategoryConfig
-	// Precompiled custom header templates keyed by header name.
+	headers map[string]*string
+	// Precompiled header templates keyed by header name.
 	headerTemplates map[string]*templates.Template
 }
 
@@ -50,7 +49,12 @@ func New() *Agent { return &Agent{} }
 // NewWithConfig constructs a response policy agent using endpoint configuration.
 func NewWithConfig(cfg Config) *Agent {
 	compile := func(name string, cat CategoryConfig) compiledCategory {
-		out := compiledCategory{status: cat.Status, headers: cat.Headers, headerTemplates: map[string]*templates.Template{}}
+		out := compiledCategory{
+			status:          cat.Status,
+			headers:         cat.Headers,
+			headerTemplates: make(map[string]*templates.Template),
+		}
+
 		if cfg.Renderer != nil {
 			if strings.TrimSpace(cat.Body) != "" {
 				tmpl, _ := cfg.Renderer.CompileInline(cfg.Endpoint+":"+name+":body", cat.Body)
@@ -59,23 +63,28 @@ func NewWithConfig(cfg Config) *Agent {
 				tmpl, _ := cfg.Renderer.CompileFile(cat.BodyFile)
 				out.body = tmpl
 			}
-			// Precompile custom header values
-			if len(cat.Headers.Custom) > 0 {
-				// deterministic order for stable naming
-				keys := make([]string, 0, len(cat.Headers.Custom))
-				for k := range cat.Headers.Custom {
+
+			// Precompile header templates (non-nil values that contain {{)
+			if len(cat.Headers) > 0 {
+				keys := make([]string, 0, len(cat.Headers))
+				for k := range cat.Headers {
 					keys = append(keys, k)
 				}
 				sort.Strings(keys)
+
 				for _, k := range keys {
-					v := cat.Headers.Custom[k]
-					tmpl, _ := cfg.Renderer.CompileInline(cfg.Endpoint+":"+name+":header:"+k, v)
-					out.headerTemplates[k] = tmpl
+					valuePtr := cat.Headers[k]
+					if valuePtr != nil && strings.Contains(*valuePtr, "{{") {
+						tmpl, _ := cfg.Renderer.CompileInline(cfg.Endpoint+":"+name+":header:"+k, *valuePtr)
+						out.headerTemplates[k] = tmpl
+					}
 				}
 			}
 		}
+
 		return out
 	}
+
 	return &Agent{
 		pass:  compile("pass", cfg.Pass),
 		fail:  compile("fail", cfg.Fail),
@@ -83,86 +92,97 @@ func NewWithConfig(cfg Config) *Agent {
 	}
 }
 
-// Name identifies the response policy agent for logging and snapshots.
+// Name identifies this agent in pipeline traces.
 func (a *Agent) Name() string { return "response_policy" }
 
-// Execute materializes the HTTP response structure from the rule outcome,
-// ensuring a status code and headers are ready for the client.
-func (a *Agent) Execute(_ context.Context, _ *http.Request, state *pipeline.State) pipeline.Result {
-	if state.Response.Status != 0 {
-		return pipeline.Result{Name: a.Name(), Status: "cached", Details: "response replayed from cache"}
+// Execute builds and sends the HTTP response.
+func (a *Agent) Execute(_ context.Context, r *http.Request, state *pipeline.State) pipeline.Result {
+	// If response is already populated (cached), skip processing
+	if state.Response.Status > 0 {
+		return pipeline.Result{
+			Name:   a.Name(),
+			Status: "cached",
+			Meta: map[string]any{
+				"status": state.Response.Status,
+			},
+		}
 	}
 
-	// Default statuses
-	switch state.Rule.Outcome {
-	case "pass":
-		state.Response.Status = http.StatusOK
+	outcome := strings.ToLower(state.Rule.Outcome)
+
+	cat := a.categoryFor(outcome)
+
+	// Determine status
+	status := http.StatusOK
+	switch outcome {
 	case "fail":
-		state.Response.Status = http.StatusForbidden
+		status = http.StatusForbidden
 	case "error":
-		state.Response.Status = http.StatusBadGateway
-	default:
-		state.Response.Status = http.StatusInternalServerError
+		status = http.StatusBadGateway
+	case "":
+		status = http.StatusInternalServerError
+	}
+	if cat.status > 0 {
+		status = cat.status
 	}
 
-	// Apply endpoint overrides and headers
-	cat := a.categoryFor(state.Rule.Outcome)
-	if cat.status > 0 {
-		state.Response.Status = cat.status
-	}
-	if state.Response.Headers == nil {
-		state.Response.Headers = make(map[string]string)
-	}
-	// Start from current headers; apply allow/strip
-	if len(cat.headers.Allow) > 0 {
-		allowed := make(map[string]string, len(cat.headers.Allow))
-		for _, k := range cat.headers.Allow {
-			key := strings.ToLower(strings.TrimSpace(k))
-			if key == "*" {
-				allowed = cloneHeaders(state.Response.Headers)
-				break
-			}
-			if v, ok := state.Response.Headers[key]; ok {
-				allowed[key] = v
-			}
-		}
-		state.Response.Headers = allowed
-	}
-	if len(cat.headers.Strip) > 0 {
-		for _, k := range cat.headers.Strip {
-			delete(state.Response.Headers, strings.ToLower(strings.TrimSpace(k)))
+	// Render body if template available
+	var message string
+	if cat.body != nil {
+		rendered, err := cat.body.Render(state.TemplateContext())
+		if err == nil {
+			message = rendered
 		}
 	}
-	// Apply custom headers (templated when renderer provided)
-	if len(cat.headers.Custom) > 0 {
-		for name := range cat.headers.Custom {
-			key := strings.TrimSpace(name)
-			tmpl := cat.headerTemplates[name]
-			var value string
-			if tmpl != nil {
+
+	// Render headers with null-copy semantics
+	headers := make(map[string]string)
+	for name, valuePtr := range cat.headers {
+		lowerName := strings.ToLower(name)
+
+		if valuePtr == nil {
+			// Null-copy from raw request
+			if rawValue, ok := state.Raw.Headers[lowerName]; ok {
+				headers[lowerName] = rawValue
+			}
+		} else {
+			// Render template or use static value
+			value := *valuePtr
+
+			if tmpl := cat.headerTemplates[name]; tmpl != nil {
 				rendered, err := tmpl.Render(state.TemplateContext())
 				if err == nil {
 					value = strings.TrimSpace(rendered)
+				} else {
+					value = strings.TrimSpace(value)
 				}
+			} else {
+				value = strings.TrimSpace(value)
 			}
-			if value == "" {
-				value = strings.TrimSpace(cat.headers.Custom[name])
-			}
+
 			if value != "" {
-				state.Response.Headers[key] = value
+				headers[lowerName] = value
 			}
 		}
 	}
-	state.Response.Headers["X-PassCtrl-Outcome"] = state.Rule.Outcome
 
-	// Render body from endpoint templates when present
-	if cat.body != nil {
-		if rendered, err := cat.body.Render(state.TemplateContext()); err == nil {
-			state.Response.Message = strings.TrimSpace(rendered)
-		}
+	// Add X-PassCtrl-Outcome header if outcome is present
+	if outcome != "" {
+		headers["X-PassCtrl-Outcome"] = outcome
 	}
 
-	return pipeline.Result{Name: a.Name(), Status: "rendered"}
+	state.Response.Status = status
+	state.Response.Message = message
+	state.Response.Headers = headers
+
+	return pipeline.Result{
+		Name:   a.Name(),
+		Status: "ready",
+		Meta: map[string]any{
+			"outcome": outcome,
+			"status":  status,
+		},
+	}
 }
 
 func (a *Agent) categoryFor(outcome string) compiledCategory {
@@ -176,15 +196,4 @@ func (a *Agent) categoryFor(outcome string) compiledCategory {
 	default:
 		return compiledCategory{}
 	}
-}
-
-func cloneHeaders(in map[string]string) map[string]string {
-	if in == nil {
-		return nil
-	}
-	out := make(map[string]string, len(in))
-	for k, v := range in {
-		out[k] = v
-	}
-	return out
 }

@@ -97,7 +97,7 @@ The system models request processing as collaboration between specialized agents
 
 1. **Server Configuration & Lifecycle** (`cmd/main.go`, `internal/config/`) - Bootstraps HTTP server, loads/watches configuration via `koanf`, enforces template sandboxing, and manages hot-reloads
 2. **Admission & Raw State** (`internal/runtime/admission/`) - Authenticates requests, validates trusted proxies, captures immutable request snapshots
-3. **Forward Request Policy** (`internal/runtime/forwardpolicy/`) - Curates headers/query parameters that rules and backends may see via allow/strip/custom directives
+3. **Forward Request Policy** (`internal/runtime/forwardpolicy/`) - Sanitizes proxy metadata headers when configured; backend headers/query use null-copy semantics
 4. **Rule Chain** (`internal/runtime/rulechain/`) - Orchestrates ordered rule execution with short-circuit semantics and scoped variable management
 5. **Rule Execution** (`internal/runtime/rule_execution_agent.go`) - Executes individual rules including credential intake, backend calls (with pagination), condition evaluation via CEL, and response assembly
 6. **Response Policy** (`internal/runtime/responsepolicy/`) - Renders final HTTP responses using endpoint policy and rule outputs

@@ -494,24 +494,26 @@ func (a *ruleExecutionAgent) renderBackendRequest(
 	}
 
 	// Select headers
-	headers := backend.SelectHeaders(state.Forward.Headers, state)
+	headers := backend.SelectHeaders(state.Raw.Headers, state)
+
+	// Add proxy headers from Forward state when enabled
 	if backend.ForwardProxyHeaders {
-		if state.Admission.ForwardedFor != "" {
-			if headers == nil {
-				headers = make(map[string]string)
-			}
-			headers["X-Forwarded-For"] = state.Admission.ForwardedFor
+		if headers == nil {
+			headers = make(map[string]string)
 		}
-		if state.Admission.Forwarded != "" {
-			if headers == nil {
-				headers = make(map[string]string)
+		for name, value := range state.Forward.Headers {
+			lowerName := strings.ToLower(name)
+			if lowerName != "forwarded" && !strings.HasPrefix(lowerName, "x-forwarded-") {
+				continue
 			}
-			headers["Forwarded"] = state.Admission.Forwarded
+			if strings.TrimSpace(value) != "" {
+				headers[lowerName] = value
+			}
 		}
 	}
 
 	// Select query parameters
-	query := backend.SelectQuery(state.Forward.Query, state)
+	query := backend.SelectQuery(state.Raw.Query, state)
 
 	// Apply auth selection (multiple forwards)
 	if authSel != nil {
