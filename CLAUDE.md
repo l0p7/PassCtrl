@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-PassCtrl is a forward-auth runtime implementing a composable rule chain architecture. The system processes authentication/authorization requests through seven specialized runtime agents that evaluate rules, call backends, cache decisions, and render responses. The design emphasizes observability, predictable request handling, and configuration-driven behavior.
+PassCtrl is a forward-auth runtime implementing a composable rule chain architecture. The system processes authentication/authorization requests through nine specialized runtime agents that evaluate rules, call backends, cache decisions, and render responses. The design emphasizes observability, predictable request handling, and configuration-driven behavior.
 
 ## Common Commands
 
@@ -91,17 +91,19 @@ See resource: beads://quickstart
 
 ## High-Level Architecture
 
-### Seven Runtime Agents
+### Nine Runtime Agents
 
 The system models request processing as collaboration between specialized agents (see `design/system-agents.md`):
 
 1. **Server Configuration & Lifecycle** (`cmd/main.go`, `internal/config/`) - Bootstraps HTTP server, loads/watches configuration via `koanf`, enforces template sandboxing, and manages hot-reloads
 2. **Admission & Raw State** (`internal/runtime/admission/`) - Authenticates requests, validates trusted proxies, captures immutable request snapshots
 3. **Forward Request Policy** (`internal/runtime/forwardpolicy/`) - Sanitizes proxy metadata headers when configured; backend headers/query use null-copy semantics
-4. **Rule Chain** (`internal/runtime/rulechain/`) - Orchestrates ordered rule execution with short-circuit semantics and scoped variable management
-5. **Rule Execution** (`internal/runtime/rule_execution_agent.go`) - Executes individual rules including credential intake, backend calls (with pagination), condition evaluation via CEL, and response assembly
-6. **Response Policy** (`internal/runtime/responsepolicy/`) - Renders final HTTP responses using endpoint policy and rule outputs
-7. **Result Caching** (`internal/runtime/cache/`, `internal/runtime/resultcaching/`) - Memoizes decisions (never backend bodies) with separate pass/fail TTLs; never caches 5xx/error outcomes
+4. **Endpoint Variables** (`internal/runtime/endpointvars/`) - Evaluates endpoint-level variables once per request using CEL or Go templates, storing results in global scope for all rules to access
+5. **Rule Chain** (`internal/runtime/rulechain/`) - Orchestrates ordered rule execution with short-circuit semantics and scoped variable management
+6. **Rule Execution** (`internal/runtime/rule_execution_agent.go`) - Executes individual rules including credential intake, condition evaluation via CEL, and response assembly; delegates backend HTTP calls to Backend Interaction Agent
+7. **Backend Interaction** (`internal/runtime/backend_interaction_agent.go`) - Executes HTTP requests to backend APIs with pagination support (link-header per RFC 5988), capturing responses and errors without evaluating policy logic
+8. **Response Policy** (`internal/runtime/responsepolicy/`) - Renders final HTTP responses using endpoint policy and rule outputs
+9. **Result Caching** (`internal/runtime/cache/`, `internal/runtime/resultcaching/`) - Memoizes decisions (never backend bodies) with separate pass/fail TTLs; never caches 5xx/error outcomes
 
 ### Configuration Model
 
@@ -135,6 +137,7 @@ internal/
   runtime/
     admission/          # Request authentication, proxy validation
     forwardpolicy/      # Header/query parameter curation
+    endpointvars/       # Endpoint-level variable evaluation (CEL/templates)
     rulechain/          # Rule orchestration, short-circuit logic
     pipeline/           # Agent pipeline coordination
     responsepolicy/     # Response rendering
