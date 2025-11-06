@@ -13,6 +13,13 @@ import (
 // TestNullCopyHeaderSemantics validates that null values in backend headers
 // result in copying from the raw request, while non-null values use static/template values.
 func TestNullCopyHeaderSemantics(t *testing.T) {
+	// Create mock backend server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer server.Close()
+
 	// Create a rule with null-copy headers
 	xRequestIDVal := "override-123"
 	bundle := config.RuleBundle{
@@ -31,7 +38,7 @@ func TestNullCopyHeaderSemantics(t *testing.T) {
 		Rules: map[string]config.RuleConfig{
 			"null-copy-rule": {
 				BackendAPI: config.RuleBackendConfig{
-					URL:    "http://backend.example/api",
+					URL:    server.URL,
 					Method: "GET",
 					Headers: map[string]*string{
 						"x-trace-id":   nil,                        // null = copy from raw
@@ -71,6 +78,13 @@ func TestNullCopyHeaderSemantics(t *testing.T) {
 // TestNullCopyMissingKeysOmitted validates that null-copy of missing headers/query
 // params are silently omitted rather than causing errors.
 func TestNullCopyMissingKeysOmitted(t *testing.T) {
+	// Create mock backend server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer server.Close()
+
 	bundle := config.RuleBundle{
 		Endpoints: map[string]config.EndpointConfig{
 			"test-endpoint": {
@@ -87,7 +101,7 @@ func TestNullCopyMissingKeysOmitted(t *testing.T) {
 		Rules: map[string]config.RuleConfig{
 			"missing-key-rule": {
 				BackendAPI: config.RuleBackendConfig{
-					URL:    "http://backend.example/api",
+					URL:    server.URL,
 					Method: "GET",
 					Headers: map[string]*string{
 						"x-missing-header": nil, // null-copy from raw, but not present
@@ -123,6 +137,13 @@ func TestNullCopyMissingKeysOmitted(t *testing.T) {
 // TestEmptyValuesOmitted validates that empty or whitespace-only values are omitted
 // from the forwarded request.
 func TestEmptyValuesOmitted(t *testing.T) {
+	// Create mock backend server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer server.Close()
+
 	bundle := config.RuleBundle{
 		Endpoints: map[string]config.EndpointConfig{
 			"test-endpoint": {
@@ -139,7 +160,7 @@ func TestEmptyValuesOmitted(t *testing.T) {
 		Rules: map[string]config.RuleConfig{
 			"empty-value-rule": {
 				BackendAPI: config.RuleBackendConfig{
-					URL:    "http://backend.example/api",
+					URL:    server.URL,
 					Method: "GET",
 					Headers: map[string]*string{
 						"x-empty":       strPtr("  "),    // whitespace only - should be omitted
@@ -170,6 +191,13 @@ func TestEmptyValuesOmitted(t *testing.T) {
 // TestHeaderNormalizationToLowercase validates that all header names are normalized
 // to lowercase for consistent access.
 func TestHeaderNormalizationToLowercase(t *testing.T) {
+	// Create mock backend server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer server.Close()
+
 	bundle := config.RuleBundle{
 		Endpoints: map[string]config.EndpointConfig{
 			"test-endpoint": {
@@ -186,7 +214,7 @@ func TestHeaderNormalizationToLowercase(t *testing.T) {
 		Rules: map[string]config.RuleConfig{
 			"normalization-rule": {
 				BackendAPI: config.RuleBackendConfig{
-					URL:    "http://backend.example/api",
+					URL:    server.URL,
 					Method: "GET",
 					Headers: map[string]*string{
 						"X-Custom-Header":  strPtr("value1"), // Mixed case in config
@@ -218,6 +246,13 @@ func TestHeaderNormalizationToLowercase(t *testing.T) {
 // TestMixedNullAndNonNullValues validates that null and non-null values can coexist
 // and are handled correctly.
 func TestMixedNullAndNonNullValues(t *testing.T) {
+	// Create mock backend server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer server.Close()
+
 	bundle := config.RuleBundle{
 		Endpoints: map[string]config.EndpointConfig{
 			"test-endpoint": {
@@ -234,7 +269,7 @@ func TestMixedNullAndNonNullValues(t *testing.T) {
 		Rules: map[string]config.RuleConfig{
 			"mixed-rule": {
 				BackendAPI: config.RuleBackendConfig{
-					URL:    "http://backend.example/api",
+					URL:    server.URL,
 					Method: "GET",
 					Headers: map[string]*string{
 						"x-trace-id":    nil,                        // null-copy
