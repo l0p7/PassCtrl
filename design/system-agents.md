@@ -29,11 +29,11 @@ outputs, and operational concerns for each participant.
   - Validate configuration invariants (e.g., `rulesFolder` xor `rulesFile`) and surface errors before starting request handling.
 
 ## 2. Admission & Raw State Agent
-- **Purpose**: Authenticate the caller, enforce trusted proxy rules, and capture the immutable `rawState` snapshot before any
-  policy logic executes.
-- **Inputs**: Raw HTTP request, endpoint authentication posture, trusted proxy configuration.
-- **Outputs**: Auth result (`pass`/`fail`), credential attributes surfaced to templates as `.auth.input.*`, and the recorded
-  request snapshot available to downstream agents.
+- **Purpose**: Authenticate the caller, enforce trusted proxy rules, capture the immutable `rawState` snapshot, and render
+  complete 401 challenge responses for admission failures before any policy logic executes.
+- **Inputs**: Raw HTTP request, endpoint authentication posture, trusted proxy configuration, optional response customization config.
+- **Outputs**: Auth result (`pass`/`fail`), credential attributes surfaced to templates as `.auth.input.*`, the recorded
+  request snapshot available to downstream agents, and complete HTTP response for admission failures.
 - **Observability**: Persist the admission decision snapshot (outcome, reason, client metadata) so later agents and audit
   tooling can reconstruct why the request was accepted or denied.
 - **Key Behaviors**:
@@ -42,9 +42,14 @@ outputs, and operational concerns for each participant.
     sync across both representations before surfacing trusted client metadata.
   - Evaluate `authentication.allow` providers (basic, bearer, header, query, none), capture every credential that matches, and
     expose the full set to downstream rules while failing fast when no providers are satisfied.
-  - Emit a `WWW-Authenticate` response using the configured challenge when admission fails and a challenge is defined.
-  - Issue the configured failure response when admission fails, short-circuiting the rest of the pipeline.
-  - Emit structured telemetry identifying client metadata, authentication outcome, and proxy evaluation.
+  - **Render complete admission failure response** when `required: true` and credentials are missing:
+    - Set default 401 status and `WWW-Authenticate` header from `challenge` config (Basic, Bearer, or Digest)
+    - Apply optional `authentication.response` config overrides: custom status, additional headers, templated body
+    - Merge custom headers with challenge header (never replace `WWW-Authenticate`)
+    - Render body template if `body` or `bodyFile` configured, otherwise use default "authentication required" message
+  - **Short-circuit pipeline on admission failure**: return immediately after rendering response, skipping forward policy,
+    endpoint variables, rule chain, and response policy agents (performance optimization, prevents ~7 unnecessary agent executions)
+  - Emit structured telemetry identifying client metadata, authentication outcome, proxy evaluation, and short-circuit events.
 
 ## 3. Forward Request Policy Agent
 - **Purpose**: Sanitize and forward proxy metadata headers when configured.

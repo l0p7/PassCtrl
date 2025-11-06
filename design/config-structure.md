@@ -83,6 +83,58 @@ endpoints:
         type: bearer                   # optional — basic|bearer (controls header syntax)
         realm: ""                      # optional — realm advertised to clients
         charset: "UTF-8"               # optional — only valid for basic challenges
+      response:                        # optional — customize admission failure responses (401)
+        status: 401                    # optional — override default 401 status
+        headers:                       # optional — additional headers merged with WWW-Authenticate
+          retry-after: "120"           # e.g., rate limiting hint
+          x-auth-hint: "Bearer token required"
+        body: |                        # optional — inline template for response body
+          {"error": "authentication_required", "hint": "POST /login"}
+        bodyFile: "templates/401.json" # optional — template file (alternative to inline body)
+
+### Admission Response Customization (`authentication.response`)
+
+The optional `response` block customizes the HTTP response rendered when admission fails (credentials missing and `required: true`).
+Admission failures **short-circuit the pipeline**, skipping forward policy, endpoint variables, rule chain, and response policy
+agents for performance (~7 agent executions avoided).
+
+**Default Behavior (without `response` config):**
+- Status: `401 Unauthorized`
+- Headers: `WWW-Authenticate` from `challenge` config (e.g., `Basic realm="api"`)
+- Body: `"authentication required"`
+
+**Custom Behavior (with `response` config):**
+```yaml
+authentication:
+  required: true
+  challenge:
+    type: basic
+    realm: "api"
+  response:
+    status: 401              # Optional override (default 401)
+    headers:                 # Merged with WWW-Authenticate (never replaced)
+      retry-after: "120"
+      x-auth-hint: "Use POST /login to obtain credentials"
+    body: |                  # Inline template (supports full pipeline state)
+      {
+        "error": "authentication_required",
+        "realm": "{{ .admission.challenge.realm }}",
+        "endpoint": "{{ .endpoint }}"
+      }
+    bodyFile: "401.json"     # Alternative: template file path
+```
+
+**Key Properties:**
+- **Headers merge**: Custom headers from `response.headers` are added to (not replacing) the `WWW-Authenticate` header
+- **Template support**: Both `body` and `bodyFile` support Go templates with Sprig helpers and full pipeline state context
+- **Fail-closed**: If template rendering fails, falls back to default "authentication required" message
+- **Backwards compatible**: Omitting `response` block maintains existing behavior
+
+**Use Cases:**
+- Custom error messages for different endpoint types (JSON API vs HTML web app)
+- Rate limiting hints (`Retry-After` header)
+- Redirect hints for browser-based flows
+- Localized error messages via template conditionals
 
 ### Anonymous Authentication (`none: true`)
 

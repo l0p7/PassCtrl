@@ -358,9 +358,18 @@ func (p *Pipeline) ServeAuth(w http.ResponseWriter, r *http.Request) {
 
 	p.logDebugRequestSnapshot(r, reqLogger, state)
 
-	for _, ag := range endpointRuntime.agents {
-		// Agents publish their observable state via the shared pipeline.State.
-		_ = ag.Execute(r.Context(), r, state)
+	// Execute agents sequentially, checking for admission failure to short-circuit
+	for i, ag := range endpointRuntime.agents {
+		result := ag.Execute(r.Context(), r, state)
+
+		// Short-circuit on admission failure: skip remaining agents if admission agent fails
+		if result.Name == "admission" && result.Status == "fail" {
+			reqLogger.Info("admission failed, short-circuiting pipeline",
+				slog.String("reason", state.Admission.Reason),
+				slog.Int("skipped_agents", len(endpointRuntime.agents)-i-1),
+			)
+			break
+		}
 	}
 
 	if state.Response.Status == 0 {
@@ -739,7 +748,7 @@ func (p *Pipeline) buildEndpointRuntime(name string, cfg config.EndpointConfig, 
 
 	agents := []pipeline.Agent{
 		&serverAgent{},
-		admission.New(trusted, cfg.ForwardProxyPolicy.DevelopmentMode, authConfig),
+		admission.NewWithConfig(trusted, cfg.ForwardProxyPolicy.DevelopmentMode, authConfig, trimmed, p.templateRenderer),
 		fwdPolicy,
 	}
 
@@ -1027,6 +1036,17 @@ func admissionConfigFromEndpoint(cfg config.EndpointAuthenticationConfig) admiss
 	if cfg.Required != nil {
 		required = *cfg.Required
 	}
+
+	var response *admission.AdmissionResponseConfig
+	if cfg.Response != nil {
+		response = &admission.AdmissionResponseConfig{
+			Status:   cfg.Response.Status,
+			Headers:  cloneStringMap(cfg.Response.Headers),
+			Body:     cfg.Response.Body,
+			BodyFile: cfg.Response.BodyFile,
+		}
+	}
+
 	return admission.Config{
 		Required: required,
 		Allow: admission.AllowConfig{
@@ -1040,5 +1060,6 @@ func admissionConfigFromEndpoint(cfg config.EndpointAuthenticationConfig) admiss
 			Realm:   cfg.Challenge.Realm,
 			Charset: cfg.Challenge.Charset,
 		},
+		Response: response,
 	}
 }

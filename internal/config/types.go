@@ -108,9 +108,10 @@ type EndpointConfig struct {
 }
 
 type EndpointAuthenticationConfig struct {
-	Required  *bool                       `koanf:"required"`
-	Allow     EndpointAuthAllowConfig     `koanf:"allow"`
-	Challenge EndpointAuthChallengeConfig `koanf:"challenge"`
+	Required  *bool                             `koanf:"required"`
+	Allow     EndpointAuthAllowConfig           `koanf:"allow"`
+	Challenge EndpointAuthChallengeConfig       `koanf:"challenge"`
+	Response  *EndpointAuthResponseConfig       `koanf:"response"`
 }
 
 type EndpointAuthAllowConfig struct {
@@ -124,6 +125,14 @@ type EndpointAuthChallengeConfig struct {
 	Type    string `koanf:"type"`
 	Realm   string `koanf:"realm"`
 	Charset string `koanf:"charset"`
+}
+
+// EndpointAuthResponseConfig customizes the response rendered on admission failure.
+type EndpointAuthResponseConfig struct {
+	Status   int               `koanf:"status"`
+	Headers  map[string]string `koanf:"headers"`
+	Body     string            `koanf:"body"`
+	BodyFile string            `koanf:"bodyFile"`
 }
 
 type EndpointForwardProxyPolicyConfig struct {
