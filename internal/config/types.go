@@ -111,6 +111,7 @@ type EndpointAuthenticationConfig struct {
 	Required  *bool                       `koanf:"required"`
 	Allow     EndpointAuthAllowConfig     `koanf:"allow"`
 	Challenge EndpointAuthChallengeConfig `koanf:"challenge"`
+	Response  *EndpointAuthResponseConfig `koanf:"response"`
 }
 
 type EndpointAuthAllowConfig struct {
@@ -126,21 +127,21 @@ type EndpointAuthChallengeConfig struct {
 	Charset string `koanf:"charset"`
 }
 
+// EndpointAuthResponseConfig customizes the response rendered on admission failure.
+type EndpointAuthResponseConfig struct {
+	Status   int               `koanf:"status"`
+	Headers  map[string]string `koanf:"headers"`
+	Body     string            `koanf:"body"`
+	BodyFile string            `koanf:"bodyFile"`
+}
+
 type EndpointForwardProxyPolicyConfig struct {
 	TrustedProxyIPs []string `koanf:"trustedProxyIPs"`
 	DevelopmentMode bool     `koanf:"developmentMode"`
 }
 
 type EndpointForwardRequestPolicyConfig struct {
-	ForwardProxyHeaders bool                      `koanf:"forwardProxyHeaders"`
-	Headers             ForwardRuleCategoryConfig `koanf:"headers"`
-	Query               ForwardRuleCategoryConfig `koanf:"query"`
-}
-
-type ForwardRuleCategoryConfig struct {
-	Allow  []string          `koanf:"allow"`
-	Strip  []string          `koanf:"strip"`
-	Custom map[string]string `koanf:"custom"`
+	ForwardProxyHeaders bool `koanf:"forwardProxyHeaders"`
 }
 
 type EndpointRuleReference struct {
@@ -154,10 +155,10 @@ type EndpointResponsePolicyConfig struct {
 }
 
 type EndpointResponseConfig struct {
-	Status   int                       `koanf:"status"`
-	Body     string                    `koanf:"body"`
-	BodyFile string                    `koanf:"bodyFile"`
-	Headers  ForwardRuleCategoryConfig `koanf:"headers"`
+	Status   int                `koanf:"status"`
+	Body     string             `koanf:"body"`
+	BodyFile string             `koanf:"bodyFile"`
+	Headers  map[string]*string `koanf:"headers"`
 }
 
 type EndpointCacheConfig struct {
@@ -199,15 +200,15 @@ type RuleForwardAsConfig struct {
 }
 
 type RuleBackendConfig struct {
-	URL                 string                    `koanf:"url"`
-	Method              string                    `koanf:"method"`
-	ForwardProxyHeaders bool                      `koanf:"forwardProxyHeaders"`
-	Headers             ForwardRuleCategoryConfig `koanf:"headers"`
-	Query               ForwardRuleCategoryConfig `koanf:"query"`
-	Body                string                    `koanf:"body"`
-	BodyFile            string                    `koanf:"bodyFile"`
-	AcceptedStatuses    []int                     `koanf:"acceptedStatuses"`
-	Pagination          RulePaginationConfig      `koanf:"pagination"`
+	URL                 string               `koanf:"url"`
+	Method              string               `koanf:"method"`
+	ForwardProxyHeaders bool                 `koanf:"forwardProxyHeaders"`
+	Headers             map[string]*string   `koanf:"headers"`
+	Query               map[string]*string   `koanf:"query"`
+	Body                string               `koanf:"body"`
+	BodyFile            string               `koanf:"bodyFile"`
+	AcceptedStatuses    []int                `koanf:"acceptedStatuses"`
+	Pagination          RulePaginationConfig `koanf:"pagination"`
 }
 
 type RulePaginationConfig struct {
@@ -496,6 +497,17 @@ func buildForwardKey(fwd RuleForwardAsConfig) string {
 	}
 }
 
+// validateBackendHeaders ensures authorization header is not specified in backend config.
+// Authorization must be handled through the auth block for proper credential stripping.
+func validateBackendHeaders(headers map[string]*string, context string) error {
+	for name := range headers {
+		if strings.ToLower(strings.TrimSpace(name)) == "authorization" {
+			return fmt.Errorf("%s: authorization header forbidden - use auth.forwardAs instead", context)
+		}
+	}
+	return nil
+}
+
 // Validate enforces invariants that keep the runtime predictable before serving traffic.
 func (c *Config) Validate() error {
 	if c == nil {
@@ -538,6 +550,10 @@ func (c *Config) Validate() error {
 			if err := validateAuthDirective(authDirective, i, fmt.Sprintf("rules[%s]", name)); err != nil {
 				return err
 			}
+		}
+		// Validate backend headers (forbid authorization header)
+		if err := validateBackendHeaders(rule.BackendAPI.Headers, fmt.Sprintf("rules[%s].backendApi.headers", name)); err != nil {
+			return err
 		}
 		// Validate rule cache TTL durations
 		if err := validateCacheTTLConfig(rule.Cache.TTL, fmt.Sprintf("rules[%s].cache.ttl", name)); err != nil {

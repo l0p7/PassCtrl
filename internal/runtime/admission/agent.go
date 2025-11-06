@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/l0p7/passctrl/internal/runtime/pipeline"
+	"github.com/l0p7/passctrl/internal/templates"
 )
 
 // Config describes the admission rules for an endpoint.
@@ -19,6 +20,7 @@ type Config struct {
 	Required  bool
 	Allow     AllowConfig
 	Challenge ChallengeConfig
+	Response  *AdmissionResponseConfig
 }
 
 // AllowConfig lists the credential providers accepted by the endpoint.
@@ -36,10 +38,21 @@ type ChallengeConfig struct {
 	Charset string
 }
 
+// AdmissionResponseConfig customizes the response rendered on admission failure.
+type AdmissionResponseConfig struct {
+	Status   int
+	Headers  map[string]string
+	Body     string
+	BodyFile string
+}
+
 type Agent struct {
 	trustedNetworks []netip.Prefix
 	developmentMode bool
 	cfg             Config
+	endpoint        string
+	renderer        *templates.Renderer
+	compiledBody    *templates.Template
 }
 
 func New(trusted []netip.Prefix, development bool, cfg Config) *Agent {
@@ -48,6 +61,30 @@ func New(trusted []netip.Prefix, development bool, cfg Config) *Agent {
 		developmentMode: development,
 		cfg:             sanitizeConfig(cfg),
 	}
+}
+
+// NewWithConfig constructs an admission agent with endpoint context and template rendering support.
+func NewWithConfig(trusted []netip.Prefix, development bool, cfg Config, endpoint string, renderer *templates.Renderer) *Agent {
+	ag := &Agent{
+		trustedNetworks: trusted,
+		developmentMode: development,
+		cfg:             sanitizeConfig(cfg),
+		endpoint:        endpoint,
+		renderer:        renderer,
+	}
+
+	// Precompile body template if response config provided
+	if cfg.Response != nil && renderer != nil {
+		if strings.TrimSpace(cfg.Response.Body) != "" {
+			tmpl, _ := renderer.CompileInline(endpoint+":admission:body", cfg.Response.Body)
+			ag.compiledBody = tmpl
+		} else if strings.TrimSpace(cfg.Response.BodyFile) != "" {
+			tmpl, _ := renderer.CompileFile(cfg.Response.BodyFile)
+			ag.compiledBody = tmpl
+		}
+	}
+
+	return ag
 }
 
 func (a *Agent) Name() string { return "admission" }
@@ -102,18 +139,7 @@ func (a *Agent) Execute(_ context.Context, r *http.Request, state *pipeline.Stat
 		if a.cfg.Required {
 			state.Admission.Authenticated = false
 			state.Admission.Reason = annotateReason("no allowed credentials present", state.Admission.ProxyNote)
-			if header := a.challengeHeader(); header != "" {
-				if state.Response.Headers == nil {
-					state.Response.Headers = make(map[string]string)
-				}
-				state.Response.Headers["WWW-Authenticate"] = header
-				if state.Response.Status == 0 {
-					state.Response.Status = http.StatusUnauthorized
-				}
-				if strings.TrimSpace(state.Response.Message) == "" {
-					state.Response.Message = "authentication required"
-				}
-			}
+			a.renderAdmissionFailure(state)
 		} else {
 			state.Admission.Authenticated = true
 			state.Admission.Reason = annotateReason("optional authentication not provided", state.Admission.ProxyNote)
@@ -422,6 +448,45 @@ func (a *Agent) challengeHeader() string {
 		return fmt.Sprintf(`Bearer realm="%s"`, escapeChallengeValue(a.cfg.Challenge.Realm))
 	default:
 		return ""
+	}
+}
+
+func (a *Agent) renderAdmissionFailure(state *pipeline.State) {
+	// Initialize response headers map
+	if state.Response.Headers == nil {
+		state.Response.Headers = make(map[string]string)
+	}
+
+	// Set default status
+	state.Response.Status = http.StatusUnauthorized
+
+	// Add WWW-Authenticate header from challenge config
+	if header := a.challengeHeader(); header != "" {
+		state.Response.Headers["WWW-Authenticate"] = header
+	}
+
+	// Set default message
+	state.Response.Message = "authentication required"
+
+	// Apply optional response config overrides
+	if a.cfg.Response != nil {
+		// Override status if configured
+		if a.cfg.Response.Status > 0 {
+			state.Response.Status = a.cfg.Response.Status
+		}
+
+		// Merge additional headers (don't replace WWW-Authenticate)
+		for k, v := range a.cfg.Response.Headers {
+			state.Response.Headers[k] = v
+		}
+
+		// Render custom body if configured
+		if a.compiledBody != nil {
+			rendered, err := a.compiledBody.Render(state.TemplateContext())
+			if err == nil && strings.TrimSpace(rendered) != "" {
+				state.Response.Message = rendered
+			}
+		}
 	}
 }
 

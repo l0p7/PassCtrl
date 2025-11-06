@@ -10,15 +10,12 @@ endpoints:
       developmentMode: false
     forwardRequestPolicy:
       headers:
-        allow: ["x-request-id", "x-session-token"]
-        strip: ["cookie"]
-        custom:
-          x-session-user: "{{ .rule.outputs.user_id }}"
+        x-request-id: null
+        x-session-token: null
+        x-session-user: "{{ .response.user_id }}"
       query:
-        allow: ["locale"]
-        strip: ["preview"]
-        custom:
-          tenant: "{{ .rule.outputs.tenant_id }}"
+        locale: null
+        tenant: "{{ .response.tenant_id }}"
     rules:
       - name: lookup-session
       - name: require-entitlement

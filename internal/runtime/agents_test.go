@@ -14,7 +14,6 @@ import (
 	runtimemocks "github.com/l0p7/passctrl/internal/mocks/runtime"
 	"github.com/l0p7/passctrl/internal/runtime/admission"
 	"github.com/l0p7/passctrl/internal/runtime/cache"
-	"github.com/l0p7/passctrl/internal/runtime/forwardpolicy"
 	"github.com/l0p7/passctrl/internal/runtime/pipeline"
 	"github.com/l0p7/passctrl/internal/runtime/responsepolicy"
 	"github.com/l0p7/passctrl/internal/runtime/resultcaching"
@@ -439,6 +438,7 @@ func TestRuleExecutionAgentExecute(t *testing.T) {
 
 	t.Run("forwards curated metadata to backend", func(t *testing.T) {
 		backendURL := "https://backend.test/check"
+		xTestValue := "custom"
 		mockClient := runtimemocks.NewMockHTTPDoer(t)
 		mockClient.EXPECT().
 			Do(mock.AnythingOfType("*http.Request")).
@@ -446,7 +446,6 @@ func TestRuleExecutionAgentExecute(t *testing.T) {
 				require.Equal(t, "https", req.URL.Scheme)
 				require.Equal(t, "backend.test", req.URL.Host)
 				require.Equal(t, "/check", req.URL.Path)
-				require.Equal(t, "Bearer original", req.Header.Get("Authorization"))
 				require.Equal(t, "custom", req.Header.Get("X-Test"))
 				require.Equal(t, "198.51.100.10", req.Header.Get("X-Forwarded-For"))
 				require.Equal(t, "true", req.URL.Query().Get("allow"))
@@ -459,12 +458,11 @@ func TestRuleExecutionAgentExecute(t *testing.T) {
 				URL:                 backendURL,
 				Method:              http.MethodGet,
 				ForwardProxyHeaders: true,
-				Headers: forwardpolicy.CategoryConfig{
-					Allow:  []string{"authorization"},
-					Custom: map[string]string{"x-test": "custom"},
+				Headers: map[string]*string{
+					"x-test": &xTestValue,
 				},
-				Query: forwardpolicy.CategoryConfig{
-					Allow: []string{"allow"},
+				Query: map[string]*string{
+					"allow": nil, // copy from raw
 				},
 			},
 			Conditions: rulechain.ConditionSpec{
@@ -474,9 +472,11 @@ func TestRuleExecutionAgentExecute(t *testing.T) {
 		require.NoError(t, err)
 
 		state := &pipeline.State{
+			Raw: pipeline.RawState{
+				Query: map[string]string{"allow": "true"},
+			},
 			Forward: pipeline.ForwardState{
-				Headers: map[string]string{"authorization": "Bearer original"},
-				Query:   map[string]string{"allow": "true"},
+				Headers: map[string]string{"x-forwarded-for": "198.51.100.10"},
 			},
 			Admission: pipeline.AdmissionState{
 				Authenticated: true,
@@ -592,8 +592,10 @@ func TestRuleExecutionAgentExecute(t *testing.T) {
 		defs, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{{
 			Name: "paginate",
 			Backend: rulechain.BackendDefinitionSpec{
-				URL:   initialURL,
-				Query: forwardpolicy.CategoryConfig{Allow: []string{"allow"}},
+				URL: initialURL,
+				Query: map[string]*string{
+					"allow": nil, // copy from raw
+				},
 				Pagination: rulechain.BackendPaginationSpec{
 					Type:     "link-header",
 					MaxPages: 3,
@@ -609,7 +611,9 @@ func TestRuleExecutionAgentExecute(t *testing.T) {
 		require.NoError(t, err)
 
 		state := &pipeline.State{
-			Forward: pipeline.ForwardState{Query: map[string]string{"allow": "true"}},
+			Raw: pipeline.RawState{
+				Query: map[string]string{"allow": "true"},
+			},
 			Admission: pipeline.AdmissionState{
 				Authenticated: true,
 			},
@@ -673,7 +677,7 @@ func TestResponsePolicyAgentExecute(t *testing.T) {
 			state.Rule.Outcome = tc.outcome
 			res := agent.Execute(context.Background(), nil, state)
 
-			require.Equal(t, "rendered", res.Status)
+			require.Equal(t, "ready", res.Status)
 			require.Equal(t, tc.expect, state.Response.Status)
 			require.Equal(t, tc.outcome, state.Response.Headers["X-PassCtrl-Outcome"])
 		})

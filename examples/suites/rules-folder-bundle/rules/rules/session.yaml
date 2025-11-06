@@ -2,19 +2,18 @@ rules:
   lookup-session:
     description: "Queries the session service for user metadata and entitlement flags."
     auth:
-      - type: header
-        name: x-session-token
+      - match:
+          - type: header
+            name: x-session-token
         forwardAs:
-          type: bearer
-          token: "{{ .auth.input.value }}"
+          - type: bearer
+            token: "{{ index .auth.input.header \"x-session-token\" }}"
     backendApi:
       url: "https://session.internal/v1/lookup"
       method: GET
       headers:
-        allow: ["x-session-token"]
-        strip: []
-        custom:
-          authorization: "Bearer {{ .auth.input.value }}"
+        x-session-token: null
+        authorization: "Bearer {{ index .auth.input.header \"x-session-token\" }}"
       acceptedStatuses: [200]
     conditions:
       pass:
@@ -32,25 +31,21 @@ rules:
           tenant_id: variables.tenant_id
           entitlement: variables.entitlement
     cache:
-      ttl:
-        pass: "2m"
-        fail: "30s"
-        error: "0s"
+      passTTL: "2m"
+      failTTL: "30s"
 
   require-entitlement:
     description: "Allows requests only when the session advertises an allow entitlement."
     conditions:
       pass:
-        - lookup(vars.rules["lookup-session"], "entitlement") == "allow"
+        - lookup(lookup(variables.rule, "lookup-session"), "entitlement") == "allow"
       fail:
-        - lookup(vars.rules["lookup-session"], "entitlement") == "deny"
+        - lookup(lookup(variables.rule, "lookup-session"), "entitlement") == "deny"
     responses:
       fail:
         variables:
           entitlement_status: "denied"
-          tenant_id: "{{ index .rules \"lookup-session\" \"variables\" \"tenant_id\" }}"
+          tenant_id: "{{ .rules.lookup-session.variables.tenant_id }}"
     cache:
-      ttl:
-        pass: "0s"
-        fail: "0s"
-        error: "0s"
+      passTTL: "0s"
+      failTTL: "0s"

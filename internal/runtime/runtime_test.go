@@ -39,17 +39,11 @@ func TestPipelineEndpointSelectionAndRules(t *testing.T) {
 				Authentication: config.EndpointAuthenticationConfig{
 					Allow: config.EndpointAuthAllowConfig{Authorization: []string{"bearer"}},
 				},
-				ForwardRequestPolicy: config.EndpointForwardRequestPolicyConfig{
-					Query: config.ForwardRuleCategoryConfig{Allow: []string{"allow"}},
-				},
 				Rules: []config.EndpointRuleReference{{Name: "allow-rule"}},
 			},
 			"deny": {
 				Authentication: config.EndpointAuthenticationConfig{
 					Allow: config.EndpointAuthAllowConfig{Authorization: []string{"bearer"}},
-				},
-				ForwardRequestPolicy: config.EndpointForwardRequestPolicyConfig{
-					Query: config.ForwardRuleCategoryConfig{Allow: []string{"deny"}},
 				},
 				ResponsePolicy: config.EndpointResponsePolicyConfig{
 					Fail: config.EndpointResponseConfig{Body: "denied by rule"},
@@ -60,12 +54,12 @@ func TestPipelineEndpointSelectionAndRules(t *testing.T) {
 		Rules: map[string]config.RuleConfig{
 			"allow-rule": {
 				Conditions: config.RuleConditionConfig{
-					Pass: []string{`forward.query["allow"] == "true"`},
+					Pass: []string{`raw.query["allow"] == "true"`},
 				},
 			},
 			"deny-rule": {
 				Conditions: config.RuleConditionConfig{
-					Fail: []string{`forward.query["deny"] == "true"`},
+					Fail: []string{`raw.query["deny"] == "true"`},
 				},
 			},
 		},
@@ -185,16 +179,13 @@ func TestPipelineLogsIncludeCorrelationID(t *testing.T) {
 				Authentication: config.EndpointAuthenticationConfig{
 					Allow: config.EndpointAuthAllowConfig{Authorization: []string{"bearer"}},
 				},
-				ForwardRequestPolicy: config.EndpointForwardRequestPolicyConfig{
-					Query: config.ForwardRuleCategoryConfig{Allow: []string{"allow"}},
-				},
 				Rules: []config.EndpointRuleReference{{Name: "allow-rule"}},
 			},
 		},
 		Rules: map[string]config.RuleConfig{
 			"allow-rule": {
 				Conditions: config.RuleConditionConfig{
-					Pass: []string{`forward.query["allow"] == "true"`},
+					Pass: []string{`raw.query["allow"] == "true"`},
 				},
 			},
 		},
@@ -241,16 +232,13 @@ func TestPipelineRecordsMetrics(t *testing.T) {
 				Authentication: config.EndpointAuthenticationConfig{
 					Allow: config.EndpointAuthAllowConfig{Authorization: []string{"bearer"}},
 				},
-				ForwardRequestPolicy: config.EndpointForwardRequestPolicyConfig{
-					Query: config.ForwardRuleCategoryConfig{Allow: []string{"allow"}},
-				},
 				Rules: []config.EndpointRuleReference{{Name: "allow-rule"}},
 			},
 		},
 		Rules: map[string]config.RuleConfig{
 			"allow-rule": {
 				Conditions: config.RuleConditionConfig{
-					Pass: []string{`forward.query["allow"] == "true"`},
+					Pass: []string{`raw.query["allow"] == "true"`},
 				},
 			},
 		},
@@ -277,16 +265,13 @@ func TestPipelineSingleEndpointDefaults(t *testing.T) {
 				Authentication: config.EndpointAuthenticationConfig{
 					Allow: config.EndpointAuthAllowConfig{Authorization: []string{"bearer"}},
 				},
-				ForwardRequestPolicy: config.EndpointForwardRequestPolicyConfig{
-					Query: config.ForwardRuleCategoryConfig{Allow: []string{"allow"}},
-				},
 				Rules: []config.EndpointRuleReference{{Name: "solo-rule"}},
 			},
 		},
 		Rules: map[string]config.RuleConfig{
 			"solo-rule": {
 				Conditions: config.RuleConditionConfig{
-					Pass: []string{`forward.query["allow"] == "true"`},
+					Pass: []string{`raw.query["allow"] == "true"`},
 				},
 			},
 		},
@@ -452,14 +437,11 @@ func TestAuthResponseIsMinimal(t *testing.T) {
 				Authentication: config.EndpointAuthenticationConfig{
 					Allow: config.EndpointAuthAllowConfig{Authorization: []string{"bearer"}},
 				},
-				ForwardRequestPolicy: config.EndpointForwardRequestPolicyConfig{
-					Query: config.ForwardRuleCategoryConfig{Allow: []string{"allow"}},
-				},
 				Rules: []config.EndpointRuleReference{{Name: "solo-rule"}},
 			},
 		},
 		Rules: map[string]config.RuleConfig{
-			"solo-rule": {Conditions: config.RuleConditionConfig{Pass: []string{`forward.query["allow"] == "true"`}}},
+			"solo-rule": {Conditions: config.RuleConditionConfig{Pass: []string{`raw.query["allow"] == "true"`}}},
 		},
 		CorrelationHeader: "X-Request-ID",
 	}
@@ -484,14 +466,11 @@ func TestAuthResponseIsMinimal(t *testing.T) {
 				Authentication: config.EndpointAuthenticationConfig{
 					Allow: config.EndpointAuthAllowConfig{Authorization: []string{"bearer"}},
 				},
-				ForwardRequestPolicy: config.EndpointForwardRequestPolicyConfig{
-					Query: config.ForwardRuleCategoryConfig{Allow: []string{"deny"}},
-				},
 				Rules: []config.EndpointRuleReference{{Name: "solo-rule"}},
 			},
 		},
 		Rules: map[string]config.RuleConfig{
-			"solo-rule": {Conditions: config.RuleConditionConfig{Fail: []string{`forward.query["deny"] == "true"`}}},
+			"solo-rule": {Conditions: config.RuleConditionConfig{Fail: []string{`raw.query["deny"] == "true"`}}},
 		},
 		CorrelationHeader: "X-Request-ID",
 	}
@@ -508,6 +487,8 @@ func TestAuthResponseIsMinimal(t *testing.T) {
 
 func TestEndpointResponsePolicyBodiesAndHeaders(t *testing.T) {
 	// Endpoint defines pass/fail bodies and custom header with templating.
+	xCustomVal := "ep-{{ .endpoint }}"
+	contentTypeVal := "application/json"
 	opts := PipelineOptions{
 		Cache: cache.NewMemory(1 * time.Minute),
 		Endpoints: map[string]config.EndpointConfig{
@@ -518,11 +499,9 @@ func TestEndpointResponsePolicyBodiesAndHeaders(t *testing.T) {
 				ResponsePolicy: config.EndpointResponsePolicyConfig{
 					Pass: config.EndpointResponseConfig{
 						Body: "Okay",
-						Headers: config.ForwardRuleCategoryConfig{
-							Custom: map[string]string{
-								"X-Custom":     "ep-{{ .endpoint }}",
-								"Content-Type": "application/json",
-							},
+						Headers: map[string]*string{
+							"X-Custom":     &xCustomVal,
+							"Content-Type": &contentTypeVal,
 						},
 					},
 					Fail: config.EndpointResponseConfig{Body: "Denied"},

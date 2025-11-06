@@ -7,7 +7,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/l0p7/passctrl/internal/runtime/forwardpolicy"
 	"github.com/l0p7/passctrl/internal/runtime/pipeline"
 	"github.com/l0p7/passctrl/internal/templates"
 )
@@ -18,8 +17,8 @@ type BackendDefinition struct {
 	URL                 string
 	Method              string
 	ForwardProxyHeaders bool
-	Headers             backendForwardRules
-	Query               backendForwardRules
+	Headers             backendHeaderMap
+	Query               backendHeaderMap
 	Body                string
 	BodyFile            string
 	// BodyTemplate, when present, is rendered against the pipeline state and
@@ -37,12 +36,12 @@ type BackendPagination struct {
 	MaxPages int
 }
 
-type backendForwardRules struct {
-	allowAll        bool
-	allow           map[string]struct{}
-	strip           map[string]struct{}
-	custom          map[string]string
-	customTemplates map[string]*templates.Template
+// backendHeaderMap stores header/query configuration with null-copy semantics.
+// - nil value = copy from raw request
+// - non-nil value = template string (may be static or template)
+type backendHeaderMap struct {
+	entries   map[string]*string
+	templates map[string]*templates.Template
 }
 
 // Pagination returns the pagination configuration for the backend.
@@ -61,86 +60,87 @@ func (b BackendDefinition) Accepts(status int) bool {
 	return ok
 }
 
-// SelectHeaders curates the headers that should be forwarded to the backend.
-// If templates are available, they will be rendered using the provided state.
-func (b BackendDefinition) SelectHeaders(incoming map[string]string, state *pipeline.State) map[string]string {
-	selected := make(map[string]string)
-	if b.Headers.allowAll {
-		for name, value := range incoming {
-			selected[name] = value
-		}
-	} else {
-		for name := range b.Headers.allow {
-			if value, ok := incoming[name]; ok {
-				selected[name] = value
-			}
-		}
-	}
-	for name := range b.Headers.strip {
-		delete(selected, name)
-	}
-	for name, value := range b.Headers.custom {
-		// Render template if available
-		if tmpl := b.Headers.customTemplates[name]; tmpl != nil && state != nil {
-			rendered, err := tmpl.Render(state.TemplateContext())
-			if err != nil {
-				// On error, fall back to static value
-				value = strings.TrimSpace(value)
-			} else {
-				value = strings.TrimSpace(rendered)
-			}
-		} else {
-			value = strings.TrimSpace(value)
-		}
+// SelectHeaders renders headers for the backend request using null-copy semantics:
+// - nil value: copy from raw request headers
+// - non-nil value: render template (or use static value)
+func (b BackendDefinition) SelectHeaders(rawHeaders map[string]string, state *pipeline.State) map[string]string {
+	result := make(map[string]string)
 
-		if value == "" {
-			delete(selected, name)
-			continue
+	// Process each configured header
+	for name, valuePtr := range b.Headers.entries {
+		lowerName := strings.ToLower(name)
+
+		if valuePtr == nil {
+			// Null-copy: take from raw request if present
+			if rawValue, ok := rawHeaders[lowerName]; ok {
+				result[lowerName] = rawValue
+			}
+			// If not present in raw, omit (don't add to result)
+		} else {
+			// Template or static value
+			value := *valuePtr
+
+			// Render template if available
+			if tmpl := b.Headers.templates[lowerName]; tmpl != nil && state != nil {
+				rendered, err := tmpl.Render(state.TemplateContext())
+				if err != nil {
+					// On error, use static value
+					value = strings.TrimSpace(value)
+				} else {
+					value = strings.TrimSpace(rendered)
+				}
+			} else {
+				value = strings.TrimSpace(value)
+			}
+
+			// Only add if non-empty
+			if value != "" {
+				result[lowerName] = value
+			}
 		}
-		selected[name] = value
 	}
-	return selected
+
+	return result
 }
 
-// SelectQuery curates the query parameters that should be forwarded to the
-// backend. If templates are available, they will be rendered using the provided state.
-func (b BackendDefinition) SelectQuery(incoming map[string]string, state *pipeline.State) map[string]string {
-	selected := make(map[string]string)
-	if b.Query.allowAll {
-		for name, value := range incoming {
-			selected[name] = value
-		}
-	} else {
-		for name := range b.Query.allow {
-			if value, ok := incoming[name]; ok {
-				selected[name] = value
-			}
-		}
-	}
-	for name := range b.Query.strip {
-		delete(selected, name)
-	}
-	for name, value := range b.Query.custom {
-		// Render template if available
-		if tmpl := b.Query.customTemplates[name]; tmpl != nil && state != nil {
-			rendered, err := tmpl.Render(state.TemplateContext())
-			if err != nil {
-				// On error, fall back to static value
-				value = strings.TrimSpace(value)
-			} else {
-				value = strings.TrimSpace(rendered)
+// SelectQuery renders query parameters for the backend request using null-copy semantics.
+func (b BackendDefinition) SelectQuery(rawQuery map[string]string, state *pipeline.State) map[string]string {
+	result := make(map[string]string)
+
+	// Process each configured query parameter
+	for name, valuePtr := range b.Query.entries {
+		lowerName := strings.ToLower(name)
+
+		if valuePtr == nil {
+			// Null-copy: take from raw request if present
+			if rawValue, ok := rawQuery[lowerName]; ok {
+				result[lowerName] = rawValue
 			}
 		} else {
-			value = strings.TrimSpace(value)
-		}
+			// Template or static value
+			value := *valuePtr
 
-		if value == "" {
-			delete(selected, name)
-			continue
+			// Render template if available
+			if tmpl := b.Query.templates[lowerName]; tmpl != nil && state != nil {
+				rendered, err := tmpl.Render(state.TemplateContext())
+				if err != nil {
+					// On error, use static value
+					value = strings.TrimSpace(value)
+				} else {
+					value = strings.TrimSpace(rendered)
+				}
+			} else {
+				value = strings.TrimSpace(value)
+			}
+
+			// Only add if non-empty
+			if value != "" {
+				result[lowerName] = value
+			}
 		}
-		selected[name] = value
 	}
-	return selected
+
+	return result
 }
 
 func buildBackendDefinition(spec BackendDefinitionSpec, renderer *templates.Renderer) BackendDefinition {
@@ -174,8 +174,8 @@ func buildBackendDefinition(spec BackendDefinitionSpec, renderer *templates.Rend
 		URL:                 url,
 		Method:              method,
 		ForwardProxyHeaders: spec.ForwardProxyHeaders,
-		Headers:             compileBackendForwardRules(spec.Headers, renderer),
-		Query:               compileBackendForwardRules(spec.Query, renderer),
+		Headers:             compileBackendHeaderMap(spec.Headers, renderer),
+		Query:               compileBackendHeaderMap(spec.Query, renderer),
 		Body:                spec.Body,
 		BodyFile:            strings.TrimSpace(spec.BodyFile),
 		Accepted:            accepted,
@@ -187,92 +187,93 @@ func buildBackendDefinition(spec BackendDefinitionSpec, renderer *templates.Rend
 	}
 }
 
-func compileBackendForwardRules(cfg forwardpolicy.CategoryConfig, renderer *templates.Renderer) backendForwardRules {
-	rules := backendForwardRules{
-		allow:           make(map[string]struct{}),
-		strip:           make(map[string]struct{}),
-		custom:          make(map[string]string),
-		customTemplates: make(map[string]*templates.Template),
+func compileBackendHeaderMap(cfg map[string]*string, renderer *templates.Renderer) backendHeaderMap {
+	if len(cfg) == 0 {
+		return backendHeaderMap{
+			entries:   make(map[string]*string),
+			templates: make(map[string]*templates.Template),
+		}
 	}
 
-	for _, name := range cfg.Allow {
-		trimmed := strings.TrimSpace(name)
-		if trimmed == "" {
-			continue
-		}
-		if trimmed == "*" {
-			rules.allowAll = true
-			continue
-		}
-		rules.allow[strings.ToLower(trimmed)] = struct{}{}
+	result := backendHeaderMap{
+		entries:   make(map[string]*string, len(cfg)),
+		templates: make(map[string]*templates.Template),
 	}
-	for _, name := range cfg.Strip {
-		trimmed := strings.TrimSpace(name)
-		if trimmed == "" {
-			continue
-		}
-		rules.strip[strings.ToLower(trimmed)] = struct{}{}
-	}
-	if len(cfg.Custom) > 0 {
-		keys := make([]string, 0, len(cfg.Custom))
-		for name := range cfg.Custom {
-			keys = append(keys, name)
-		}
-		sort.Strings(keys)
-		for _, name := range keys {
-			key := strings.TrimSpace(name)
-			if key == "" {
-				continue
-			}
-			value := cfg.Custom[name]
-			lower := strings.ToLower(key)
-			rules.custom[lower] = value
 
-			// Compile template if renderer is available
-			if renderer != nil {
-				// Note: errors during compilation are logged but don't fail the build
-				// Templates will fall back to static values if compilation fails
-				if tmpl, err := renderer.CompileInline("backend:"+lower, value); err == nil {
-					rules.customTemplates[lower] = tmpl
+	// Sort keys for deterministic ordering
+	keys := make([]string, 0, len(cfg))
+	for name := range cfg {
+		keys = append(keys, name)
+	}
+	sort.Strings(keys)
+
+	for _, name := range keys {
+		valuePtr := cfg[name]
+		lowerName := strings.ToLower(strings.TrimSpace(name))
+
+		if lowerName == "" {
+			continue
+		}
+
+		// Store the entry
+		result.entries[lowerName] = valuePtr
+
+		// Compile template if value is non-nil and renderer available
+		if valuePtr != nil && renderer != nil {
+			value := *valuePtr
+			// Only compile if it looks like a template (contains {{)
+			if strings.Contains(value, "{{") {
+				if tmpl, err := renderer.CompileInline("backend:"+lowerName, value); err == nil {
+					result.templates[lowerName] = tmpl
 				}
+				// Errors during compilation are silent - will fall back to static value
 			}
 		}
 	}
-	return rules
+
+	return result
 }
 
 // ApplyHeaders mutates the supplied request with the curated backend headers
 // and proxy forwarding metadata.
 func (b BackendDefinition) ApplyHeaders(req *http.Request, state *pipeline.State) {
-	headers := b.SelectHeaders(state.Forward.Headers, state)
+	headers := b.SelectHeaders(state.Raw.Headers, state)
 	for name, value := range headers {
 		if strings.TrimSpace(value) == "" {
 			continue
 		}
 		req.Header.Set(textproto.CanonicalMIMEHeaderKey(name), value)
 	}
+
+	// Add sanitized proxy headers if enabled
 	if b.ForwardProxyHeaders {
-		if state.Admission.ForwardedFor != "" {
-			req.Header.Set("X-Forwarded-For", state.Admission.ForwardedFor)
-		}
-		if state.Admission.Forwarded != "" {
-			req.Header.Set("Forwarded", state.Admission.Forwarded)
+		for name, value := range state.Forward.Headers {
+			if name != "forwarded" && !strings.HasPrefix(name, "x-forwarded-") {
+				continue
+			}
+			if strings.TrimSpace(value) == "" {
+				continue
+			}
+			req.Header.Set(textproto.CanonicalMIMEHeaderKey(name), value)
 		}
 	}
 }
 
-// ApplyQuery mutates the supplied request URL with the curated backend query
-// parameters.
+// ApplyQuery mutates the supplied request with the curated backend query parameters.
 func (b BackendDefinition) ApplyQuery(req *http.Request, state *pipeline.State) {
-	selected := b.SelectQuery(state.Forward.Query, state)
-	values := req.URL.Query()
-	for name := range b.Query.strip {
-		values.Del(name)
+	queries := b.SelectQuery(state.Raw.Query, state)
+	if len(queries) == 0 {
+		return
 	}
-	for name, value := range selected {
-		values.Set(name, value)
+
+	q := req.URL.Query()
+	for name, value := range queries {
+		if strings.TrimSpace(value) == "" {
+			continue
+		}
+		q.Set(name, value)
 	}
-	req.URL.RawQuery = values.Encode()
+	req.URL.RawQuery = q.Encode()
 }
 
 // NextLinkFromHeader parses the RFC5988 Link header for a `rel="next"`
@@ -286,35 +287,26 @@ func NextLinkFromHeader(values []string, base *url.URL) string {
 			if segment == "" {
 				continue
 			}
-			sections := strings.Split(segment, ";")
-			if len(sections) == 0 {
+			if !strings.Contains(segment, `rel="next"`) {
 				continue
 			}
-			target := strings.TrimSpace(sections[0])
-			if !strings.HasPrefix(target, "<") || !strings.Contains(target, ">") {
+
+			start := strings.Index(segment, "<")
+			end := strings.Index(segment, ">")
+			if start == -1 || end == -1 || start >= end {
 				continue
 			}
-			href := strings.Trim(target, "<>")
-			var isNext bool
-			for _, attr := range sections[1:] {
-				kv := strings.SplitN(strings.TrimSpace(attr), "=", 2)
-				if len(kv) != 2 {
-					continue
-				}
-				key := strings.ToLower(strings.TrimSpace(kv[0]))
-				value := strings.Trim(strings.TrimSpace(kv[1]), `"`)
-				if key == "rel" && strings.EqualFold(value, "next") {
-					isNext = true
-					break
-				}
-			}
-			if !isNext {
+
+			nextURL := strings.TrimSpace(segment[start+1 : end])
+			if nextURL == "" {
 				continue
 			}
-			ref, err := url.Parse(href)
+
+			ref, err := url.Parse(nextURL)
 			if err != nil {
 				continue
 			}
+
 			if ref.IsAbs() {
 				return ref.String()
 			}

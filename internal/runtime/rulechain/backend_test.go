@@ -6,26 +6,29 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/l0p7/passctrl/internal/runtime/forwardpolicy"
 	"github.com/l0p7/passctrl/internal/runtime/pipeline"
 	"github.com/l0p7/passctrl/internal/templates"
 	"github.com/stretchr/testify/require"
 )
+
+// strPtr returns a pointer to a string literal
+func strPtr(s string) *string {
+	return &s
+}
 
 func TestBuildBackendDefinitionAndSelection(t *testing.T) {
 	spec := BackendDefinitionSpec{
 		URL:                 " https://api.example.com/resource ",
 		Method:              "post",
 		ForwardProxyHeaders: true,
-		Headers: forwardpolicy.CategoryConfig{
-			Allow:  []string{"X-Auth", "X-Remove", "  "},
-			Strip:  []string{"X-Remove", "  X-Ignore  "},
-			Custom: map[string]string{"X-Custom": " override ", "X-Remove": ""},
+		Headers: map[string]*string{
+			"X-Auth":   nil,                  // copy from raw request (null-copy)
+			"X-Custom": strPtr(" override "), // custom static value
+			// X-Remove and X-Ignore are omitted (not forwarded)
 		},
-		Query: forwardpolicy.CategoryConfig{
-			Allow:  []string{"limit", "page"},
-			Strip:  []string{"page"},
-			Custom: map[string]string{"limit": " 100 "},
+		Query: map[string]*string{
+			"limit": strPtr(" 100 "), // custom static value
+			// page is omitted (not forwarded)
 		},
 		Body:     "{\"status\":\"ok\"}",
 		BodyFile: "  payload.json  ",
@@ -69,14 +72,18 @@ func TestBuildBackendDefinitionAndSelection(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "https://api.example.com/resource?remove=1", http.NoBody)
 	state := &pipeline.State{}
-	state.Forward.Headers = map[string]string{
+	state.Raw.Headers = map[string]string{
 		"x-auth":   "token",
 		"x-remove": "to-be-removed",
 		"x-custom": "ignore",
 	}
-	state.Forward.Query = map[string]string{
+	state.Raw.Query = map[string]string{
 		"limit": "10",
 		"page":  "3",
+	}
+	state.Forward.Headers = map[string]string{
+		"x-forwarded-for": "1.1.1.1",
+		"forwarded":       "for=1.1.1.1",
 	}
 	state.Admission.ForwardedFor = "1.1.1.1"
 	state.Admission.Forwarded = "for=1.1.1.1"
@@ -119,17 +126,13 @@ func TestBackendDefinitionWithTemplates(t *testing.T) {
 	spec := BackendDefinitionSpec{
 		URL:    "https://api.example.com",
 		Method: "POST",
-		Headers: forwardpolicy.CategoryConfig{
-			Custom: map[string]string{
-				"Authorization": `Bearer {{ index .raw.Headers "authorization" | replace "Basic " "" }}`,
-				"X-Trace-ID":    `{{ index .raw.Headers "x-request-id" }}`,
-			},
+		Headers: map[string]*string{
+			"Authorization": strPtr(`Bearer {{ index .raw.Headers "authorization" | replace "Basic " "" }}`),
+			"X-Trace-ID":    strPtr(`{{ index .raw.Headers "x-request-id" }}`),
 		},
-		Query: forwardpolicy.CategoryConfig{
-			Custom: map[string]string{
-				"token": `{{ index .raw.Headers "authorization" }}`,
-				"page":  `{{ index .raw.Query "offset" | default "1" }}`,
-			},
+		Query: map[string]*string{
+			"token": strPtr(`{{ index .raw.Headers "authorization" }}`),
+			"page":  strPtr(`{{ index .raw.Query "offset" | default "1" }}`),
 		},
 	}
 
@@ -157,10 +160,8 @@ func TestBackendDefinitionTemplatesFallbackOnError(t *testing.T) {
 
 	spec := BackendDefinitionSpec{
 		URL: "https://api.example.com",
-		Headers: forwardpolicy.CategoryConfig{
-			Custom: map[string]string{
-				"X-Static": "fallback-value",
-			},
+		Headers: map[string]*string{
+			"X-Static": strPtr("fallback-value"),
 		},
 	}
 
@@ -179,15 +180,11 @@ func TestBackendDefinitionTemplatesHandleEmptyResults(t *testing.T) {
 
 	spec := BackendDefinitionSpec{
 		URL: "https://api.example.com",
-		Headers: forwardpolicy.CategoryConfig{
-			Custom: map[string]string{
-				"X-Missing": `{{ index .raw.Headers "non-existent" }}`,
-			},
+		Headers: map[string]*string{
+			"X-Missing": strPtr(`{{ index .raw.Headers "non-existent" }}`),
 		},
-		Query: forwardpolicy.CategoryConfig{
-			Custom: map[string]string{
-				"missing": `{{ index .raw.Query "non-existent" }}`,
-			},
+		Query: map[string]*string{
+			"missing": strPtr(`{{ index .raw.Query "non-existent" }}`),
 		},
 	}
 

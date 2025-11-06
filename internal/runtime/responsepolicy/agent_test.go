@@ -4,13 +4,26 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
-	"github.com/l0p7/passctrl/internal/runtime/forwardpolicy"
 	"github.com/l0p7/passctrl/internal/runtime/pipeline"
 	"github.com/l0p7/passctrl/internal/templates"
 	"github.com/stretchr/testify/require"
 )
+
+// toHeaderPtrMap converts map[string]string to map[string]*string for header configs
+func toHeaderPtrMap(m map[string]string) map[string]*string {
+	if len(m) == 0 {
+		return nil
+	}
+	result := make(map[string]*string, len(m))
+	for k, v := range m {
+		val := v
+		result[k] = &val
+	}
+	return result
+}
 
 func TestAgentExecute(t *testing.T) {
 	tests := []struct {
@@ -41,7 +54,7 @@ func TestAgentExecute(t *testing.T) {
 				state.Rule.Outcome = "pass"
 				return state
 			},
-			wantResult:     "rendered",
+			wantResult:     "ready",
 			wantStatusCode: http.StatusOK,
 			wantOutcome:    "pass",
 		},
@@ -53,7 +66,7 @@ func TestAgentExecute(t *testing.T) {
 				state.Rule.Reason = "policy rejected"
 				return state
 			},
-			wantResult:     "rendered",
+			wantResult:     "ready",
 			wantStatusCode: http.StatusForbidden,
 			wantOutcome:    "fail",
 		},
@@ -65,7 +78,7 @@ func TestAgentExecute(t *testing.T) {
 				state.Response.Headers = nil
 				return state
 			},
-			wantResult:     "rendered",
+			wantResult:     "ready",
 			wantStatusCode: http.StatusForbidden,
 			wantOutcome:    "fail",
 		},
@@ -76,7 +89,7 @@ func TestAgentExecute(t *testing.T) {
 				state.Rule.Outcome = "error"
 				return state
 			},
-			wantResult:     "rendered",
+			wantResult:     "ready",
 			wantStatusCode: http.StatusBadGateway,
 			wantOutcome:    "error",
 		},
@@ -85,7 +98,7 @@ func TestAgentExecute(t *testing.T) {
 			setup: func() *pipeline.State {
 				return &pipeline.State{}
 			},
-			wantResult:     "rendered",
+			wantResult:     "ready",
 			wantStatusCode: http.StatusInternalServerError,
 			wantOutcome:    "",
 		},
@@ -114,26 +127,23 @@ func TestAgentExecute(t *testing.T) {
 
 func TestAgentExecuteWithConfigAppliesOverrides(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "http://example.com/demo", http.NoBody)
+	req.Header.Set("X-Keep", "value") // Will be captured in state.Raw.Headers
 	state := pipeline.NewState(req, "endpoint-a", "cache-key", "corr-id")
 	state.Rule.Outcome = "pass"
-	state.Response.Headers["keep"] = "value"
-	state.Response.Headers["stripme"] = "remove"
-	state.Response.Headers["other"] = "should-drop"
 
 	renderer := templates.NewRenderer(nil)
+	xRenderedVal := "outcome {{ .rule.Outcome }}"
+	xStaticVal := " static "
 	cfg := Config{
 		Endpoint: "endpoint-a",
 		Renderer: renderer,
 		Pass: CategoryConfig{
 			Status: http.StatusAccepted,
 			Body:   "hello {{ .endpoint }}",
-			Headers: forwardpolicy.CategoryConfig{
-				Allow: []string{"keep"},
-				Strip: []string{"stripme"},
-				Custom: map[string]string{
-					"X-Rendered": "outcome {{ .rule.Outcome }}",
-					"X-Static":   " static ",
-				},
+			Headers: map[string]*string{
+				"x-keep":     nil, // copy from raw
+				"X-Rendered": &xRenderedVal,
+				"X-Static":   &xStaticVal,
 			},
 		},
 	}
@@ -141,15 +151,12 @@ func TestAgentExecuteWithConfigAppliesOverrides(t *testing.T) {
 	agent := NewWithConfig(cfg)
 	res := agent.Execute(context.Background(), nil, state)
 
-	require.Equal(t, "rendered", res.Status)
+	require.Equal(t, "ready", res.Status)
 	require.Equal(t, http.StatusAccepted, state.Response.Status)
 	require.Equal(t, "hello endpoint-a", state.Response.Message)
-	require.NotContains(t, state.Response.Headers, "stripme")
-	require.NotContains(t, state.Response.Headers, "other")
-	require.Equal(t, "value", state.Response.Headers["keep"])
-	require.Equal(t, "outcome pass", state.Response.Headers["X-Rendered"])
-	require.Equal(t, "static", state.Response.Headers["X-Static"])
-	require.Equal(t, "pass", state.Response.Headers["X-PassCtrl-Outcome"])
+	require.Equal(t, "value", state.Response.Headers["x-keep"])
+	require.Equal(t, "outcome pass", state.Response.Headers["x-rendered"])
+	require.Equal(t, "static", state.Response.Headers["x-static"])
 }
 
 func TestAgentExecuteWithResponseVariablesInTemplates(t *testing.T) {
@@ -251,34 +258,28 @@ func TestAgentExecuteWithResponseVariablesInTemplates(t *testing.T) {
 			switch tc.outcome {
 			case "pass":
 				cfg.Pass = CategoryConfig{
-					Status: tc.wantStatus,
-					Body:   tc.bodyTemplate,
-					Headers: forwardpolicy.CategoryConfig{
-						Custom: tc.headerTemplates,
-					},
+					Status:  tc.wantStatus,
+					Body:    tc.bodyTemplate,
+					Headers: toHeaderPtrMap(tc.headerTemplates),
 				}
 			case "fail":
 				cfg.Fail = CategoryConfig{
-					Status: tc.wantStatus,
-					Body:   tc.bodyTemplate,
-					Headers: forwardpolicy.CategoryConfig{
-						Custom: tc.headerTemplates,
-					},
+					Status:  tc.wantStatus,
+					Body:    tc.bodyTemplate,
+					Headers: toHeaderPtrMap(tc.headerTemplates),
 				}
 			case "error":
 				cfg.Error = CategoryConfig{
-					Status: tc.wantStatus,
-					Body:   tc.bodyTemplate,
-					Headers: forwardpolicy.CategoryConfig{
-						Custom: tc.headerTemplates,
-					},
+					Status:  tc.wantStatus,
+					Body:    tc.bodyTemplate,
+					Headers: toHeaderPtrMap(tc.headerTemplates),
 				}
 			}
 
 			agent := NewWithConfig(cfg)
 			res := agent.Execute(context.Background(), nil, state)
 
-			require.Equal(t, "rendered", res.Status)
+			require.Equal(t, "ready", res.Status)
 			require.Equal(t, tc.wantStatus, state.Response.Status)
 
 			if tc.wantBody != "" {
@@ -286,7 +287,8 @@ func TestAgentExecuteWithResponseVariablesInTemplates(t *testing.T) {
 			}
 
 			for key, expectedValue := range tc.wantHeaders {
-				require.Equal(t, expectedValue, state.Response.Headers[key], "header %s mismatch", key)
+				lowerKey := strings.ToLower(key)
+				require.Equal(t, expectedValue, state.Response.Headers[lowerKey], "header %s mismatch", key)
 			}
 		})
 	}
@@ -312,25 +314,23 @@ func TestAgentExecuteWithMultiRuleVariableAccumulation(t *testing.T) {
 		Pass: CategoryConfig{
 			Status: http.StatusOK,
 			Body:   `{"user":"{{ .response.user_id }}","tier":"{{ .response.tier }}","allowed":{{ .response.allowed }},"region":"{{ .response.region }}"}`,
-			Headers: forwardpolicy.CategoryConfig{
-				Custom: map[string]string{
-					"X-User-ID":     "{{ .response.user_id }}",
-					"X-User-Tier":   "{{ .response.tier }}",
-					"X-User-Region": "{{ .response.region }}",
-				},
-			},
+			Headers: toHeaderPtrMap(map[string]string{
+				"X-User-ID":     "{{ .response.user_id }}",
+				"X-User-Tier":   "{{ .response.tier }}",
+				"X-User-Region": "{{ .response.region }}",
+			}),
 		},
 	}
 
 	agent := NewWithConfig(cfg)
 	res := agent.Execute(context.Background(), nil, state)
 
-	require.Equal(t, "rendered", res.Status)
+	require.Equal(t, "ready", res.Status)
 	require.Equal(t, http.StatusOK, state.Response.Status)
 	require.JSONEq(t, `{"user":"123","tier":"premium","allowed":true,"region":"us-west"}`, state.Response.Message)
-	require.Equal(t, "123", state.Response.Headers["X-User-ID"])
-	require.Equal(t, "premium", state.Response.Headers["X-User-Tier"])
-	require.Equal(t, "us-west", state.Response.Headers["X-User-Region"])
+	require.Equal(t, "123", state.Response.Headers["x-user-id"])
+	require.Equal(t, "premium", state.Response.Headers["x-user-tier"])
+	require.Equal(t, "us-west", state.Response.Headers["x-user-region"])
 }
 
 func TestAgentExecuteWithEmptyResponseVariables(t *testing.T) {
@@ -347,65 +347,17 @@ func TestAgentExecuteWithEmptyResponseVariables(t *testing.T) {
 		Pass: CategoryConfig{
 			Status: http.StatusOK,
 			Body:   `{"status":"authenticated"}`,
-			Headers: forwardpolicy.CategoryConfig{
-				Custom: map[string]string{
-					"X-Auth-Status": "success",
-				},
-			},
+			Headers: toHeaderPtrMap(map[string]string{
+				"X-Auth-Status": "success",
+			}),
 		},
 	}
 
 	agent := NewWithConfig(cfg)
 	res := agent.Execute(context.Background(), nil, state)
 
-	require.Equal(t, "rendered", res.Status)
+	require.Equal(t, "ready", res.Status)
 	require.Equal(t, http.StatusOK, state.Response.Status)
 	require.JSONEq(t, `{"status":"authenticated"}`, state.Response.Message)
-	require.Equal(t, "success", state.Response.Headers["X-Auth-Status"])
-}
-
-func TestCloneHeaders(t *testing.T) {
-	tests := []struct {
-		name      string
-		input     map[string]string
-		mutate    func(map[string]string)
-		wantNil   bool
-		wantValue map[string]string
-	}{
-		{
-			name:    "nil map returns nil",
-			input:   nil,
-			wantNil: true,
-		},
-		{
-			name:  "clones map values",
-			input: map[string]string{"a": "1", "b": "2"},
-			mutate: func(m map[string]string) {
-				m["a"] = "updated"
-			},
-			wantValue: map[string]string{"a": "1", "b": "2"},
-		},
-	}
-
-	for _, tc := range tests {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			clone := cloneHeaders(tc.input)
-			if tc.wantNil {
-				require.Nil(t, clone)
-				return
-			}
-
-			require.NotNil(t, clone)
-			require.Equal(t, tc.wantValue, clone)
-			if tc.mutate != nil {
-				tc.mutate(clone)
-			}
-			if tc.input != nil {
-				for key, value := range tc.wantValue {
-					require.Equal(t, value, tc.input[key])
-				}
-			}
-		})
-	}
+	require.Equal(t, "success", state.Response.Headers["x-auth-status"])
 }

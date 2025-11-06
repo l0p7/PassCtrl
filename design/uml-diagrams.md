@@ -14,7 +14,7 @@ flowchart TD
     F -->|sets endpointContext.auth.status and .input.*| G{Auth satisfied?}
     G -- No --> H[Render responsePolicy.fail]
     G -- Yes --> I[Apply forwardRequestPolicy]
-    I -->|sets requestScope.headers/query available to rules| J[Enter Rule Chain]
+    I -->|sanitizes proxy headers when enabled| J[Enter Rule Chain]
     J --> K[Evaluate Rules Sequentially]
     K --> L{All rules pass?}
     L -- Yes --> M[responsePolicy.pass]

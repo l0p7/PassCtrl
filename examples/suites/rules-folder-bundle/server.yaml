@@ -14,8 +14,3 @@ server:
   templates:
     templatesFolder: "./examples/suites/rules-folder-bundle/templates"
     templatesAllowEnv: false
-  cache:
-    backend: memory
-    ttlSeconds: 120
-    keySalt: "rules-folder-demo"
-    epoch: 1

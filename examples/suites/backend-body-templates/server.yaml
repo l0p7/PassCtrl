@@ -13,9 +13,7 @@ endpoints:
     description: Backend body templating examples
     forwardRequestPolicy:
       headers:
-        allow: [authorization]
-      query:
-        allow: []
+        authorization: null
     rules:
       - name: call-inline
       - name: call-file
@@ -33,8 +31,7 @@ rules:
       url: http://localhost:9000/echo           # replace with your echo endpoint
       method: POST
       headers:
-        custom:
-          Content-Type: application/json
+        content-type: application/json
       body: |
         {
           "client": "{{ .admission.clientIp }}",
@@ -49,8 +46,7 @@ rules:
       url: http://localhost:9000/echo           # replace with your echo endpoint
       method: POST
       headers:
-        custom:
-          Content-Type: application/json
+        content-type: application/json
       bodyFile: "{{ printf \"requests/%s.json.tmpl\" \"payload\" }}"
     conditions:
       pass: ["true"]

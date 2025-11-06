@@ -70,10 +70,7 @@ endpoints:
       allow: ["basic"]
       challenge: "Basic realm=\"Auth\""
     forwardRequestPolicy:
-      headers:
-        allow: ["authorization"]
-      query:
-        strip: ["utm_*"]
+      forwardProxyHeaders: true  # Sanitize and forward X-Forwarded-* headers
     forwardProxyPolicy:
       trustedProxyIPs: ["10.0.0.0/8", "192.168.0.0/16"]
     rules:
@@ -82,6 +79,9 @@ endpoints:
     responsePolicy:
       pass:
         status: 200
+        headers:
+          x-request-id: null  # Copy from raw request
+          x-auth-result: "{{ .response.auth_result }}"  # Template value
       fail:
         status: 403
     cache:
@@ -90,17 +90,20 @@ endpoints:
 
 ## Forward Request Policy
 
-The forward request policy curates the request snapshot shared with rules and backends. Operators can allow, strip, or synthesize values.
+The forward request policy controls proxy header sanitization. Backend request headers and query parameters are configured directly in rule `backendApi` blocks using null-copy semantics.
 
 | Field | Description | Upstream Impact | Response Impact |
 | --- | --- | --- | --- |
-| `headers.allow` | Literal header names (case-insensitive) to forward from the raw request. Supports wildcards (`*`). | Allowed headers are available to backend calls and rule templates. | Templates can access allowed headers when rendering responses. |
-| `headers.strip` | Header names to remove after the allow step. | Prevents sensitive headers from leaking upstream even if listed in `allow`. | Removed headers are also hidden from response templates. |
-| `headers.custom` | Key/value map rendered as Go templates. | Synthesized headers are injected into backend requests for every rule. | Available to response templates via `forward.headers`. |
-| `forwardProxyHeaders` | Boolean. When `true`, sanitized `X-Forwarded-*` and RFC7239 `Forwarded` headers are re-emitted. | Preserves proxy metadata for upstream services. | None, unless response templates refer to forwarded headers. |
-| `query.allow` / `query.strip` / `query.custom` | Equivalent controls for query parameters. | Controls which query parameters reach backends. | Queried values remain in the curated request for templates. |
+| `forwardProxyHeaders` | Boolean. When `true`, sanitizes and forwards `X-Forwarded-*` and RFC7239 `Forwarded` headers. | Preserves proxy metadata for upstream backend services. | None, unless response templates refer to forwarded headers. |
 
-**Evaluation order**: allow → strip → custom. Wildcards apply before strip so you can allow `x-*` and explicitly strip `x-internal`.
+**Backend Header/Query Configuration**: Rules define backend request headers and query parameters using **null-copy semantics**:
+- `nil` value — Copy from raw incoming request (e.g., `x-request-id: null`)
+- Non-nil value — Static string or Go template expression (e.g., `x-trace-id: "{{ .raw.headers.x-request-id }}"`)
+- **Missing keys**: Null-copy of missing header/query param is silently omitted (no error)
+- **Empty values**: Empty template results are omitted from output (not sent as empty strings)
+- **Authorization forbidden**: Authorization headers in `backendApi.headers` are rejected at config validation—use `auth.forwardAs` instead
+
+See rule configuration documentation for backend request examples.
 
 ## Response Policy Defaults
 
@@ -108,19 +111,21 @@ Endpoint response defaults run when the decisive rule does not provide an overri
 
 | Field | Description | Upstream Impact | Response Impact |
 | --- | --- | --- | --- |
-| `response.pass.status` | Default HTTP status for successful outcomes. | None. | Sets caller status when rules omit explicit statuses. |
-| `response.pass.headers.allow` | Start from decisive rule headers before stripping. | None. | Controls which headers survive to the caller. |
-| `response.pass.headers.strip` | Remove specific headers. | None. | Removes headers from the final response. |
-| `response.pass.headers.custom` | Synthesized headers rendered from templates. | None. | Adds new headers to caller responses. |
-| `response.pass.body` / `bodyFile` | Inline or file-backed templates. | None. | Renders the `/auth` body when rules omit overrides. |
-| `response.fail.*`, `response.error.*` | Same structure for deny/error outcomes. | None. | Determines fallback status, headers, and bodies for failure or error responses. |
+| `response.pass.status` | Default HTTP status for successful outcomes (default: 200). | None. | Sets caller status when rules omit explicit statuses. |
+| `response.pass.headers` | Map of response headers using **null-copy semantics** (`nil` = copy from raw request, non-nil = static/template value). | None. | Adds headers to caller response. Empty template results are omitted. |
+| `response.pass.body` / `bodyFile` | Inline or file-backed Go templates. | None. | Renders the `/auth` body when rules omit overrides. |
+| `response.fail.*`, `response.error.*` | Same structure for deny/error outcomes (default status: 403 for fail, 502 for error). | None. | Determines fallback status, headers, and bodies for failure or error responses. |
+
+**Automatic Headers**: The response agent automatically adds an `X-PassCtrl-Outcome` header containing the rule outcome (pass/fail/error).
 
 Response templates have access to:
 
 - `raw` - immutable request snapshot.
-- `forward` - curated headers/query parameters.
-- `vars` - variables exported by rules.
-- `chain` - aggregate rule history (including decisive rule metadata).
+- `forward` - sanitized proxy headers (when `forwardProxyHeaders: true`).
+- `response` - variables exported by rules via `responses.<outcome>.variables`.
+- `auth.input` - matched credentials from the decisive rule.
+- `backend` - backend response from the decisive rule.
+- `endpoint` - endpoint name and correlation ID.
 
 ## Caching Hints
 

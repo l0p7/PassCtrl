@@ -27,23 +27,26 @@ endpoints:
         realm: "Internal"
         charset: "UTF-8"
     forwardRequestPolicy:
-      # Allow the admission snapshot to forward `X-Request-ID` downstream while keeping
-      # other headers stripped by default.
+      # Use null-copy semantics: null = copy from raw request, value = static/template
+      # To forward X-Request-ID from raw request:
       headers:
-        allow: ["x-request-id"]
-        strip: []
-        custom: {}
-      query:
-        allow: []
-        strip: []
-        custom: {}
+        x-request-id: null
+      query: {}
     rules:
       - name: require-basic-login
     responsePolicy:
       pass:
+        status: 200
         headers:
-          custom:
-            X-Auth-Result: "{{ .response.auth_result }}"
+          X-Auth-Result: "{{ .response.auth_result }}"
+          X-Auth-User: "{{ .response.username }}"
+          X-Auth-Role: "{{ .response.role }}"
+        body: |
+          {
+            "status": "authenticated",
+            "role": "{{ .response.role }}",
+            "endpoint": "{{ .endpoint }}"
+          }
       fail:
         status: 401
         body: |
@@ -52,8 +55,7 @@ endpoints:
             "endpoint": "{{ .endpoint }}"
           }
         headers:
-          custom:
-            X-Auth-Result: "{{ .response.auth_result }}"
+          X-Auth-Result: "{{ .response.auth_result }}"
       error:
         status: 500
         body: |
@@ -63,23 +65,27 @@ endpoints:
 
 rules:
   require-basic-login:
-    description: "Accepts known Basic credentials and denies everything else."
+    description: "Accepts known Basic credentials and validates username against allowed pattern."
     auth:
       - match:
           - type: basic
+            username: ["/^admin-.*/", "/^user-.*/"]  # Regex patterns: match admin-* or user-*
         forwardAs:
           - type: basic
             user: "{{ .auth.input.basic.user }}"
             password: "{{ .auth.input.basic.password }}"
+    variables:
+      user_prefix: "{{ .auth.input.basic.user | split \"-\" | first }}"
+      user_role: '{{ if hasPrefix "admin-" .auth.input.basic.user }}admin{{ else }}user{{ end }}'
     responses:
       pass:
         variables:
           auth_result: "authenticated"
+          username: variables.user_prefix
+          role: variables.user_role
       fail:
         variables:
           auth_result: "invalid credentials"
     cache:
-      ttl:
-        pass: "0s"
-        fail: "0s"
-        error: "0s"
+      passTTL: "0s"  # Disable caching for demo purposes
+      failTTL: "0s"

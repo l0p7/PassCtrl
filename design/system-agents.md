@@ -1,6 +1,6 @@
 # System Agents
 
-PassCtrl models the runtime as a collaboration between eight specialised agents. Each agent aligns with the building blocks
+PassCtrl models the runtime as a collaboration between nine specialised agents. Each agent aligns with the building blocks
 summarized in the main README and expanded upon in the `design/` documents. The sections below capture the contract, inputs,
 outputs, and operational concerns for each participant.
 
@@ -29,11 +29,11 @@ outputs, and operational concerns for each participant.
   - Validate configuration invariants (e.g., `rulesFolder` xor `rulesFile`) and surface errors before starting request handling.
 
 ## 2. Admission & Raw State Agent
-- **Purpose**: Authenticate the caller, enforce trusted proxy rules, and capture the immutable `rawState` snapshot before any
-  policy logic executes.
-- **Inputs**: Raw HTTP request, endpoint authentication posture, trusted proxy configuration.
-- **Outputs**: Auth result (`pass`/`fail`), credential attributes surfaced to templates as `.auth.input.*`, and the recorded
-  request snapshot available to downstream agents.
+- **Purpose**: Authenticate the caller, enforce trusted proxy rules, capture the immutable `rawState` snapshot, and render
+  complete 401 challenge responses for admission failures before any policy logic executes.
+- **Inputs**: Raw HTTP request, endpoint authentication posture, trusted proxy configuration, optional response customization config.
+- **Outputs**: Auth result (`pass`/`fail`), credential attributes surfaced to templates as `.auth.input.*`, the recorded
+  request snapshot available to downstream agents, and complete HTTP response for admission failures.
 - **Observability**: Persist the admission decision snapshot (outcome, reason, client metadata) so later agents and audit
   tooling can reconstruct why the request was accepted or denied.
 - **Key Behaviors**:
@@ -42,20 +42,42 @@ outputs, and operational concerns for each participant.
     sync across both representations before surfacing trusted client metadata.
   - Evaluate `authentication.allow` providers (basic, bearer, header, query, none), capture every credential that matches, and
     expose the full set to downstream rules while failing fast when no providers are satisfied.
-  - Emit a `WWW-Authenticate` response using the configured challenge when admission fails and a challenge is defined.
-  - Issue the configured failure response when admission fails, short-circuiting the rest of the pipeline.
-  - Emit structured telemetry identifying client metadata, authentication outcome, and proxy evaluation.
+  - **Render complete admission failure response** when `required: true` and credentials are missing:
+    - Set default 401 status and `WWW-Authenticate` header from `challenge` config (Basic, Bearer, or Digest)
+    - Apply optional `authentication.response` config overrides: custom status, additional headers, templated body
+    - Merge custom headers with challenge header (never replace `WWW-Authenticate`)
+    - Render body template if `body` or `bodyFile` configured, otherwise use default "authentication required" message
+  - **Short-circuit pipeline on admission failure**: return immediately after rendering response, skipping forward policy,
+    endpoint variables, rule chain, and response policy agents (performance optimization, prevents ~7 unnecessary agent executions)
+  - Emit structured telemetry identifying client metadata, authentication outcome, proxy evaluation, and short-circuit events.
 
 ## 3. Forward Request Policy Agent
-- **Purpose**: Curate which headers and query parameters rules and backends may see, preserving intent transparency.
-- **Inputs**: Admission snapshot (`rawState`), endpoint `forwardRequestPolicy` directives.
-- **Outputs**: Curated request view shared with every rule, plus the sanitized proxy metadata (`X-Forwarded-*` and RFC7239 `Forwarded`) when `forwardProxyHeaders` is enabled.
+- **Purpose**: Sanitize and forward proxy metadata headers when configured.
+- **Inputs**: Admission snapshot (`rawState`), endpoint `forwardRequestPolicy.forwardProxyHeaders` flag.
+- **Outputs**: Sanitized proxy metadata (`X-Forwarded-*` and RFC7239 `Forwarded`) stored in `state.Forward.Headers` when `forwardProxyHeaders` is enabled.
 - **Key Behaviors**:
-  - Apply allow/strip/custom directives with the documented template evaluation order.
-  - Persist the curated view for audit logs and rule variable extraction.
-  - Record its decisions so caching and response policy can prove which inputs influenced downstream outcomes.
+  - When `forwardProxyHeaders: true`, sanitize and forward `X-Forwarded-For`, `X-Forwarded-Proto`, `X-Forwarded-Host`, and `Forwarded` headers.
+  - Skip empty or whitespace-only values during sanitization.
+  - Normalize all header names to lowercase for consistent access.
+  - Header and query parameter selection for backends is handled directly by backend definitions using **null-copy semantics**: `nil` value copies from raw request, non-nil value uses static string or template expression.
 
-## 4. Rule Chain Agent
+## 4. Endpoint Variables Agent
+- **Purpose**: Evaluate endpoint-level variables once per request and make them available to all rules in the chain.
+- **Inputs**: Endpoint `variables` configuration (map of variable names to expressions), curated request view from Admission Agent.
+- **Outputs**: Evaluated variables stored in `state.Variables.Global` for access by all rules via `.endpoint.variables.*` template context.
+- **Key Behaviors**:
+  - Evaluate each endpoint variable using the **hybrid evaluator** which auto-detects expression type:
+    - **CEL expressions**: Used when expression does not contain `{{` template delimiters
+    - **Go templates**: Used when expression contains `{{` template syntax
+  - Build request context from admission state, exposing standard fields (headers, method, path, query parameters, client metadata) for both CEL and template evaluation.
+  - Continue evaluation on individual variable errors (fail-soft behavior): when a variable expression fails, log a warning, set that variable to empty string, and continue evaluating remaining variables.
+  - Store all evaluated variables in global scope (`state.Variables.Global`) before rule chain execution begins.
+  - Skip execution entirely when no endpoint variables are configured (returns `skipped` status).
+  - Emit debug logs with variable count on successful evaluation.
+- **Location**: `internal/runtime/endpointvars/`
+- **Observability**: Emits `agent: "endpoint_variables"` logs with variable counts and evaluation errors.
+
+## 5. Rule Chain Agent
 - **Purpose**: Orchestrate ordered rule execution, enforce short-circuit semantics, and manage exported variables.
 - **Inputs**: Curated request view, endpoint variables, exported variables from prior rules (including cache hits), endpoint rule list.
 - **Outputs**: Aggregate rule history, accumulated exported variables, final chain outcome (`Pass`, `Fail`, or `Error`).
@@ -64,7 +86,7 @@ outputs, and operational concerns for each participant.
   - Track per-rule latency, outcomes, exported variables, cache participation, and backend call summaries.
   - Accumulate exported variables from each rule (via `responses.<outcome>.variables`) and make them available to subsequent rules via `.rules.<ruleName>.variables.*`.
 
-## 5. Rule Execution Agent
+## 6. Rule Execution Agent
 - **Purpose**: Orchestrate an individual rule's evaluation from credential intake through condition evaluation and
   response assembly, delegating backend HTTP execution to the Backend Interaction Agent.
 - **Inputs**: Rule configuration, curated request view, scoped variables, optional cached decision hints.
@@ -93,7 +115,7 @@ outputs, and operational concerns for each participant.
     - **Local variables** (`variables`): Temporary calculations available only within the rule, not cached or exported
     - **Exported variables** (`responses.pass/fail/error.variables`): Shared with subsequent rules AND available to endpoint response templates. Cached with decision outcomes.
 
-## 6. Backend Interaction Agent
+## 7. Backend Interaction Agent
 - **Purpose**: Execute HTTP requests to backend APIs with pagination support, capturing responses and errors without evaluating policy logic.
 - **Inputs**: Fully-rendered backend request descriptor (`method`, `url`, `headers`, `query`, `body`), backend configuration (accepted statuses, pagination settings), pipeline state.
 - **Outputs**: Populated `state.Backend.*` fields including status, headers, body (parsed JSON when applicable), pagination results, and any execution errors.
@@ -108,7 +130,7 @@ outputs, and operational concerns for each participant.
   - Emit structured logs with `agent: "backend_interaction"` labels, tracking HTTP method, URL, status, latency, pagination metrics, and correlation IDs.
   - Never cache responses, evaluate conditions, or make policy decisions—purely responsible for reliable HTTP execution and response capture.
 
-## 7. Response Policy Agent
+## 8. Response Policy Agent
 - **Purpose**: Render the final `/auth` response (pass, fail, or error) using endpoint policy and variables explicitly exported by the decisive rule.
 - **Inputs**: Chain outcome (pass/fail/error), endpoint response policy configuration, exported variables from decisive rule.
 - **Outputs**: HTTP response for the caller, including status, headers, and body.
@@ -118,10 +140,11 @@ outputs, and operational concerns for each participant.
   - **Exported variables are available to endpoint templates**: Rules export variables via `responses.pass/fail/error.variables` blocks. These variables are shared with subsequent rules AND available to endpoint response templates via `.response.*` context.
   - **Local variables are NOT exposed**: Variables used for temporary calculations (`variables` block) remain internal to the rule and are not accessible to endpoints.
   - Render status, headers, and body using Go templates with access to: `.endpoint`, `.correlationId`, `.auth.input.*`, `.backend.*` (from decisive rule), `.response.*` (exported variables from decisive rule), and standard context fields.
-  - Apply header allow/strip/custom directives to control which headers from previous processing stages reach the client.
+  - Apply **null-copy semantics** for response headers: `nil` value copies from raw request headers, non-nil value uses static string or template expression. Empty template results are omitted from the response.
+  - Automatically add `X-PassCtrl-Outcome` header containing the rule outcome (pass/fail/error) when outcome is present.
   - Emit structured logs tying the response to the chain history and curated request view.
 
-## 8. Result Caching Agent
+## 9. Result Caching Agent
 - **Purpose**: Memoise rule and endpoint decisions while upholding strict invariants around error handling and payload storage.
 - **Inputs**: Rule/endpoint `cache` blocks, backend cache headers (when `followCacheControl` is true), decision artifacts.
 - **Outputs**: Cached pass/fail outcomes, reused variables, audit records noting cache hits or misses.

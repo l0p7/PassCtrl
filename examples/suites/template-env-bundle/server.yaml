@@ -16,11 +16,6 @@ server:
     templatesAllowedEnv:
       - "SUPPORT_EMAIL"
       - "UPSTREAM_BASE_URL"
-  cache:
-    backend: memory
-    ttlSeconds: 60
-    keySalt: "template-env-demo"
-    epoch: 1
 
 endpoints:
   env-aware-gateway:
@@ -35,14 +30,8 @@ endpoints:
         charset: "UTF-8"
     forwardRequestPolicy:
       headers:
-        allow: ["x-request-id"]
-        strip: []
-        custom:
-          x-upstream-base: "{{ env \"UPSTREAM_BASE_URL\" }}"
-      query:
-        allow: []
-        strip: []
-        custom: {}
+        x-request-id: null
+        x-upstream-base: "{{ env \"UPSTREAM_BASE_URL\" }}"
     rules:
       - name: require-authenticated-admission
     responsePolicy:
@@ -52,8 +41,7 @@ endpoints:
         status: 403
         bodyFile: "deny.json.tmpl"
         headers:
-          custom:
-            X-Support-Contact: "{{ .response.support_contact }}"
+          X-Support-Contact: "{{ .response.support_contact }}"
       error:
         status: 502
         body: |

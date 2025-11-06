@@ -40,10 +40,9 @@ The `backendApi` block renders outbound requests for the current rule. The curat
 | --- | --- | --- | --- |
 | `url` | Target endpoint for the backend call. Required when `backendApi` is present. | Determines backend destination. | None directly. |
 | `method` | HTTP method (`GET` default). | Defines request semantics. | None. |
-| `forwardProxyHeaders` | When `true`, replays sanitized proxy headers. | Preserves client `X-Forwarded-*` metadata. | None. |
-| `headers.allow` / `strip` | Allow or remove headers from the curated request. | Controls which incoming headers reach the backend. | Indirect: templates cannot access stripped headers. |
-| `headers.custom` | Synthesized headers rendered per request. | Adds new headers to backend calls (e.g., `X-Trace-ID`). | Template data used here can also be reused in response templates. |
-| `query.allow` / `strip` / `custom` | Same semantics for query parameters. | Controls which query parameters are sent upstream. | Indirect: curated query parameters shape template context. |
+| `forwardProxyHeaders` | When `true`, replays sanitized proxy headers from the forward policy agent. | Preserves client `X-Forwarded-*` metadata. | None. |
+| `headers` | Map using **null-copy semantics**: `nil` = copy from raw request, non-nil = static/template value. **Authorization headers forbidden**—use `auth.forwardAs` instead. | Controls which headers and values reach the backend. Headers are normalized to lowercase. | Header values can be referenced in response templates. |
+| `query` | Map using **null-copy semantics**: `nil` = copy from raw request, non-nil = static/template value. | Controls which query parameters are sent upstream. | Query values can be referenced in response templates. |
 | `body` | Inline Go template rendered per page (when paginating). | Controls backend payload; can include values from `forward`, `vars`, or previous backend responses. | None directly, though backend responses may change rule outcome. |
 | `bodyFile` | Path template resolved inside the template sandbox. Renders file contents before sending upstream. | Same as `body`; enables reuse across rules. | None. |
 | `acceptedStatuses` | List of HTTP status codes treated as success (default: 2xx). | Controls when pagination or downstream evaluation continues. | Failures trigger rule `fail` or `error` evaluation, influencing caller responses. |

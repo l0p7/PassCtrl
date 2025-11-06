@@ -83,6 +83,58 @@ endpoints:
         type: bearer                   # optional — basic|bearer (controls header syntax)
         realm: ""                      # optional — realm advertised to clients
         charset: "UTF-8"               # optional — only valid for basic challenges
+      response:                        # optional — customize admission failure responses (401)
+        status: 401                    # optional — override default 401 status
+        headers:                       # optional — additional headers merged with WWW-Authenticate
+          retry-after: "120"           # e.g., rate limiting hint
+          x-auth-hint: "Bearer token required"
+        body: |                        # optional — inline template for response body
+          {"error": "authentication_required", "hint": "POST /login"}
+        bodyFile: "templates/401.json" # optional — template file (alternative to inline body)
+
+### Admission Response Customization (`authentication.response`)
+
+The optional `response` block customizes the HTTP response rendered when admission fails (credentials missing and `required: true`).
+Admission failures **short-circuit the pipeline**, skipping forward policy, endpoint variables, rule chain, and response policy
+agents for performance (~7 agent executions avoided).
+
+**Default Behavior (without `response` config):**
+- Status: `401 Unauthorized`
+- Headers: `WWW-Authenticate` from `challenge` config (e.g., `Basic realm="api"`)
+- Body: `"authentication required"`
+
+**Custom Behavior (with `response` config):**
+```yaml
+authentication:
+  required: true
+  challenge:
+    type: basic
+    realm: "api"
+  response:
+    status: 401              # Optional override (default 401)
+    headers:                 # Merged with WWW-Authenticate (never replaced)
+      retry-after: "120"
+      x-auth-hint: "Use POST /login to obtain credentials"
+    body: |                  # Inline template (supports full pipeline state)
+      {
+        "error": "authentication_required",
+        "realm": "{{ .admission.challenge.realm }}",
+        "endpoint": "{{ .endpoint }}"
+      }
+    bodyFile: "401.json"     # Alternative: template file path
+```
+
+**Key Properties:**
+- **Headers merge**: Custom headers from `response.headers` are added to (not replacing) the `WWW-Authenticate` header
+- **Template support**: Both `body` and `bodyFile` support Go templates with Sprig helpers and full pipeline state context
+- **Fail-closed**: If template rendering fails, falls back to default "authentication required" message
+- **Backwards compatible**: Omitting `response` block maintains existing behavior
+
+**Use Cases:**
+- Custom error messages for different endpoint types (JSON API vs HTML web app)
+- Rate limiting hints (`Retry-After` header)
+- Redirect hints for browser-based flows
+- Localized error messages via template conditionals
 
 ### Anonymous Authentication (`none: true`)
 
@@ -124,14 +176,13 @@ This ensures that different users never share cache entries, preventing cache po
       developmentMode: false           # optional — strip instead of reject on untrusted peers
     forwardRequestPolicy:              # required — curates what rules/backends may see
       forwardProxyHeaders: false       # optional — expose sanitized X-Forwarded-* downstream
-      headers:
-        allow: []                      # optional — explicit allowlist from raw state
-        strip: []                      # optional — headers removed after admission
-        custom: {}                     # optional — synthesized headers exposed to rules (values rendered via templates)
-      query:
-        allow: []                      # optional — explicit allowlist of query parameters
-        strip: []                      # optional — query parameters removed post-admission
-        custom: {}                     # optional — synthesized query parameters (values rendered via templates)
+      headers:                         # optional — null-copy semantics: null = copy from raw, value = static/template
+        x-request-id: null             # copy from raw request (null-copy)
+        x-custom-header: "static"      # static value
+        x-templated: "{{ .raw.headers.authorization }}"  # template value
+      query:                           # optional — null-copy semantics: null = copy from raw, value = static/template
+        page: null                     # copy from raw request (null-copy)
+        limit: "100"                   # static value override
     rules:                             # required — ordered evaluation list
       - name: rule-a                   # required per entry — references `rules.rule-a`
     responsePolicy:                    # optional — defaults to forward-auth statuses
@@ -139,29 +190,80 @@ This ensures that different users never share cache entries, preventing cache po
         status: 200                    # optional — override default HTTP 200
         body: ""                       # optional — templated body for `/auth`
         bodyFile: ""                   # optional — render body from template file
-        headers:
-          allow: []                    # optional — copy from curated request/rule variables and backend defaults
-          strip: []                    # optional — suppress inherited or backend headers
-          custom: {}                   # optional — synthetic headers layered on backend defaults (values rendered via templates)
+        headers:                       # optional — null-copy semantics: null = copy from raw, value = static/template
+          x-request-id: null           # copy from raw request (null-copy)
+          x-auth-status: "success"     # static value
+          x-user-id: "{{ .response.user_id }}"  # template from response variables
       fail:                            # optional — when any rule returns `Fail`
-        status: 401                    # optional — override default 401/403
+        status: 403                    # optional — override default 403
         body: ""                       # optional — templated body for `/auth`
         bodyFile: ""                   # optional — render body from template file
-        headers:
-          allow: []                    # optional
-          strip: []                    # optional — suppress inherited or backend headers
-          custom: {}                   # optional — values rendered via templates
+        headers:                       # optional — null-copy semantics: null = copy from raw, value = static/template
+          x-auth-status: "denied"      # static value
       error:                           # optional — configuration or rule `Error`
-        status: 502                    # optional — override default 5xx
+        status: 502                    # optional — override default 502
         body: ""                       # optional — templated body for `/auth`
         bodyFile: ""                   # optional — render body from template file
-        headers:
-          allow: []                    # optional
-          strip: []                    # optional — suppress inherited or backend headers
-          custom: {}                   # optional — values may be templates/JMESPath
+        headers:                       # optional — null-copy semantics: null = copy from raw, value = static/template
+          x-error: "backend-unavailable"  # static error indicator
     cache:                             # optional — endpoint-level memoization controls
       resultTTL: 0s                    # optional — alias for cacheResultDuration
 ```
+
+### Null-Copy Header and Query Parameter Semantics
+
+PassCtrl uses **null-copy semantics** for headers and query parameters in three contexts:
+- `forwardRequestPolicy` (endpoint-level curation of what rules see)
+- `backendApi` (rule-level backend requests)
+- `responsePolicy` (endpoint-level response headers)
+
+**Semantics**:
+- `null` value — Copy from raw incoming request (null-copy)
+- Non-null value — Static string or template expression
+
+**Examples**:
+
+```yaml
+# Forward Request Policy - curate what rules see
+forwardRequestPolicy:
+  headers:
+    x-request-id: null              # Copy from client request
+    x-api-version: "v1"             # Static value
+    x-user-agent: "{{ .raw.headers.user-agent }}"  # Template
+  query:
+    page: null                      # Copy from client request
+    limit: "100"                    # Override with static value
+
+# Backend API - headers for backend requests
+backendApi:
+  headers:
+    x-trace-id: null                # Copy from curated request
+    content-type: "application/json"  # Static value
+    authorization: null             # DO NOT USE - use auth.forwardAs instead
+  query:
+    user_id: null                   # Copy from curated request
+    format: "json"                  # Static value
+
+# Response Policy - headers for client response
+responsePolicy:
+  pass:
+    headers:
+      x-request-id: null            # Echo back from raw request
+      x-auth-status: "success"      # Static value
+      x-user-id: "{{ .response.user_id }}"  # Template from response variables
+```
+
+**Key Behaviors**:
+- **Normalization**: All header names normalized to lowercase for consistent access
+- **Empty values**: Empty template results are omitted from output (not sent as empty strings)
+- **Missing keys**: Null-copy of missing header/query param silently omitted (no error)
+- **Security**: Authorization headers in `backendApi.headers` are rejected at config validation — use `auth.forwardAs` instead
+- **Template context**: Access raw request via `.raw.headers` and `.raw.query` in templates
+
+**Migration from allow/strip/custom**:
+- Old `allow: ["x-foo"]` → New `x-foo: null`
+- Old `custom: {x-bar: "value"}` → New `x-bar: "value"`
+- Strip behavior: Simply omit the header/query key (not in map = not forwarded)
 
 ## Rule Object
 
@@ -232,14 +334,13 @@ rules:
       url: "https://api.example"       # required when backendApi is present
       method: GET                      # optional — default GET
       forwardProxyHeaders: false       # optional — reuse sanitized proxy headers
-      headers:
-        allow: []                      # optional — headers from curated request (literal names, trimmed and lower-case)
-        strip: []                      # optional — suppress specific headers
-        custom: {}                     # optional — synthesized headers for backend (values rendered via templates)
-      query:
-        allow: []                      # optional — query parameters to forward (literal names, trimmed and lower-case)
-        strip: []                      # optional — suppress specific parameters
-        custom: {}                     # optional — synthesized query parameters (values rendered via templates)
+      headers:                         # optional — null-copy semantics: null = copy from raw, value = static/template
+        x-request-id: null             # copy from raw request (null-copy)
+        content-type: "application/json"  # static value
+        x-api-key: "{{ .auth.input.bearer.token }}"  # template value (DO NOT use for Authorization - use auth.forwardAs)
+      query:                           # optional — null-copy semantics: null = copy from raw, value = static/template
+        user_id: null                  # copy from raw request (null-copy)
+        limit: "50"                    # static value
       body: ""                         # optional — templated request body (per page when paginating)
       bodyFile: ""                     # optional — templated path to a body template file (rendered per request)
       acceptedStatuses: [200]          # optional — success codes (default 2xx)

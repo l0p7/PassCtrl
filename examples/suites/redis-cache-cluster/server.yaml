@@ -13,16 +13,3 @@ server:
   templates:
     templatesFolder: "./examples/suites/redis-cache-cluster/templates"
     templatesAllowEnv: false
-  cache:
-    backend: redis
-    ttlSeconds: 300
-    keySalt: "cluster-demo"
-    epoch: 5
-    redis:
-      address: "redis:6379"
-      username: ""
-      password: ""
-      db: 0
-      tls:
-        enabled: false
-        caFile: ""
