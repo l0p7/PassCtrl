@@ -1042,7 +1042,7 @@ func buildRuleVariablesSpec(cfg config.RuleVariablesConfig) rulechain.VariablesS
 
 func buildRuleCacheSpec(cfg config.RuleCacheConfig) rulechain.CacheConfigSpec {
 	return rulechain.CacheConfigSpec{
-		FollowCacheControl:  cfg.FollowCacheControl,
+		FollowCacheControl: cfg.FollowCacheControl,
 		TTL: rulechain.CacheTTLSpec{
 			Pass:  cfg.TTL.Pass,
 			Fail:  cfg.TTL.Fail,

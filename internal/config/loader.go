@@ -218,7 +218,7 @@ func loadSecrets(secretsConfig map[string]*string) (map[string]string, error) {
 		}
 
 		secretPath := fmt.Sprintf("%s/%s", secretsDir, filename)
-		content, err := os.ReadFile(secretPath)
+		content, err := os.ReadFile(secretPath) // #nosec G304 -- reading Docker secrets from /run/secrets with configured filenames
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				return nil, fmt.Errorf("secret file %q not found (referenced by server.variables.secrets.%s)", secretPath, key)

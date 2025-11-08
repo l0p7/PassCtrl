@@ -244,7 +244,7 @@ func TestLoadSecrets(t *testing.T) {
 	// Create a temporary directory to mock /run/secrets
 	tempDir := t.TempDir()
 	secretsDir := filepath.Join(tempDir, "run", "secrets")
-	require.NoError(t, os.MkdirAll(secretsDir, 0o755))
+	require.NoError(t, os.MkdirAll(secretsDir, 0o750))
 
 	// Write test secret files
 	require.NoError(t, os.WriteFile(filepath.Join(secretsDir, "db_password"), []byte("password123\n"), 0o600))
@@ -270,7 +270,7 @@ func TestLoadSecrets(t *testing.T) {
 			}
 
 			secretFile := filepath.Join(secretsPath, filename)
-			content, err := os.ReadFile(secretFile)
+			content, err := os.ReadFile(secretFile) // #nosec G304 -- test code mimics production secret reading
 			if err != nil {
 				if errors.Is(err, os.ErrNotExist) {
 					return nil, fmt.Errorf("secret file %q not found (referenced by server.variables.secrets.%s)", secretFile, key)

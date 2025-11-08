@@ -572,8 +572,8 @@ func TestPerRuleCaching_IncludeProxyHeaders_DefaultTrue(t *testing.T) {
 		{
 			Name: "test-rule",
 			Backend: rulechain.BackendDefinitionSpec{
-				URL:      server.URL,
-				Method:   "GET",
+				URL:    server.URL,
+				Method: "GET",
 				Headers: map[string]*string{
 					"X-Forwarded-For": ptrString("10.0.0.1"), // Static value for first test
 				},
@@ -605,8 +605,8 @@ func TestPerRuleCaching_IncludeProxyHeaders_DefaultTrue(t *testing.T) {
 		{
 			Name: "test-rule",
 			Backend: rulechain.BackendDefinitionSpec{
-				URL:      server.URL,
-				Method:   "GET",
+				URL:    server.URL,
+				Method: "GET",
 				Headers: map[string]*string{
 					"X-Forwarded-For": ptrString("10.0.0.2"), // Different value
 				},
