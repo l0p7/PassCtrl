@@ -176,12 +176,12 @@ This ensures that different users never share cache entries, preventing cache po
       developmentMode: false           # optional — strip instead of reject on untrusted peers
     forwardRequestPolicy:              # required — curates what rules/backends may see
       forwardProxyHeaders: false       # optional — expose sanitized X-Forwarded-* downstream
-      headers:                         # optional — null-copy semantics: null = copy from raw, value = static/template
-        x-request-id: null             # copy from raw request (null-copy)
+      headers:                         # optional — null-copy semantics: null = copy from request, value = static/template
+        x-request-id: null             # copy from request (null-copy)
         x-custom-header: "static"      # static value
-        x-templated: "{{ .raw.headers.authorization }}"  # template value
-      query:                           # optional — null-copy semantics: null = copy from raw, value = static/template
-        page: null                     # copy from raw request (null-copy)
+        x-templated: "{{ .request.headers.authorization }}"  # template value
+      query:                           # optional — null-copy semantics: null = copy from request, value = static/template
+        page: null                     # copy from request (null-copy)
         limit: "100"                   # static value override
     rules:                             # required — ordered evaluation list
       - name: rule-a                   # required per entry — references `rules.rule-a`
@@ -229,7 +229,7 @@ forwardRequestPolicy:
   headers:
     x-request-id: null              # Copy from client request
     x-api-version: "v1"             # Static value
-    x-user-agent: "{{ .raw.headers.user-agent }}"  # Template
+    x-user-agent: "{{ .request.headers.user-agent }}"  # Template
   query:
     page: null                      # Copy from client request
     limit: "100"                    # Override with static value
@@ -258,7 +258,7 @@ responsePolicy:
 - **Empty values**: Empty template results are omitted from output (not sent as empty strings)
 - **Missing keys**: Null-copy of missing header/query param silently omitted (no error)
 - **Security**: Authorization headers in `backendApi.headers` are rejected at config validation — use `auth.forwardAs` instead
-- **Template context**: Access raw request via `.raw.headers` and `.raw.query` in templates
+- **Template context**: Access incoming request via `.request.headers` and `.request.query` in templates
 
 **Migration from allow/strip/custom**:
 - Old `allow: ["x-foo"]` → New `x-foo: null`

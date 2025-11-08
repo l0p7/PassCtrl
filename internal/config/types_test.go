@@ -220,7 +220,7 @@ func TestConfigValidate(t *testing.T) {
 					URL:    "https://backend.example/verify",
 					Method: "POST",
 					Headers: map[string]*string{
-						"x-request-id": strPtr("{{ .raw.headers.x-request-id }}"),
+						"x-request-id": strPtr("{{ .request.headers.x-request-id }}"),
 						"content-type": strPtr("application/json"),
 					},
 				},

@@ -84,11 +84,15 @@ rules:
       acceptedStatuses: [200]
     conditions:
       pass:
-        - backend.status == 200 && lookup(backend.body, "active") == true
+        # Use has() for safe field access
+        - has(backend.body.active) && backend.body.active == true
       fail:
-        - backend.status == 200 && lookup(backend.body, "active") == false
+        # Explicit failure: session is not active
+        - has(backend.body.active) && backend.body.active == false
       error:
+        # Server errors and network failures
         - backend.status >= 500
+        - backend.status == 0
     variables:
       user_id: backend.body.userId
       tier: backend.body.tier
@@ -106,9 +110,12 @@ rules:
     description: "Denies requests from suspended or free-tier accounts."
     conditions:
       pass:
-        - 'lookup(lookup(variables.rule, "session-lookup"), "tier") in ["gold", "platinum"]'
+        # Check if session-lookup rule has exported variables
+        - '"session-lookup" in variables.rule'
+        - 'lookup(variables.rule["session-lookup"], "tier") in ["gold", "platinum"]'
       fail:
-        - 'lookup(lookup(variables.rule, "session-lookup"), "tier") in ["free", "suspended"]'
+        # Explicit failure: free or suspended tier
+        - 'lookup(variables.rule["session-lookup"], "tier") in ["free", "suspended"]'
     responses:
       fail:
         variables:
@@ -140,11 +147,15 @@ rules:
       acceptedStatuses: [200]
     conditions:
       pass:
-        - backend.status == 200 && lookup(backend.body, "valid") == true
+        # Use has() for safe field access
+        - has(backend.body.valid) && backend.body.valid == true
       fail:
-        - backend.status == 200 && lookup(backend.body, "valid") != true
+        # Explicit failure: token is not valid
+        - has(backend.body.valid) && backend.body.valid == false
       error:
+        # Server errors and network failures
         - backend.status >= 500
+        - backend.status == 0
     cache:
       passTTL: "0s"
       failTTL: "0s"

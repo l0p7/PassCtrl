@@ -43,9 +43,11 @@ rules:
       acceptedStatuses: [200, 404]
     conditions:
       pass:
-        - lookup(backend.body, "active") == true
+        # Use has() for safe field access
+        - has(backend.body.active) && backend.body.active == true
       fail:
-        - lookup(backend.body, "active") == false
+        # Explicit failure: profile is not active or not found
+        - has(backend.body.active) && backend.body.active == false
         - backend.status == 404
     variables:
       user_id: backend.body.id
@@ -64,9 +66,12 @@ rules:
     description: "Requires a paid subscription level before allowing access."
     conditions:
       pass:
-        - lookup(lookup(variables.rule, "fetch-profile"), "plan") in ["plus", "enterprise"]
+        # Check if fetch-profile rule has exported variables
+        - '"fetch-profile" in variables.rule'
+        - 'lookup(variables.rule["fetch-profile"], "plan") in ["plus", "enterprise"]'
       fail:
-        - lookup(lookup(variables.rule, "fetch-profile"), "plan") == "free"
+        # Explicit failure: free plan
+        - 'lookup(variables.rule["fetch-profile"], "plan") == "free"'
     responses:
       fail:
         variables:

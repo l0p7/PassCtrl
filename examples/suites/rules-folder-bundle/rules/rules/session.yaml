@@ -17,9 +17,11 @@ rules:
       acceptedStatuses: [200]
     conditions:
       pass:
-        - lookup(backend.body, "active") == true
+        # Use has() for safe field access
+        - has(backend.body.active) && backend.body.active == true
       fail:
-        - lookup(backend.body, "active") != true
+        # Explicit failure: session is not active
+        - has(backend.body.active) && backend.body.active == false
     variables:
       user_id: backend.body.userId
       tenant_id: backend.body.tenant
@@ -38,9 +40,12 @@ rules:
     description: "Allows requests only when the session advertises an allow entitlement."
     conditions:
       pass:
-        - lookup(lookup(variables.rule, "lookup-session"), "entitlement") == "allow"
+        # Check if session rule variables exist and validate entitlement
+        - '"lookup-session" in variables.rule'
+        - 'lookup(variables.rule["lookup-session"], "entitlement") == "allow"'
       fail:
-        - lookup(lookup(variables.rule, "lookup-session"), "entitlement") == "deny"
+        # Explicit failure: entitlement denied
+        - 'lookup(variables.rule["lookup-session"], "entitlement") == "deny"'
     responses:
       fail:
         variables:

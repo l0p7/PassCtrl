@@ -30,9 +30,9 @@ type ServerState struct {
 	ObservedAt    time.Time `json:"observedAt"`
 }
 
-// RawState preserves the inbound request snapshot for auditing and template
+// RequestState preserves the inbound request snapshot for auditing and template
 // evaluation.
-type RawState struct {
+type RequestState struct {
 	Method  string            `json:"method"`
 	Path    string            `json:"path"`
 	Host    string            `json:"host"`
@@ -159,7 +159,7 @@ type State struct {
 	CorrelationID string `json:"correlationId"`
 
 	Server    ServerState    `json:"server"`
-	Raw       RawState       `json:"rawState"`
+	Request   RequestState   `json:"request"`
 	Admission AdmissionState `json:"admission"`
 	Forward   ForwardState   `json:"forwardRequest"`
 	Rule      RuleState      `json:"rule"`
@@ -210,7 +210,7 @@ func NewState(r *http.Request, endpoint, cacheKey, correlationID string) *State 
 		cacheKey:      cacheKey,
 		Endpoint:      endpoint,
 		CorrelationID: correlationID,
-		Raw: RawState{
+		Request: RequestState{
 			Method:  r.Method,
 			Path:    r.URL.Path,
 			Host:    r.Host,
@@ -280,7 +280,7 @@ func (s *State) TemplateContext() map[string]any {
 		"endpoint":      s.Endpoint,
 		"correlationId": s.CorrelationID,
 		"server":        s.Server,
-		"raw":           s.Raw,
+		"request":       s.Request,
 		"admission":     s.Admission,
 		"forward":       s.Forward,
 		"rule":          s.Rule,

@@ -29,7 +29,7 @@ func TestPerRuleCaching_CacheHitSkipsBackend(t *testing.T) {
 
 	memCache := cache.NewMemory(5 * time.Minute)
 	backendAgent := newBackendInteractionAgent(&http.Client{}, nil)
-	agent := newRuleExecutionAgent(backendAgent, nil, templates.NewRenderer(nil), memCache, time.Hour, nil)
+	agent := newRuleExecutionAgent(backendAgent, nil, templates.NewRenderer(nil), memCache, time.Hour, nil, "")
 
 	defs, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{
 		{
@@ -83,7 +83,7 @@ func TestPerRuleCaching_CacheMissExecutesBackend(t *testing.T) {
 
 	memCache := cache.NewMemory(5 * time.Minute)
 	backendAgent := newBackendInteractionAgent(&http.Client{}, nil)
-	agent := newRuleExecutionAgent(backendAgent, nil, templates.NewRenderer(nil), memCache, time.Hour, nil)
+	agent := newRuleExecutionAgent(backendAgent, nil, templates.NewRenderer(nil), memCache, time.Hour, nil, "")
 
 	defs, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{
 		{
@@ -130,7 +130,7 @@ func TestPerRuleCaching_ExportedVariablesCachedAndRestored(t *testing.T) {
 	memCache := cache.NewMemory(5 * time.Minute)
 	renderer := templates.NewRenderer(nil)
 	backendAgent := newBackendInteractionAgent(&http.Client{}, nil)
-	agent := newRuleExecutionAgent(backendAgent, nil, renderer, memCache, time.Hour, nil)
+	agent := newRuleExecutionAgent(backendAgent, nil, renderer, memCache, time.Hour, nil, "")
 
 	defs, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{
 		{
@@ -199,7 +199,7 @@ func TestPerRuleCaching_StrictMode_UpstreamChangesInvalidate(t *testing.T) {
 
 	memCache := cache.NewMemory(5 * time.Minute)
 	backendAgent := newBackendInteractionAgent(&http.Client{}, nil)
-	agent := newRuleExecutionAgent(backendAgent, nil, templates.NewRenderer(nil), memCache, time.Hour, nil)
+	agent := newRuleExecutionAgent(backendAgent, nil, templates.NewRenderer(nil), memCache, time.Hour, nil, "")
 
 	strictTrue := true
 	defs, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{
@@ -255,7 +255,7 @@ func TestPerRuleCaching_LooseMode_UpstreamChangesDontInvalidate(t *testing.T) {
 
 	memCache := cache.NewMemory(5 * time.Minute)
 	backendAgent := newBackendInteractionAgent(&http.Client{}, nil)
-	agent := newRuleExecutionAgent(backendAgent, nil, templates.NewRenderer(nil), memCache, time.Hour, nil)
+	agent := newRuleExecutionAgent(backendAgent, nil, templates.NewRenderer(nil), memCache, time.Hour, nil, "")
 
 	strictFalse := false
 	defs, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{
@@ -304,7 +304,7 @@ func TestPerRuleCaching_LooseMode_UpstreamChangesDontInvalidate(t *testing.T) {
 func TestPerRuleCaching_OnlyRulesWithBackendAreCached(t *testing.T) {
 	memCache := cache.NewMemory(5 * time.Minute)
 	backendAgent := newBackendInteractionAgent(nil, nil)
-	agent := newRuleExecutionAgent(backendAgent, nil, templates.NewRenderer(nil), memCache, time.Hour, nil)
+	agent := newRuleExecutionAgent(backendAgent, nil, templates.NewRenderer(nil), memCache, time.Hour, nil, "")
 
 	defs, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{
 		{
@@ -341,7 +341,7 @@ func TestPerRuleCaching_DifferentBackendRequestsGenerateDifferentHashes(t *testi
 	memCache := cache.NewMemory(5 * time.Minute)
 	renderer := templates.NewRenderer(nil)
 	backendAgent := newBackendInteractionAgent(&http.Client{}, nil)
-	agent := newRuleExecutionAgent(backendAgent, nil, renderer, memCache, time.Hour, nil)
+	agent := newRuleExecutionAgent(backendAgent, nil, renderer, memCache, time.Hour, nil, "")
 
 	defs, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{
 		{
@@ -391,7 +391,7 @@ func TestPerRuleCaching_TTLRespected(t *testing.T) {
 
 	memCache := cache.NewMemory(5 * time.Minute)
 	backendAgent := newBackendInteractionAgent(&http.Client{}, nil)
-	agent := newRuleExecutionAgent(backendAgent, nil, templates.NewRenderer(nil), memCache, time.Hour, nil)
+	agent := newRuleExecutionAgent(backendAgent, nil, templates.NewRenderer(nil), memCache, time.Hour, nil, "")
 
 	defs, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{
 		{
@@ -451,7 +451,7 @@ func TestPerRuleCaching_FailOutcomeCached(t *testing.T) {
 
 	memCache := cache.NewMemory(5 * time.Minute)
 	backendAgent := newBackendInteractionAgent(&http.Client{}, nil)
-	agent := newRuleExecutionAgent(backendAgent, nil, templates.NewRenderer(nil), memCache, time.Hour, nil)
+	agent := newRuleExecutionAgent(backendAgent, nil, templates.NewRenderer(nil), memCache, time.Hour, nil, "")
 
 	defs, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{
 		{
@@ -503,7 +503,7 @@ func TestPerRuleCaching_ErrorOutcomeNeverCached(t *testing.T) {
 
 	memCache := cache.NewMemory(5 * time.Minute)
 	backendAgent := newBackendInteractionAgent(&http.Client{}, nil)
-	agent := newRuleExecutionAgent(backendAgent, nil, templates.NewRenderer(nil), memCache, time.Hour, nil)
+	agent := newRuleExecutionAgent(backendAgent, nil, templates.NewRenderer(nil), memCache, time.Hour, nil, "")
 
 	defs, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{
 		{

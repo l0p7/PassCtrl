@@ -70,10 +70,10 @@ rules:
       forwardProxyHeaders: true
       headers:
         content-type: "application/json"
-        x-request-id: null  # Copy from raw request
-        x-trace-id: "{{ .raw.headers.x-request-id }}"  # Template value
+        x-request-id: null  # Copy from request
+        x-trace-id: "{{ .request.headers.x-request-id }}"  # Template value
       query:
-        trace_id: null  # Copy from raw request
+        trace_id: null  # Copy from request
       body: |
         {
           "token": "{{ .auth.input.bearer.token }}"
@@ -81,11 +81,15 @@ rules:
       acceptedStatuses: [200]
     conditions:
       pass:
-        - backend.status == 200 && lookup(backend.body, "active") == true
+        # Use has() for safe field access
+        - has(backend.body.active) && backend.body.active == true
       fail:
-        - backend.status == 200 && lookup(backend.body, "active") == false
+        # Explicit failure: token is inactive
+        - has(backend.body.active) && backend.body.active == false
       error:
+        # Server errors and network failures
         - backend.status >= 500
+        - backend.status == 0
     variables:
       validated_token: backend.body.token
       subscription_plan: backend.body.plan
@@ -105,10 +109,14 @@ rules:
     description: "Ensures the identity API flagged the account as active."
     conditions:
       pass:
-        - 'lookup(lookup(variables.rule, "introspect-bearer-token"), "validated_token") != "" && lookup(lookup(variables.rule, "introspect-bearer-token"), "subscription_plan") in ["plus", "enterprise"]'
+        # Check if rule variables exist and validate subscription
+        - '"introspect-bearer-token" in variables.rule'
+        - 'lookup(variables.rule["introspect-bearer-token"], "validated_token") != ""'
+        - 'lookup(variables.rule["introspect-bearer-token"], "subscription_plan") in ["plus", "enterprise"]'
       fail:
-        - 'lookup(lookup(variables.rule, "introspect-bearer-token"), "subscription_plan") == "expired"'
-        - 'lookup(lookup(variables.rule, "introspect-bearer-token"), "validated_token") == ""'
+        # Explicit failure: expired subscription
+        - 'lookup(variables.rule["introspect-bearer-token"], "subscription_plan") == "expired"'
+        - 'lookup(variables.rule["introspect-bearer-token"], "validated_token") == ""'
     responses:
       fail:
         variables:

@@ -18,7 +18,7 @@ type Environment struct {
 // NewEnvironment declares the CEL variables exposed to rule conditions.
 func NewEnvironment() (*Environment, error) {
 	env, err := cel.NewEnv(
-		cel.Variable("raw", cel.MapType(cel.StringType, cel.DynType)),
+		cel.Variable("request", cel.MapType(cel.StringType, cel.DynType)),
 		cel.Variable("admission", cel.MapType(cel.StringType, cel.DynType)),
 		cel.Variable("forward", cel.MapType(cel.StringType, cel.DynType)),
 		cel.Variable("backend", cel.MapType(cel.StringType, cel.DynType)),

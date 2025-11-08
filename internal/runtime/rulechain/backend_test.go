@@ -72,12 +72,12 @@ func TestBuildBackendDefinitionAndSelection(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "https://api.example.com/resource?remove=1", http.NoBody)
 	state := &pipeline.State{}
-	state.Raw.Headers = map[string]string{
+	state.Request.Headers = map[string]string{
 		"x-auth":   "token",
 		"x-remove": "to-be-removed",
 		"x-custom": "ignore",
 	}
-	state.Raw.Query = map[string]string{
+	state.Request.Query = map[string]string{
 		"limit": "10",
 		"page":  "3",
 	}
@@ -127,12 +127,12 @@ func TestBackendDefinitionWithTemplates(t *testing.T) {
 		URL:    "https://api.example.com",
 		Method: "POST",
 		Headers: map[string]*string{
-			"Authorization": strPtr(`Bearer {{ index .raw.Headers "authorization" | replace "Basic " "" }}`),
-			"X-Trace-ID":    strPtr(`{{ index .raw.Headers "x-request-id" }}`),
+			"Authorization": strPtr(`Bearer {{ index .request.Headers "authorization" | replace "Basic " "" }}`),
+			"X-Trace-ID":    strPtr(`{{ index .request.Headers "x-request-id" }}`),
 		},
 		Query: map[string]*string{
-			"token": strPtr(`{{ index .raw.Headers "authorization" }}`),
-			"page":  strPtr(`{{ index .raw.Query "offset" | default "1" }}`),
+			"token": strPtr(`{{ index .request.Headers "authorization" }}`),
+			"page":  strPtr(`{{ index .request.Query "offset" | default "1" }}`),
 		},
 	}
 
@@ -181,10 +181,10 @@ func TestBackendDefinitionTemplatesHandleEmptyResults(t *testing.T) {
 	spec := BackendDefinitionSpec{
 		URL: "https://api.example.com",
 		Headers: map[string]*string{
-			"X-Missing": strPtr(`{{ index .raw.Headers "non-existent" }}`),
+			"X-Missing": strPtr(`{{ index .request.Headers "non-existent" }}`),
 		},
 		Query: map[string]*string{
-			"missing": strPtr(`{{ index .raw.Query "non-existent" }}`),
+			"missing": strPtr(`{{ index .request.Query "non-existent" }}`),
 		},
 	}
 

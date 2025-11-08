@@ -1,0 +1,182 @@
+rules:
+  # Standard token validation with moderate caching
+  validate-token:
+    description: Validate bearer token against auth service with 5-minute cache
+
+    # Forward bearer token to backend
+    auth:
+      - match:
+          - type: bearer
+        forwardAs:
+          - type: bearer
+            token: "{{ .auth.input.bearer.token }}"
+
+    # Call token validation backend
+    backendApi:
+      url: https://auth.example.com/api/validate
+      method: POST
+      headers:
+        content-type: "application/json"
+      acceptedStatuses: [200]
+
+    # Conditions based on backend response
+    conditions:
+      pass:
+        # Safe field access and validation
+        - has(backend.body.valid) && backend.body.valid == true
+
+        # Verify user fields exist
+        - has(backend.body.user_id) && backend.body.user_id != ""
+
+        # Check tier is valid (optional field)
+        - !has(backend.body.tier) || backend.body.tier in ["free", "plus", "enterprise"]
+      fail:
+        # Explicit failure: invalid token
+        - has(backend.body.valid) && backend.body.valid == false
+      error:
+        # Server errors
+        - backend.status >= 500
+        - backend.status == 0
+
+    # Export user metadata from successful validation
+    responses:
+      pass:
+        variables:
+          user_id: backend.body.user_id
+          email: backend.body.email
+          tier: backend.body.tier
+
+    # Cache configuration: 5 minutes for pass, 1 minute for fail
+    cache:
+      followCacheControl: false
+      ttl:
+        pass: "5m"   # Cache successful validations for 5 minutes
+        fail: "1m"   # Cache failed validations for 1 minute
+        error: "0s"  # Never cache errors
+
+  # Admin token validation with extended caching
+  check-admin-token:
+    description: Validate admin bearer token with 15-minute cache
+
+    auth:
+      - match:
+          - type: bearer
+            value: "/^admin-/"  # Only match tokens starting with "admin-"
+        forwardAs:
+          - type: bearer
+            token: "{{ .auth.input.bearer.token }}"
+
+    backendApi:
+      url: https://auth.example.com/api/validate-admin
+      method: POST
+      headers:
+        content-type: "application/json"
+      body: |
+        {
+          "token": "{{ .auth.forward.bearer.token }}",
+          "required_role": "admin"
+        }
+      acceptedStatuses: [200]
+
+    conditions:
+      pass:
+        # Verify admin status
+        - has(backend.body.is_admin) && backend.body.is_admin == true
+
+        # Optionally check admin level if present
+        - !has(backend.body.admin_level) || backend.body.admin_level >= 1
+
+        # Verify user is active
+        - !has(backend.body.active) || backend.body.active == true
+      fail:
+        # Not an admin
+        - has(backend.body.is_admin) && backend.body.is_admin == false
+
+        # Admin but level too low
+        - has(backend.body.is_admin) && backend.body.is_admin == true &&
+          has(backend.body.admin_level) && backend.body.admin_level < 1
+      error:
+        # Server errors
+        - backend.status >= 500
+        - backend.status == 0
+
+    responses:
+      pass:
+        variables:
+          user_id: backend.body.user_id
+          role: backend.body.role
+          permissions: backend.body.permissions
+
+    # Extended cache for admin tokens
+    cache:
+      followCacheControl: false
+      ttl:
+        pass: "15m"  # Cache admin validations for 15 minutes
+        fail: "30s"  # Cache failed admin checks for 30 seconds
+        error: "0s"
+
+  # Short-lived cache for rate-limited endpoints
+  rate-limited-check:
+    description: Quick validation with 30-second cache to reduce backend load
+
+    auth:
+      - match:
+          - type: bearer
+
+    backendApi:
+      url: https://auth.example.com/api/quick-check
+      method: GET
+      acceptedStatuses: [200]
+
+    conditions:
+      pass:
+        # Success status from backend
+        - backend.status >= 200 && backend.status < 300
+      error:
+        # Server errors
+        - backend.status >= 500
+        - backend.status == 0
+
+    # Short cache TTL for frequently changing state
+    cache:
+      followCacheControl: false
+      ttl:
+        pass: "30s"  # Very short cache for rapid state changes
+        fail: "10s"
+        error: "0s"
+
+  # Cache-control aware validation
+  dynamic-cache-token:
+    description: Token validation respecting backend Cache-Control headers
+
+    auth:
+      - match:
+          - type: bearer
+
+    backendApi:
+      url: https://auth.example.com/api/validate-dynamic
+      method: POST
+      acceptedStatuses: [200]
+
+    conditions:
+      pass:
+        # Backend returned success
+        - backend.status >= 200 && backend.status < 300
+
+        # Verify response has valid body structure
+        - has(backend.body.valid) && backend.body.valid == true
+      fail:
+        # Invalid token
+        - has(backend.body.valid) && backend.body.valid == false
+      error:
+        # Server errors
+        - backend.status >= 500
+        - backend.status == 0
+
+    # Follow backend's cache directives
+    cache:
+      followCacheControl: true  # Honor backend Cache-Control headers
+      ttl:
+        pass: "10m"  # Maximum cache duration (backend can shorten)
+        fail: "2m"   # Maximum fail cache
+        error: "0s"

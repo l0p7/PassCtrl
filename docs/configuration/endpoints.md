@@ -97,8 +97,8 @@ The forward request policy controls proxy header sanitization. Backend request h
 | `forwardProxyHeaders` | Boolean. When `true`, sanitizes and forwards `X-Forwarded-*` and RFC7239 `Forwarded` headers. | Preserves proxy metadata for upstream backend services. | None, unless response templates refer to forwarded headers. |
 
 **Backend Header/Query Configuration**: Rules define backend request headers and query parameters using **null-copy semantics**:
-- `nil` value — Copy from raw incoming request (e.g., `x-request-id: null`)
-- Non-nil value — Static string or Go template expression (e.g., `x-trace-id: "{{ .raw.headers.x-request-id }}"`)
+- `nil` value — Copy from incoming request (e.g., `x-request-id: null`)
+- Non-nil value — Static string or Go template expression (e.g., `x-trace-id: "{{ .request.headers.x-request-id }}"`)
 - **Missing keys**: Null-copy of missing header/query param is silently omitted (no error)
 - **Empty values**: Empty template results are omitted from output (not sent as empty strings)
 - **Authorization forbidden**: Authorization headers in `backendApi.headers` are rejected at config validation—use `auth.forwardAs` instead

@@ -61,7 +61,7 @@ endpoints:
         allow: ["x-request-id", "x-forwarded-for", "x-forwarded-proto"]
         strip: ["authorization"]
         custom:
-          x-trace-id: "{{ index .raw.headers \"x-request-id\" }}"
+          x-trace-id: "{{ index .request.headers \"x-request-id\" }}"
       query:
         allow: ["trace_id"]
         strip: []
@@ -140,7 +140,7 @@ rules:
 - **Upstream request**: Forwards the caller’s Bearer token in the JSON body only—no headers are replayed beyond those whitelisted in `forwardRequestPolicy`.
 - **Response shaping**: When `backend.body.active` is `false`, the fail response is rendered with status `403` and a templated JSON body drawn from the upstream payload.
 - **Caching**: Successful decisions persist for `120s`. Follow-up calls with the same token and curated headers reuse the cached response and skip the backend call. A fail decision is also cached for `120s`, so repeat failures return immediately.
-- **Variables**: `variables.global.validated_token` and `variables.global.subscription_plan` feed downstream rules and response templates so only paid subscribers receive pass responses.
+- **Variables**: `variables.endpoint.validated_token` and `variables.endpoint.subscription_plan` feed downstream rules and response templates so only paid subscribers receive pass responses.
 
 ## Runtime Agent Cheat Sheet
 

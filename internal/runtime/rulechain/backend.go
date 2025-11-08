@@ -237,7 +237,7 @@ func compileBackendHeaderMap(cfg map[string]*string, renderer *templates.Rendere
 // ApplyHeaders mutates the supplied request with the curated backend headers
 // and proxy forwarding metadata.
 func (b BackendDefinition) ApplyHeaders(req *http.Request, state *pipeline.State) {
-	headers := b.SelectHeaders(state.Raw.Headers, state)
+	headers := b.SelectHeaders(state.Request.Headers, state)
 	for name, value := range headers {
 		if strings.TrimSpace(value) == "" {
 			continue
@@ -261,7 +261,7 @@ func (b BackendDefinition) ApplyHeaders(req *http.Request, state *pipeline.State
 
 // ApplyQuery mutates the supplied request with the curated backend query parameters.
 func (b BackendDefinition) ApplyQuery(req *http.Request, state *pipeline.State) {
-	queries := b.SelectQuery(state.Raw.Query, state)
+	queries := b.SelectQuery(state.Request.Query, state)
 	if len(queries) == 0 {
 		return
 	}

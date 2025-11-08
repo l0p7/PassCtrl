@@ -1,0 +1,88 @@
+server:
+  listen:
+    address: 0.0.0.0
+    port: 8080
+
+  logging:
+    level: info
+    format: json
+    correlationHeader: x-request-id
+
+  rules:
+    rulesFolder: /app/rules
+
+  # Valkey (Redis-compatible) cache configuration
+  cache:
+    backend: redis
+    ttlSeconds: 300  # Default TTL: 5 minutes
+    keySalt: example-salt-change-in-production
+    epoch: 1  # Increment to invalidate all cached entries
+    redis:
+      address: valkey:6379
+      db: 0
+      # Optional authentication (uncomment if needed)
+      # username: default
+      # password: your-password
+      # tls:
+      #   enabled: false
+      #   caFile: /path/to/ca.pem
+
+# Example endpoints demonstrating cache usage
+endpoints:
+  # API endpoint with cached token validation
+  api:
+    description: API endpoint with Valkey-cached token validation
+
+    authentication:
+      required: true
+      allow:
+        authorization: [bearer]
+      challenge:
+        type: bearer
+        realm: api
+
+    forwardRequestPolicy:
+      forwardProxyHeaders: false
+
+    rules:
+      - name: validate-token
+
+    responsePolicy:
+      pass:
+        status: 200
+        headers:
+          x-auth-status: "authenticated"
+      fail:
+        status: 403
+        body: '{"error": "forbidden"}'
+      error:
+        status: 502
+        body: '{"error": "backend_unavailable"}'
+
+  # Admin endpoint with aggressive caching
+  admin:
+    description: Admin endpoint with extended cache TTL
+
+    authentication:
+      required: true
+      allow:
+        authorization: [bearer]
+      challenge:
+        type: bearer
+        realm: admin
+
+    forwardRequestPolicy:
+      forwardProxyHeaders: false
+
+    rules:
+      - name: check-admin-token
+
+    responsePolicy:
+      pass:
+        status: 200
+        headers:
+          x-auth-status: "admin"
+          x-user-role: "{{ .response.role }}"
+      fail:
+        status: 403
+        body: '{"error": "admin_access_required"}'

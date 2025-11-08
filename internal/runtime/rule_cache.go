@@ -55,13 +55,62 @@ func buildRuleCacheKey(
 
 // buildBackendHash computes the hash of a rendered backend request for cache key generation.
 // The descriptor should contain the fully-rendered request components (URL, headers, body).
+// Session-specific headers (correlation, tracing, proxy, timing) are excluded from the hash
+// to enable caching across requests with different session metadata.
 // Returns empty string if descriptor has no URL (indicating no backend configured).
-func buildBackendHash(descriptor cache.BackendDescriptor) string {
+func buildBackendHash(descriptor cache.BackendDescriptor, correlationHeader string) string {
 	if descriptor.URL == "" {
 		return ""
 	}
 
-	return descriptor.Hash()
+	// Build list of headers to exclude from cache key
+	// These are session-specific headers that should not affect cache decisions
+	excludeHeaders := []string{
+		// Forward proxy headers (RFC 7239 and X-Forwarded-* conventions)
+		// These contain client IP, proxy chain, and routing metadata unique per request
+		"forwarded",
+		"x-forwarded-for",
+		"x-forwarded-host",
+		"x-forwarded-proto",
+		"x-forwarded-port",
+		"x-forwarded-prefix",
+		"x-real-ip",
+		"x-original-forwarded-for",
+		"true-client-ip",
+
+		// Distributed tracing headers (W3C Trace Context, Zipkin B3, cloud providers)
+		// These track request propagation through distributed systems
+		"traceparent",
+		"tracestate",
+		"x-b3-traceid",
+		"x-b3-spanid",
+		"x-b3-parentspanid",
+		"x-b3-sampled",
+		"x-b3-flags",
+		"x-cloud-trace-context",
+		"x-amzn-trace-id",
+		"uber-trace-id",
+
+		// Request timing and telemetry headers
+		// These contain request start times and performance metrics
+		"x-request-start",
+		"x-timer",
+
+		// CDN and edge metadata
+		// These contain CDN-specific routing and identification data
+		"cf-ray",
+		"cf-connecting-ip",
+		"cf-ipcountry",
+		"cf-visitor",
+	}
+
+	// Add correlation header if configured
+	// This allows custom correlation headers beyond the common patterns
+	if correlationHeader != "" {
+		excludeHeaders = append(excludeHeaders, correlationHeader)
+	}
+
+	return descriptor.Hash(excludeHeaders...)
 }
 
 // buildUpstreamVarsHash computes the hash of all upstream exported variables.

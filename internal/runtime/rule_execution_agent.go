@@ -55,16 +55,17 @@ type renderedBackendRequest struct {
 }
 
 type ruleExecutionAgent struct {
-	backendAgent  *backendInteractionAgent // Backend HTTP execution agent
-	logger        *slog.Logger
-	renderer      *templates.Renderer
-	ruleEvaluator *expr.HybridEvaluator
-	cacheBackend  cache.DecisionCache // Per-rule caching backend
-	serverMaxTTL  time.Duration       // Server-level TTL ceiling
-	metrics       metrics.Recorder    // Metrics recorder for cache operations
+	backendAgent      *backendInteractionAgent // Backend HTTP execution agent
+	logger            *slog.Logger
+	renderer          *templates.Renderer
+	ruleEvaluator     *expr.HybridEvaluator
+	cacheBackend      cache.DecisionCache // Per-rule caching backend
+	serverMaxTTL      time.Duration       // Server-level TTL ceiling
+	metrics           metrics.Recorder    // Metrics recorder for cache operations
+	correlationHeader string              // Correlation header to exclude from cache keys
 }
 
-func newRuleExecutionAgent(backendAgent *backendInteractionAgent, logger *slog.Logger, renderer *templates.Renderer, cacheBackend cache.DecisionCache, serverMaxTTL time.Duration, metricsRecorder metrics.Recorder) *ruleExecutionAgent {
+func newRuleExecutionAgent(backendAgent *backendInteractionAgent, logger *slog.Logger, renderer *templates.Renderer, cacheBackend cache.DecisionCache, serverMaxTTL time.Duration, metricsRecorder metrics.Recorder, correlationHeader string) *ruleExecutionAgent {
 	// Create hybrid evaluator for rule local variables
 	ruleEvaluator, err := expr.NewRuleHybridEvaluator(renderer)
 	if err != nil {
@@ -74,13 +75,14 @@ func newRuleExecutionAgent(backendAgent *backendInteractionAgent, logger *slog.L
 		}
 	}
 	return &ruleExecutionAgent{
-		backendAgent:  backendAgent,
-		logger:        logger,
-		renderer:      renderer,
-		ruleEvaluator: ruleEvaluator,
-		cacheBackend:  cacheBackend,
-		serverMaxTTL:  serverMaxTTL,
-		metrics:       metricsRecorder,
+		backendAgent:      backendAgent,
+		logger:            logger,
+		renderer:          renderer,
+		ruleEvaluator:     ruleEvaluator,
+		cacheBackend:      cacheBackend,
+		serverMaxTTL:      serverMaxTTL,
+		metrics:           metricsRecorder,
+		correlationHeader: correlationHeader,
 	}
 }
 
@@ -323,7 +325,7 @@ func (a *ruleExecutionAgent) checkRuleCache(ctx context.Context, def rulechain.D
 		Headers: rendered.Headers,
 		Body:    rendered.Body,
 	}
-	backendHash := buildBackendHash(descriptor)
+	backendHash := buildBackendHash(descriptor, a.correlationHeader)
 
 	// Determine if strict mode is enabled
 	strict := true
@@ -392,7 +394,7 @@ func (a *ruleExecutionAgent) storeRuleCache(ctx context.Context, def rulechain.D
 		Headers: rendered.Headers,
 		Body:    rendered.Body,
 	}
-	backendHash := buildBackendHash(descriptor)
+	backendHash := buildBackendHash(descriptor, a.correlationHeader)
 
 	strict := true
 	if def.Cache.Strict != nil {
@@ -494,7 +496,7 @@ func (a *ruleExecutionAgent) renderBackendRequest(
 	}
 
 	// Select headers
-	headers := backend.SelectHeaders(state.Raw.Headers, state)
+	headers := backend.SelectHeaders(state.Request.Headers, state)
 
 	// Add proxy headers from Forward state when enabled
 	if backend.ForwardProxyHeaders {
@@ -513,7 +515,7 @@ func (a *ruleExecutionAgent) renderBackendRequest(
 	}
 
 	// Select query parameters
-	query := backend.SelectQuery(state.Raw.Query, state)
+	query := backend.SelectQuery(state.Request.Query, state)
 
 	// Apply auth selection (multiple forwards)
 	if authSel != nil {
@@ -996,12 +998,12 @@ func evaluateProgramList(programs []expr.Program, activation map[string]any, req
 
 func buildActivation(state *pipeline.State) map[string]any {
 	activation := map[string]any{
-		"raw": map[string]any{
-			"method":  state.Raw.Method,
-			"path":    state.Raw.Path,
-			"host":    state.Raw.Host,
-			"headers": toAnyMap(state.Raw.Headers),
-			"query":   toAnyMap(state.Raw.Query),
+		"request": map[string]any{
+			"method":  state.Request.Method,
+			"path":    state.Request.Path,
+			"host":    state.Request.Host,
+			"headers": toAnyMap(state.Request.Headers),
+			"query":   toAnyMap(state.Request.Query),
 		},
 		"admission": map[string]any{
 			"authenticated": state.Admission.Authenticated,
@@ -1165,11 +1167,11 @@ func buildRuleContext(state *pipeline.State) map[string]any {
 
 	// Build request context
 	request := map[string]any{
-		"method":  state.Raw.Method,
-		"path":    state.Raw.Path,
-		"host":    state.Raw.Host,
-		"headers": toAnyMap(state.Raw.Headers),
-		"query":   toAnyMap(state.Raw.Query),
+		"method":  state.Request.Method,
+		"path":    state.Request.Path,
+		"host":    state.Request.Host,
+		"headers": toAnyMap(state.Request.Headers),
+		"query":   toAnyMap(state.Request.Query),
 	}
 
 	// Variables context - hybrid structure for maximum flexibility:

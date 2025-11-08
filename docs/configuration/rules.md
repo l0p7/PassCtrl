@@ -66,7 +66,7 @@ CEL expressions evaluate against a rich activation so you can interrogate admiss
 
 | Key | Description | Example Usage |
 | --- | --- | --- |
-| `raw` | Immutable snapshot of the inbound request (`method`, `path`, `host`, `headers`, `query`). | `raw.method == "GET"` |
+| `request` | Immutable snapshot of the inbound request (`method`, `path`, `host`, `headers`, `query`). | `request.method == "GET"` |
 | `admission` | Outcome from the admission agent (`authenticated`, `decision`, `clientIp`, `trustedProxy`). | `admission.decision == "pass"` |
 | `forward` | Curated headers and query parameters after the forward request policy runs. | `lookup(forward.headers, "x-session-token") != ""` |
 | `backend` | Summary of the latest backend call (`status`, `headers`, `body`, `bodyText`). | `backend.status == 200` |
@@ -129,13 +129,13 @@ Rules project structured data into named scopes via the `variables` block.
 
 | Scope | Description | Upstream Impact | Caller Response Impact |
 | --- | --- | --- | --- |
-| `variables.global` | Persist across the endpoint execution (and cached entries). | Affects downstream rules and future cached responses. | Values appear in response templates and `/explain`. |
-| `variables.rule` | Scoped to this rule’s execution. | Available to later rules in the same chain during the same request. | Exposed to templating if this rule is decisive. |
-| `variables.local` | Cleared after each rule execution (per page when paginating). | Useful for intermediate computations without leaking across rules. | Not visible to responses unless copied into `global` or `rule`. |
+| `variables.endpoint` | Persist across the endpoint execution (and cached entries). | Affects downstream rules and future cached responses. | Values appear in response templates and `/explain`. |
+| `variables.rule` | Scoped to this rule's execution. | Available to later rules in the same chain during the same request. | Exposed to templating if this rule is decisive. |
+| `variables.local` | Cleared after each rule execution (per page when paginating). | Useful for intermediate computations without leaking across rules. | Not visible to responses unless copied into `endpoint` or `rule`. |
 
-When evaluating templates, previously exported rule variables are also available under `rules.<ruleName>.variables.<key>`, allowing later rules and response policies to reference scoped data without promoting it to the global namespace.
+When evaluating templates, previously exported rule variables are also available under `rules.<ruleName>.variables.<key>`, allowing later rules and response policies to reference scoped data without promoting it to the endpoint namespace.
 
-Each variable maps a key to a CEL expression via `from`. Example: `variables.global.user_id.from: backend.body.user.id`.
+Each variable maps a key to a CEL expression via `from`. Example: `variables.endpoint.user_id.from: backend.body.user.id`.
 
 > Example: `examples/configs/cached-multi-endpoint.yaml` exports `tier` and `user_id` so later rules and response templates can reference the curated values.
 

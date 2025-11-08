@@ -1,0 +1,78 @@
+version: '3.8'
+
+services:
+  # Valkey cache backend (Redis-compatible in-memory data store)
+  valkey:
+    image: valkey/valkey:7.2-alpine
+    container_name: passctrl-valkey
+    restart: unless-stopped
+    command: >
+      valkey-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    volumes:
+      - valkey-data:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - passctrl-network
+
+  # PassCtrl forward-auth service with Valkey cache backend
+  passctrl:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    image: passctrl:latest
+    container_name: passctrl
+    restart: unless-stopped
+    depends_on:
+      valkey:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      # Server config
+      - PASSCTRL_SERVER__LISTEN__PORT=8080
+      - PASSCTRL_SERVER__LISTEN__ADDRESS=0.0.0.0
+
+      # Logging config
+      - PASSCTRL_SERVER__LOGGING__LEVEL=info
+      - PASSCTRL_SERVER__LOGGING__FORMAT=json
+      - PASSCTRL_SERVER__LOGGING__CORRELATIONHEADER=x-request-id
+
+      # Rules config
+      - PASSCTRL_SERVER__RULES__RULESFOLDER=/app/rules
+
+      # Cache config - Valkey backend
+      - PASSCTRL_SERVER__CACHE__BACKEND=redis
+      - PASSCTRL_SERVER__CACHE__REDIS__ADDRESS=valkey:6379
+      - PASSCTRL_SERVER__CACHE__REDIS__DB=0
+      - PASSCTRL_SERVER__CACHE__TTLSECONDS=300
+      - PASSCTRL_SERVER__CACHE__KEYSALT=example-salt-change-in-production
+      - PASSCTRL_SERVER__CACHE__EPOCH=1
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./rules:/app/rules:ro
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    networks:
+      - passctrl-network
+
+volumes:
+  valkey-data:
+    driver: local
+
+networks:
+  passctrl-network:
+    driver: bridge

@@ -145,11 +145,11 @@ func (p *Pipeline) logDebugRequestSnapshot(r *http.Request, logger *slog.Logger,
 	}
 
 	attrs := []slog.Attr{
-		slog.String("method", state.Raw.Method),
-		slog.String("path", state.Raw.Path),
+		slog.String("method", state.Request.Method),
+		slog.String("path", state.Request.Path),
 	}
-	if state.Raw.Host != "" {
-		attrs = append(attrs, slog.String("host", state.Raw.Host))
+	if state.Request.Host != "" {
+		attrs = append(attrs, slog.String("host", state.Request.Host))
 	}
 	if remote := strings.TrimSpace(r.RemoteAddr); remote != "" {
 		attrs = append(attrs, slog.String("remote_addr", remote))
@@ -161,13 +161,13 @@ func (p *Pipeline) logDebugRequestSnapshot(r *http.Request, logger *slog.Logger,
 		attrs = append(attrs, slog.String("forwarded", forwarded))
 	}
 	attrs = append(attrs,
-		slog.Int("header_count", len(state.Raw.Headers)),
-		slog.Int("query_count", len(state.Raw.Query)),
+		slog.Int("header_count", len(state.Request.Headers)),
+		slog.Int("query_count", len(state.Request.Query)),
 	)
-	if _, ok := state.Raw.Headers["authorization"]; ok {
+	if _, ok := state.Request.Headers["authorization"]; ok {
 		attrs = append(attrs, slog.Bool("authorization_present", true))
 	}
-	if _, ok := state.Raw.Headers["cookie"]; ok {
+	if _, ok := state.Request.Headers["cookie"]; ok {
 		attrs = append(attrs, slog.Bool("cookie_present", true))
 	}
 
@@ -661,7 +661,7 @@ func (p *Pipeline) installFallbackEndpoint() {
 		admission.New(trusted, false, defaultAuthConfig),
 		fwdPolicy,
 		rulechain.NewAgent(rulechain.DefaultDefinitions(p.templateRenderer)),
-		newRuleExecutionAgent(backendAgent, ruleExecutionLogger, p.templateRenderer, p.cache, p.cacheTTL, p.metrics),
+		newRuleExecutionAgent(backendAgent, ruleExecutionLogger, p.templateRenderer, p.cache, p.cacheTTL, p.metrics, p.correlationHeader),
 		responsepolicy.NewWithConfig(responsepolicy.Config{Endpoint: "default", Renderer: p.templateRenderer}),
 	}
 	runtime := &endpointRuntime{
@@ -765,7 +765,7 @@ func (p *Pipeline) buildEndpointRuntime(name string, cfg config.EndpointConfig, 
 
 	agents = append(agents,
 		rulechain.NewAgent(ruleDefs),
-		newRuleExecutionAgent(backendAgent, p.logger.With(slog.String("agent", "rule_execution"), slog.String("endpoint", trimmed)), p.templateRenderer, p.cache, p.cacheTTL, p.metrics),
+		newRuleExecutionAgent(backendAgent, p.logger.With(slog.String("agent", "rule_execution"), slog.String("endpoint", trimmed)), p.templateRenderer, p.cache, p.cacheTTL, p.metrics, p.correlationHeader),
 		responsepolicy.NewWithConfig(responsepolicy.Config{
 			Endpoint: trimmed,
 			Renderer: p.templateRenderer,
