@@ -7,14 +7,15 @@ This guide provides comprehensive documentation for writing CEL (Common Expressi
 1. [Expression Context](#expression-context)
 2. [Backend Response Parsing](#backend-response-parsing)
 3. [Variable Access Patterns](#variable-access-patterns)
-4. [String Operations](#string-operations)
-5. [Numeric and Time Operations](#numeric-and-time-operations)
-6. [Array and List Operations](#array-and-list-operations)
-6. [Boolean Logic](#boolean-logic)
-7. [Error Handling](#error-handling)
-8. [Best Practices](#best-practices)
-9. [Anti-Patterns to Avoid](#anti-patterns-to-avoid)
-10. [Complete Examples](#complete-examples)
+4. [Cross-Context Validation](#cross-context-validation)
+5. [String Operations](#string-operations)
+6. [Numeric and Time Operations](#numeric-and-time-operations)
+7. [Array and List Operations](#array-and-list-operations)
+8. [Boolean Logic](#boolean-logic)
+9. [Error Handling](#error-handling)
+10. [Best Practices](#best-practices)
+11. [Anti-Patterns to Avoid](#anti-patterns-to-avoid)
+12. [Complete Examples](#complete-examples)
 
 ---
 
@@ -33,17 +34,23 @@ variables:
   rule: map<string, map<string, dynamic>>   # Variables from completed rules (keyed by rule name)
   local: map<string, dynamic>    # Rule-local variables (from current rule's variables block)
 
-raw:
+request:
   method: string                 # HTTP method (GET, POST, etc.)
   path: string                   # Request path
   query: map<string, string>     # Query parameters
   headers: map<string, string>   # Request headers (lowercase keys)
 
+admission:
+  authenticated: bool            # Whether request passed authentication
+  decision: string               # Admission decision ("pass", "fail")
+  clientIp: string              # Client IP address
+  trustedProxy: bool            # Whether request came from trusted proxy
+
 endpoint: string                 # Endpoint name (e.g., "admin-api")
 
 auth:
-  input: map                     # Raw credentials from request
-  forward: map                   # Credentials after transformation
+  input: map                     # Credentials from request (bearer, basic, header, query)
+  forward: map                   # Credentials after transformation (for backend forwarding)
 ```
 
 ---
@@ -163,6 +170,210 @@ The `lookup()` helper provides safe access but is verbose:
 - variables.local.computed_score > 0.8
 - variables.local.risk_level == "low"
 ```
+
+---
+
+## Cross-Context Validation
+
+Cross-context validation allows you to compare values from different parts of the request pipeline. This is essential for authorization checks, multi-stage validation, and ensuring consistency across rule executions.
+
+### Comparing Backend Response to Authentication
+
+Verify that backend responses match the authenticated user's identity:
+
+```yaml
+# Ensure backend returned data for the authenticated user
+- backend.body.user_id == auth.input.bearer.claims.sub
+- backend.body.email == auth.input.bearer.claims.email
+
+# Validate user identity from header-based auth
+- backend.body.account_id == auth.input.header["x-account-id"]
+
+# Compare backend response to basic auth username
+- backend.body.username == auth.input.basic.username
+
+# Cross-validate multiple auth sources
+- backend.body.client_id == auth.input.query["client_id"]
+- backend.body.api_key.startsWith(auth.input.header["x-api-key"])
+```
+
+**Use Case: Authorization**
+```yaml
+# Rule that ensures users can only access their own data
+validate-user-access:
+  auth:
+    - match:
+        - type: bearer
+  backendApi:
+    url: "https://api.example.com/user/profile"
+    headers:
+      authorization: "Bearer {{ .auth.input.bearer.token }}"
+  conditions:
+    pass:
+      # Backend must return data for the authenticated user
+      - backend.status == 200
+      - has(backend.body.user_id)
+      - backend.body.user_id == auth.input.bearer.claims.sub
+    fail:
+      # Explicit denial when user_id mismatch (potential unauthorized access)
+      - backend.body.user_id != auth.input.bearer.claims.sub
+```
+
+### Comparing Backend Response to Variables
+
+Validate that backend responses match expected values from previous rules or endpoint variables:
+
+```yaml
+# Verify backend confirms previously validated tier
+- backend.body.tier == variables.endpoint.expected_tier
+- backend.body.subscription_level == variables.endpoint.plan
+
+# Check backend response against rule-local computation
+- backend.body.quota_remaining >= variables.local.minimum_quota
+- backend.body.account_status == variables.local.expected_status
+
+# Correlate backend response with data from earlier rule
+- '"fetch-profile" in variables.rule'
+- backend.body.organization_id == lookup(variables.rule["fetch-profile"], "org_id")
+
+# Multi-rule validation chain
+- '"validate-token" in variables.rule'
+- backend.body.permissions.exists(p,
+    p == lookup(variables.rule["validate-token"], "required_permission"))
+```
+
+**Use Case: Multi-Stage Validation**
+```yaml
+# First rule validates token and stores expected values
+introspect-token:
+  backendApi:
+    url: "https://auth.example.com/introspect"
+  conditions:
+    pass:
+      - backend.status == 200
+      - backend.body.active == true
+  variables:
+    endpoint:
+      validated_user_id: backend.body.sub
+      expected_tier: backend.body.tier
+
+# Second rule fetches profile and confirms consistency
+fetch-profile:
+  backendApi:
+    url: "https://api.example.com/profile"
+  conditions:
+    pass:
+      # Backend response must match token introspection results
+      - backend.status == 200
+      - backend.body.user_id == variables.endpoint.validated_user_id
+      - backend.body.subscription_tier == variables.endpoint.expected_tier
+    fail:
+      # Data inconsistency between auth server and profile service
+      - backend.body.user_id != variables.endpoint.validated_user_id
+      - backend.body.subscription_tier != variables.endpoint.expected_tier
+    error:
+      # Profile service unavailable
+      - backend.status >= 500
+```
+
+### Comparing Authentication to Variables
+
+Ensure authentication credentials match expected patterns stored in variables:
+
+```yaml
+# Verify authenticated user matches expected role
+- variables.endpoint.required_role == "admin"
+- auth.input.bearer.claims.role == variables.endpoint.required_role
+
+# Check if user is in allowlist
+- auth.input.basic.username in variables.endpoint.allowed_users
+
+# Validate client credentials against stored configuration
+- variables.local.valid_client_ids.exists(id, id == auth.input.query["client_id"])
+```
+
+### Complex Cross-Context Patterns
+
+Combine multiple contexts for sophisticated validation:
+
+```yaml
+pass:
+  # All three contexts must align
+  - backend.status == 200
+  - backend.body.user_id == auth.input.bearer.claims.sub
+  - backend.body.tier == variables.endpoint.minimum_tier
+
+  # Backend confirms auth claim
+  - has(backend.body.roles)
+  - backend.body.roles.exists(r, r == auth.input.bearer.claims.role)
+
+  # Computed variable validates against backend
+  - variables.local.computed_quota <= backend.body.quota_limit
+
+fail:
+  # Any mismatch is a hard failure
+  - backend.body.user_id != auth.input.bearer.claims.sub
+  - backend.body.organization != variables.endpoint.expected_org
+```
+
+**Use Case: Security Correlation**
+```yaml
+# Ensure request, auth, and backend all agree on tenant context
+validate-tenant-isolation:
+  backendApi:
+    url: "https://api.example.com/tenant/{{ .auth.input.header.x-tenant-id }}/data"
+  conditions:
+    pass:
+      # Triple verification: request header, auth claim, backend response
+      - backend.status == 200
+      - has(backend.body.tenant_id)
+      - backend.body.tenant_id == auth.input.header["x-tenant-id"]
+      - backend.body.tenant_id == auth.input.bearer.claims.tenant_id
+      - backend.body.active == true
+    fail:
+      # Tenant mismatch is a security violation
+      - backend.body.tenant_id != auth.input.header["x-tenant-id"]
+      - backend.body.tenant_id != auth.input.bearer.claims.tenant_id
+```
+
+### Best Practices for Cross-Context Validation
+
+1. **Always use `has()` before accessing optional fields**:
+   ```yaml
+   # GOOD: Safe access
+   - has(backend.body.user_id) && backend.body.user_id == auth.input.bearer.claims.sub
+
+   # BAD: Crashes if backend.body.user_id is missing
+   - backend.body.user_id == auth.input.bearer.claims.sub
+   ```
+
+2. **Check variable existence before comparing**:
+   ```yaml
+   # GOOD: Verify rule exported variables first
+   - '"fetch-profile" in variables.rule'
+   - backend.body.org_id == lookup(variables.rule["fetch-profile"], "org_id")
+
+   # BAD: Assumes fetch-profile ran and exported org_id
+   - backend.body.org_id == lookup(variables.rule["fetch-profile"], "org_id")
+   ```
+
+3. **Use explicit failure conditions for security-critical mismatches**:
+   ```yaml
+   pass:
+     - backend.body.user_id == auth.input.bearer.claims.sub
+   fail:
+     # Don't rely on implicit fail - make security violations explicit
+     - backend.body.user_id != auth.input.bearer.claims.sub
+   ```
+
+4. **Normalize values before comparison**:
+   ```yaml
+   # GOOD: Case-insensitive email comparison
+   - backend.body.email.lowerAscii() == auth.input.bearer.claims.email.lowerAscii()
+
+   # BAD: Case-sensitive comparison might miss matches
+   - backend.body.email == auth.input.bearer.claims.email
+   ```
 
 ---
 

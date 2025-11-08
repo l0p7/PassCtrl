@@ -482,8 +482,8 @@ func TestBackendDescriptorHash_ExcludeCombinedSessionHeaders(t *testing.T) {
 		Headers: map[string]string{
 			"Authorization":    "Bearer user-token-abc",
 			"Content-Type":     "application/json",
-			"X-Request-ID":     "req-123",        // Correlation (unique)
-			"X-Forwarded-For":  "192.0.2.1",      // Proxy (unique)
+			"X-Request-ID":     "req-123",         // Correlation (unique)
+			"X-Forwarded-For":  "192.0.2.1",       // Proxy (unique)
 			"X-Forwarded-Host": "api.example.com", // Proxy (unique)
 		},
 	}
@@ -494,8 +494,8 @@ func TestBackendDescriptorHash_ExcludeCombinedSessionHeaders(t *testing.T) {
 		Headers: map[string]string{
 			"Authorization":    "Bearer user-token-abc",
 			"Content-Type":     "application/json",
-			"X-Request-ID":     "req-456",         // Different correlation
-			"X-Forwarded-For":  "203.0.113.5",     // Different proxy
+			"X-Request-ID":     "req-456",           // Different correlation
+			"X-Forwarded-For":  "203.0.113.5",       // Different proxy
 			"X-Forwarded-Host": "other.example.com", // Different proxy
 		},
 	}
@@ -546,11 +546,11 @@ func TestBackendDescriptorHash_ExcludeDistributedTracingHeaders(t *testing.T) {
 			"Authorization":         "Bearer token123",
 			"Content-Type":          "application/json",
 			"Traceparent":           "00-different-trace-id-here-00000000000-02", // Different
-			"Tracestate":            "vendor=differentvalue",                      // Different
+			"Tracestate":            "vendor=differentvalue",                     // Different
 			"X-B3-TraceId":          "differenttraceid1234567890abcdef",          // Different
-			"X-B3-SpanId":           "differentspanid",                            // Different
-			"X-B3-ParentSpanId":     "differentparent",                            // Different
-			"X-B3-Sampled":          "0",                                          // Different
+			"X-B3-SpanId":           "differentspanid",                           // Different
+			"X-B3-ParentSpanId":     "differentparent",                           // Different
+			"X-B3-Sampled":          "0",                                         // Different
 			"X-Cloud-Trace-Context": "different-cloud-trace/2;o=0",               // Different
 			"X-Amzn-Trace-Id":       "Root=1-99999999-different",                 // Different
 			"Uber-Trace-Id":         "different:uber:trace:id",                   // Different
