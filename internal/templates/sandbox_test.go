@@ -11,11 +11,9 @@ import (
 
 func TestNewSandboxValidatesRoot(t *testing.T) {
 	tests := []struct {
-		name     string
-		root     string
-		allowEnv []string
-		wantErr  bool
-		assert   func(t *testing.T, sb *Sandbox)
+		name    string
+		root    string
+		wantErr bool
 	}{
 		{
 			name:    "rejects empty root",
@@ -23,19 +21,15 @@ func TestNewSandboxValidatesRoot(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:     "initializes sandbox",
-			root:     t.TempDir(),
-			allowEnv: []string{"FOO"},
-			assert: func(t *testing.T, sb *Sandbox) {
-				require.Equal(t, []string{"FOO"}, sb.AllowedEnv())
-			},
+			name: "initializes sandbox",
+			root: t.TempDir(),
 		},
 	}
 
 	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			sb, err := NewSandbox(tc.root, false, tc.allowEnv)
+			sb, err := NewSandbox(tc.root)
 			if tc.wantErr {
 				require.Error(t, err)
 				require.Nil(t, sb)
@@ -43,9 +37,6 @@ func TestNewSandboxValidatesRoot(t *testing.T) {
 			}
 			require.NoError(t, err)
 			require.Equal(t, filepath.Clean(tc.root), sb.Root())
-			if tc.assert != nil {
-				tc.assert(t, sb)
-			}
 		})
 	}
 }
@@ -57,7 +48,7 @@ func TestSandboxResolve(t *testing.T) {
 	target := filepath.Join(nested, "example.tmpl")
 	require.NoError(t, os.WriteFile(target, []byte("hi"), 0o600))
 
-	sb, err := NewSandbox(nested, false, nil)
+	sb, err := NewSandbox(nested)
 	require.NoError(t, err)
 
 	tests := []struct {
@@ -98,73 +89,12 @@ func TestSandboxResolveSymlinkEscape(t *testing.T) {
 	link := filepath.Join(root, "link.tmpl")
 	require.NoError(t, os.Symlink(outsideFile, link))
 
-	sb, err := NewSandbox(root, false, nil)
+	sb, err := NewSandbox(root)
 	require.NoError(t, err)
 
 	_, err = sb.Resolve("link.tmpl")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "escapes")
-}
-
-func TestSandboxEnvironment(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("ALLOWED", "value")
-	t.Setenv("IGNORED", "drop-me")
-
-	tests := []struct {
-		name     string
-		enabled  bool
-		allowEnv []string
-		wantLen  int
-	}{
-		{name: "returns configured environment", enabled: true, allowEnv: []string{"ALLOWED", "IGNORED"}, wantLen: 2},
-		{name: "disabled environment", enabled: false, allowEnv: []string{"ALLOWED"}, wantLen: 0},
-	}
-
-	for _, tc := range tests {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			sb, err := NewSandbox(dir, tc.enabled, tc.allowEnv)
-			require.NoError(t, err)
-			env := sb.Environment()
-			require.Len(t, env, tc.wantLen)
-			if tc.wantLen > 0 {
-				require.Equal(t, "value", env["ALLOWED"])
-				require.Equal(t, "drop-me", env["IGNORED"])
-			}
-		})
-	}
-}
-
-func TestSandboxEnvironmentFiltersMissing(t *testing.T) {
-	dir := t.TempDir()
-	sb, err := NewSandbox(dir, true, []string{"SET", "MISSING"})
-	require.NoError(t, err)
-	t.Setenv("SET", "ok")
-
-	env := sb.Environment()
-	require.Len(t, env, 1)
-
-	tests := []struct {
-		name      string
-		key       string
-		wantValue string
-		wantFound bool
-	}{
-		{name: "returns set value", key: "SET", wantValue: "ok", wantFound: true},
-		{name: "omits missing value", key: "MISSING", wantFound: false},
-	}
-
-	for _, tc := range tests {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			value, found := env[tc.key]
-			require.Equal(t, tc.wantFound, found)
-			if tc.wantFound {
-				require.Equal(t, tc.wantValue, value)
-			}
-		})
-	}
 }
 
 func TestSandboxResolveNilReceiver(t *testing.T) {
@@ -177,7 +107,7 @@ func TestSandboxResolveNilReceiver(t *testing.T) {
 
 func TestSandboxResolveMissingFile(t *testing.T) {
 	dir := t.TempDir()
-	sb, err := NewSandbox(dir, false, nil)
+	sb, err := NewSandbox(dir)
 	require.NoError(t, err)
 	t.Run("returns not exist error", func(t *testing.T) {
 		_, err = sb.Resolve("does-not-exist.tmpl")

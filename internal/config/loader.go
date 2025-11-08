@@ -90,6 +90,21 @@ func (l *Loader) Load(ctx context.Context) (Config, error) {
 	if err := k.Unmarshal("", &cfg); err != nil {
 		return Config{}, fmt.Errorf("config: unmarshal: %w", err)
 	}
+
+	// Load environment variables using null-copy semantics
+	loadedEnv, err := loadEnvironmentVariables(cfg.Server.Variables.Environment)
+	if err != nil {
+		return Config{}, fmt.Errorf("config: load environment variables: %w", err)
+	}
+	cfg.LoadedEnvironment = loadedEnv
+
+	// Load secrets from /run/secrets using null-copy semantics
+	loadedSecrets, err := loadSecrets(cfg.Server.Variables.Secrets)
+	if err != nil {
+		return Config{}, fmt.Errorf("config: load secrets: %w", err)
+	}
+	cfg.LoadedSecrets = loadedSecrets
+
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -125,9 +140,11 @@ func structToMap(cfg Config) map[string]any {
 				"rulesFile":   cfg.Server.Rules.RulesFile,
 			},
 			"templates": map[string]any{
-				"templatesFolder":     cfg.Server.Templates.TemplatesFolder,
-				"templatesAllowEnv":   cfg.Server.Templates.TemplatesAllowEnv,
-				"templatesAllowedEnv": cfg.Server.Templates.TemplatesAllowedEnv,
+				"templatesFolder": cfg.Server.Templates.TemplatesFolder,
+			},
+			"variables": map[string]any{
+				"environment": cfg.Server.Variables.Environment,
+				"secrets":     cfg.Server.Variables.Secrets,
 			},
 			"cache": map[string]any{
 				"backend":    cfg.Server.Cache.Backend,
@@ -147,4 +164,70 @@ func structToMap(cfg Config) map[string]any {
 			},
 		},
 	}
+}
+
+// loadEnvironmentVariables loads environment variables from the config using null-copy semantics:
+// - key: null → read env var with exact name `key`
+// - key: "ENV_VAR" → read env var `ENV_VAR`, expose as `variables.environment.key`
+// Returns an error if any referenced environment variable is missing.
+func loadEnvironmentVariables(envConfig map[string]*string) (map[string]string, error) {
+	if len(envConfig) == 0 {
+		return make(map[string]string), nil
+	}
+
+	result := make(map[string]string, len(envConfig))
+	for key, valuePtr := range envConfig {
+		var envVarName string
+		if valuePtr == nil {
+			// Null-copy: read env var with exact name as key
+			envVarName = key
+		} else {
+			// Read env var specified in value
+			envVarName = *valuePtr
+		}
+
+		value, exists := os.LookupEnv(envVarName)
+		if !exists {
+			return nil, fmt.Errorf("environment variable %q not found (referenced by server.variables.environment.%s)", envVarName, key)
+		}
+		result[key] = value
+	}
+	return result, nil
+}
+
+// loadSecrets loads secret file contents from /run/secrets/ using null-copy semantics:
+// - key: null → read /run/secrets/key, expose as `variables.secrets.key`
+// - key: "filename" → read /run/secrets/filename, expose as `variables.secrets.key`
+// Returns an error if any referenced secret file is missing or unreadable.
+func loadSecrets(secretsConfig map[string]*string) (map[string]string, error) {
+	if len(secretsConfig) == 0 {
+		return make(map[string]string), nil
+	}
+
+	const secretsDir = "/run/secrets"
+	result := make(map[string]string, len(secretsConfig))
+
+	for key, valuePtr := range secretsConfig {
+		var filename string
+		if valuePtr == nil {
+			// Null-copy: read secret file with exact name as key
+			filename = key
+		} else {
+			// Read secret file specified in value
+			filename = *valuePtr
+		}
+
+		secretPath := fmt.Sprintf("%s/%s", secretsDir, filename)
+		content, err := os.ReadFile(secretPath)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil, fmt.Errorf("secret file %q not found (referenced by server.variables.secrets.%s)", secretPath, key)
+			}
+			return nil, fmt.Errorf("failed to read secret file %q (referenced by server.variables.secrets.%s): %w", secretPath, key, err)
+		}
+
+		// Trim trailing newline that Docker adds to secret files
+		result[key] = strings.TrimRight(string(content), "\n\r")
+	}
+	return result, nil
 }

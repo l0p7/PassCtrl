@@ -146,8 +146,10 @@ type BackendPageState struct {
 
 // VariablesState tracks shared variables exposed across rules and responses.
 type VariablesState struct {
-	Global map[string]any            `json:"global"`
-	Rules  map[string]map[string]any `json:"rules"`
+	Global      map[string]any            `json:"global"`
+	Rules       map[string]map[string]any `json:"rules"`
+	Environment map[string]string         `json:"environment"`
+	Secrets     map[string]string         `json:"secrets"`
 }
 
 // State is the shared context threaded through every agent in the pipeline.
@@ -239,8 +241,10 @@ func NewState(r *http.Request, endpoint, cacheKey, correlationID string) *State 
 			},
 		},
 		Variables: VariablesState{
-			Global: make(map[string]any),
-			Rules:  make(map[string]map[string]any),
+			Global:      make(map[string]any),
+			Rules:       make(map[string]map[string]any),
+			Environment: make(map[string]string),
+			Secrets:     make(map[string]string),
 		},
 	}
 }
@@ -314,9 +318,11 @@ func (a RuleAuthState) templateContext() map[string]any {
 func (s *State) VariablesContext() map[string]any {
 	if s == nil {
 		return map[string]any{
-			"endpoint": map[string]any{},
-			"local":    map[string]any{},
-			"rule":     map[string]any{},
+			"endpoint":    map[string]any{},
+			"local":       map[string]any{},
+			"rule":        map[string]any{},
+			"environment": map[string]string{},
+			"secrets":     map[string]string{},
 		}
 	}
 	endpoint := cloneAnyMap(s.Variables.Global)
@@ -325,10 +331,14 @@ func (s *State) VariablesContext() map[string]any {
 	for name, vars := range s.Variables.Rules {
 		rules[name] = cloneAnyMap(vars)
 	}
+	environment := cloneStringMap(s.Variables.Environment)
+	secrets := cloneStringMap(s.Variables.Secrets)
 	return map[string]any{
-		"endpoint": endpoint,
-		"local":    local,
-		"rule":     rules,
+		"endpoint":    endpoint,
+		"local":       local,
+		"rule":        rules,
+		"environment": environment,
+		"secrets":     secrets,
 	}
 }
 
@@ -337,6 +347,17 @@ func cloneAnyMap(in map[string]any) map[string]any {
 		return map[string]any{}
 	}
 	out := make(map[string]any, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func cloneStringMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return map[string]string{}
+	}
+	out := make(map[string]string, len(in))
 	for k, v := range in {
 		out[k] = v
 	}

@@ -48,6 +48,8 @@ type PipelineOptions struct {
 	TemplateSandbox    *templates.Sandbox
 	CorrelationHeader  string
 	Metrics            metrics.Recorder
+	LoadedEnvironment  map[string]string
+	LoadedSecrets      map[string]string
 }
 
 type Pipeline struct {
@@ -59,6 +61,8 @@ type Pipeline struct {
 	cacheNamespace    string
 	correlationHeader string
 	metrics           metrics.Recorder
+	loadedEnvironment map[string]string
+	loadedSecrets     map[string]string
 
 	mu sync.RWMutex
 
@@ -108,6 +112,8 @@ func NewPipeline(logger *slog.Logger, opts PipelineOptions) *Pipeline {
 		cacheNamespace:    namespace,
 		correlationHeader: strings.TrimSpace(opts.CorrelationHeader),
 		metrics:           opts.Metrics,
+		loadedEnvironment: opts.LoadedEnvironment,
+		loadedSecrets:     opts.LoadedSecrets,
 		endpoints:         make(map[string]*endpointRuntime),
 	}
 
@@ -350,6 +356,8 @@ func (p *Pipeline) ServeAuth(w http.ResponseWriter, r *http.Request) {
 	correlationID := p.requestCorrelationID(r)
 	cacheKey := p.deriveCacheKey(r, endpointRuntime)
 	state := pipeline.NewState(r, endpointName, cacheKey, correlationID)
+	state.Variables.Environment = p.loadedEnvironment
+	state.Variables.Secrets = p.loadedSecrets
 
 	reqLogger := p.logger.With(
 		slog.String("endpoint", endpointName),

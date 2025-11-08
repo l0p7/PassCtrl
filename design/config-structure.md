@@ -20,9 +20,13 @@ server:
     rulesFile: ""                  # optional — static YAML file loaded once at startup when set
   templates:
     templatesFolder: "./templates" # optional — root directory for template lookups (jail)
-    templatesAllowEnv: false        # optional — gate environment variable access in templates
-    templatesAllowedEnv:
-      - "FORWARDAUTH_CLIENT_ID"    # optional — explicit allowlist of environment variables
+  variables:
+    environment:                   # optional — environment variables loaded at startup
+      timezone: TZ                 # explicit mapping: exposes as variables.environment.timezone
+      HOME: null                   # null-copy: exposes as variables.environment.HOME
+    secrets:                       # optional — Docker secrets from /run/secrets/ loaded at startup
+      db_password: null            # null-copy: reads /run/secrets/db_password
+      api_key: api_token           # reads /run/secrets/api_token, exposes as variables.secrets.api_key
 ```
 
 ### Notes
@@ -58,9 +62,15 @@ server:
   process to terminate with a non-zero exit code so container orchestrators notice the failure.
 - The `templates.templatesFolder` value establishes the root path for response and request templates. All template lookups are resolved
   relative to this directory, and path traversal outside the folder must be rejected to keep template rendering sandboxed.
-- `templates.templatesAllowEnv` toggles whether templates may read environment variables. When enabled, the runtime must restrict access to
-  the explicit allowlist declared in `templates.templatesAllowedEnv`; any variable not listed is denied. This guard prevents leaking
-  sensitive process state while still enabling controlled parameterization.
+- `variables.environment` configures environment variables loaded at startup and exposed as `variables.environment.*` in both CEL expressions
+  and templates. Uses null-copy semantics: `key: null` reads the environment variable named `key`, while `key: "ENV_VAR"` reads `ENV_VAR`
+  and exposes it as `variables.environment.key`. All referenced environment variables must exist at startup or the server will fail to start
+  with a configuration error. This fail-fast approach ensures required environment variables are present before accepting any traffic.
+- `variables.secrets` configures Docker secrets (or any file-based secrets) loaded from `/run/secrets/` at startup and exposed as
+  `variables.secrets.*` in both CEL expressions and templates. Uses null-copy semantics: `key: null` reads `/run/secrets/key`, while
+  `key: "filename"` reads `/run/secrets/filename` and exposes it as `variables.secrets.key`. Trailing newlines and carriage returns are
+  automatically trimmed (Docker adds these to secret files). All referenced secret files must exist and be readable at startup or the server
+  will fail to start. This fail-fast approach is ideal for Docker/Kubernetes deployments where secrets are mounted as files.
 - These server-level settings complement the endpoint and rule configuration described below. The runtime should load the full
   configuration via `koanf` so it can merge environment overrides, watch folders when supported, and provide consistent access to
   configuration values across packages. Configuration precedence follows Docker-friendly expectations: environment variables win

@@ -241,6 +241,6 @@ func TestDefaultConfigValues(t *testing.T) {
 	require.Equal(t, "info", cfg.Server.Logging.Level)
 	require.Equal(t, "./rules", cfg.Server.Rules.RulesFolder)
 	require.Equal(t, "./templates", cfg.Server.Templates.TemplatesFolder)
-	require.False(t, cfg.Server.Templates.TemplatesAllowEnv)
-	require.Empty(t, cfg.Server.Templates.TemplatesAllowedEnv)
+	require.Empty(t, cfg.Server.Variables.Environment)
+	require.Empty(t, cfg.LoadedEnvironment)
 }

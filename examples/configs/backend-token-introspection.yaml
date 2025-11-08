@@ -14,7 +14,6 @@ server:
     rulesFile: ""
   templates:
     templatesFolder: "./templates"
-    templatesAllowEnv: false
 
 endpoints:
   introspection:
