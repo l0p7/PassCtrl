@@ -196,6 +196,11 @@ First non-pass result short-circuits the chain.
 - Drop entries on 5xx or error outcomes
 - Honor separate `passTTL`/`failTTL` from rule config
 - Respect `followCacheControl` when backends send cache headers
+- **Proxy Header Inclusion** (`includeProxyHeaders`):
+  - Default `true`: Proxy headers in backend requests are included in cache key hash
+  - When `false`: Proxy headers excluded from cache key for better cache hit rates
+  - **Security Warning**: Setting to `false` can cause cache correctness issues if backends use client IP/geo-location for decisions
+  - Only set to `false` when certain backends don't rely on proxy headers
 
 ### Testing Conventions
 - Use `testify/require` for fatal setup checks, `testify/assert` for non-fatal validations

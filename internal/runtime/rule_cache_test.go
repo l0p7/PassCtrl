@@ -18,6 +18,10 @@ func ptrBool(b bool) *bool {
 	return &b
 }
 
+func ptrString(s string) *string {
+	return &s
+}
+
 func TestPerRuleCaching_CacheHitSkipsBackend(t *testing.T) {
 	backendCalls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -543,4 +547,170 @@ func TestPerRuleCaching_ErrorOutcomeNeverCached(t *testing.T) {
 	res2 := agent.Execute(context.Background(), nil, state2)
 	require.Equal(t, "fail", res2.Status)
 	// Fail is cached, so this will hit
+}
+
+func TestPerRuleCaching_IncludeProxyHeaders_DefaultTrue(t *testing.T) {
+	// Test that by default (IncludeProxyHeaders=nil → true), proxy headers are included in cache key
+	// Different client IPs should result in different cache entries (safer behavior)
+	backendCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		backendCalls++
+		// Backend always returns 200 OK
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer server.Close()
+
+	memCache := cache.NewMemory(5 * time.Minute)
+	backendAgent := newBackendInteractionAgent(&http.Client{}, nil)
+	agent := newRuleExecutionAgent(backendAgent, nil, templates.NewRenderer(nil), memCache, time.Hour, nil, "")
+
+	// Test demonstrates that by default (IncludeProxyHeaders=nil → true), proxy headers IN THE BACKEND
+	// REQUEST are included in cache key. When we send different X-Forwarded-For values in the backend
+	// request, we should get different cache entries (safer behavior).
+	defs, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{
+		{
+			Name: "test-rule",
+			Backend: rulechain.BackendDefinitionSpec{
+				URL:      server.URL,
+				Method:   "GET",
+				Headers: map[string]*string{
+					"X-Forwarded-For": ptrString("10.0.0.1"), // Static value for first test
+				},
+				Accepted: []int{http.StatusOK},
+			},
+			Cache: rulechain.CacheConfigSpec{
+				TTL: rulechain.CacheTTLSpec{
+					Pass: "5m",
+				},
+				// IncludeProxyHeaders is nil, defaults to true
+			},
+		},
+	}, templates.NewRenderer(nil))
+	require.NoError(t, err)
+
+	// First request - backend will be called with X-Forwarded-For: 10.0.0.1
+	state1 := pipeline.NewState(httptest.NewRequest(http.MethodGet, "http://test/auth", nil), "test", "cache-key-base", "corr-1")
+	state1.Admission.Authenticated = true
+	state1.SetPlan(rulechain.ExecutionPlan{Rules: defs})
+	state1.Rule.ShouldExecute = true
+
+	res1 := agent.Execute(context.Background(), nil, state1)
+	require.Equal(t, "pass", res1.Status)
+	require.Equal(t, 1, backendCalls, "First request should call backend")
+
+	// Recompile with different X-Forwarded-For to simulate second client
+	// Since IncludeProxyHeaders=true (default), this different header should create a different cache key
+	defs2, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{
+		{
+			Name: "test-rule",
+			Backend: rulechain.BackendDefinitionSpec{
+				URL:      server.URL,
+				Method:   "GET",
+				Headers: map[string]*string{
+					"X-Forwarded-For": ptrString("10.0.0.2"), // Different value
+				},
+				Accepted: []int{http.StatusOK},
+			},
+			Cache: rulechain.CacheConfigSpec{
+				TTL: rulechain.CacheTTLSpec{
+					Pass: "5m",
+				},
+			},
+		},
+	}, templates.NewRenderer(nil))
+	require.NoError(t, err)
+
+	state2 := pipeline.NewState(httptest.NewRequest(http.MethodGet, "http://test/auth", nil), "test", "cache-key-base", "corr-2")
+	state2.Admission.Authenticated = true
+	state2.SetPlan(rulechain.ExecutionPlan{Rules: defs2})
+	state2.Rule.ShouldExecute = true
+
+	res2 := agent.Execute(context.Background(), nil, state2)
+	require.Equal(t, "pass", res2.Status)
+	require.Equal(t, 2, backendCalls, "Second request should call backend (different X-Forwarded-For → different hash)")
+	require.False(t, state2.Cache.Hit, "Should be cache miss due to different X-Forwarded-For header")
+
+	// Third request with same X-Forwarded-For as first - should hit cache
+	state3 := pipeline.NewState(httptest.NewRequest(http.MethodGet, "http://test/auth", nil), "test", "cache-key-base", "corr-3")
+	state3.Admission.Authenticated = true
+	state3.SetPlan(rulechain.ExecutionPlan{Rules: defs}) // Same defs as first request
+	state3.Rule.ShouldExecute = true
+
+	res3 := agent.Execute(context.Background(), nil, state3)
+	require.Equal(t, "pass", res3.Status)
+	require.Equal(t, 2, backendCalls, "Third request should NOT call backend (cache hit)")
+	require.True(t, state3.Cache.Hit, "Should hit cache from first request")
+}
+
+func TestPerRuleCaching_IncludeProxyHeaders_ExplicitFalse(t *testing.T) {
+	// Test that when IncludeProxyHeaders=false, proxy headers are excluded from cache key
+	// Different client IPs result in the SAME cache entry (potential security issue)
+	backendCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		backendCalls++
+		// Backend always returns 200 OK
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer server.Close()
+
+	memCache := cache.NewMemory(5 * time.Minute)
+	backendAgent := newBackendInteractionAgent(&http.Client{}, nil)
+	agent := newRuleExecutionAgent(backendAgent, nil, templates.NewRenderer(nil), memCache, time.Hour, nil, "")
+
+	// Explicitly set IncludeProxyHeaders=false
+	includeProxyHeadersFalse := false
+	defs, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{
+		{
+			Name: "test-rule",
+			Backend: rulechain.BackendDefinitionSpec{
+				URL:      server.URL,
+				Method:   "GET",
+				Headers:  map[string]*string{"X-Forwarded-For": ptrString("{{ .admission.forwardedFor }}")},
+				Accepted: []int{http.StatusOK},
+			},
+			Cache: rulechain.CacheConfigSpec{
+				TTL: rulechain.CacheTTLSpec{
+					Pass: "5m",
+				},
+				IncludeProxyHeaders: &includeProxyHeadersFalse,
+			},
+		},
+	}, templates.NewRenderer(nil))
+	require.NoError(t, err)
+
+	// First request from IP 10.0.0.1
+	req1 := httptest.NewRequest(http.MethodGet, "http://test/auth", nil)
+	req1.Header.Set("X-Forwarded-For", "10.0.0.1")
+	state1 := pipeline.NewState(req1, "test", "cache-key-base", "corr-1")
+	state1.Admission.Authenticated = true
+	state1.Admission.ForwardedFor = "10.0.0.1"
+	state1.SetPlan(rulechain.ExecutionPlan{Rules: defs})
+	state1.Rule.ShouldExecute = true
+
+	res1 := agent.Execute(context.Background(), nil, state1)
+	require.Equal(t, "pass", res1.Status)
+	require.Equal(t, 1, backendCalls, "First request should call backend")
+	require.True(t, state1.Cache.Stored, "Should store in cache")
+
+	// Second request from different IP 10.0.0.2
+	// With IncludeProxyHeaders=false, this should be a cache HIT (reuses first client's result)
+	// This demonstrates the security issue: cache entry is reused despite different X-Forwarded-For
+	req2 := httptest.NewRequest(http.MethodGet, "http://test/auth", nil)
+	req2.Header.Set("X-Forwarded-For", "10.0.0.2")
+	state2 := pipeline.NewState(req2, "test", "cache-key-base", "corr-2")
+	state2.Admission.Authenticated = true
+	state2.Admission.ForwardedFor = "10.0.0.2"
+	state2.SetPlan(rulechain.ExecutionPlan{Rules: defs})
+	state2.Rule.ShouldExecute = true
+
+	res2 := agent.Execute(context.Background(), nil, state2)
+	require.Equal(t, "pass", res2.Status)
+	require.Equal(t, 1, backendCalls, "Second request should NOT call backend (cache hit despite different IP)")
+	require.True(t, state2.Cache.Hit, "Should be cache hit despite different X-Forwarded-For (proxy headers excluded from hash)")
+
+	// This test demonstrates the security concern: when IncludeProxyHeaders=false,
+	// different client IPs share the same cache entry, which could lead to data leakage
+	// or access control bypass if backends use these headers for decision-making.
 }

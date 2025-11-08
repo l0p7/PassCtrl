@@ -325,7 +325,7 @@ func (a *ruleExecutionAgent) checkRuleCache(ctx context.Context, def rulechain.D
 		Headers: rendered.Headers,
 		Body:    rendered.Body,
 	}
-	backendHash := buildBackendHash(descriptor, a.correlationHeader)
+	backendHash := buildBackendHash(descriptor, a.correlationHeader, def.Cache.IncludeProxyHeaders)
 
 	// Determine if strict mode is enabled
 	strict := true
@@ -394,7 +394,7 @@ func (a *ruleExecutionAgent) storeRuleCache(ctx context.Context, def rulechain.D
 		Headers: rendered.Headers,
 		Body:    rendered.Body,
 	}
-	backendHash := buildBackendHash(descriptor, a.correlationHeader)
+	backendHash := buildBackendHash(descriptor, a.correlationHeader, def.Cache.IncludeProxyHeaders)
 
 	strict := true
 	if def.Cache.Strict != nil {

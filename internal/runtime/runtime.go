@@ -941,6 +941,7 @@ func compileConfiguredRules(rules map[string]config.RuleConfig, renderer *templa
 			ErrorMessage: "",
 			Responses:    buildRuleResponsesSpec(cfg.Responses),
 			Variables:    buildRuleVariablesSpec(cfg.Variables),
+			Cache:        buildRuleCacheSpec(cfg.Cache),
 		}}
 
 		defs, err := rulechain.CompileDefinitions(specs, renderer)
@@ -1036,6 +1037,19 @@ func buildRuleVariablesSpec(cfg config.RuleVariablesConfig) rulechain.VariablesS
 	// Evaluated with hybrid CEL/Template evaluator (auto-detected by {{ presence)
 	return rulechain.VariablesSpec{
 		Variables: cfg,
+	}
+}
+
+func buildRuleCacheSpec(cfg config.RuleCacheConfig) rulechain.CacheConfigSpec {
+	return rulechain.CacheConfigSpec{
+		FollowCacheControl:  cfg.FollowCacheControl,
+		TTL: rulechain.CacheTTLSpec{
+			Pass:  cfg.TTL.Pass,
+			Fail:  cfg.TTL.Fail,
+			Error: cfg.TTL.Error,
+		},
+		Strict:              cfg.Strict,
+		IncludeProxyHeaders: cfg.IncludeProxyHeaders,
 	}
 }
 

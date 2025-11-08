@@ -380,11 +380,19 @@ rules:
       followCacheControl: false        # optional — honor backend cache headers
       passTTL: 0s                      # optional — cache duration for pass outcomes
       failTTL: 0s                      # optional — cache duration for fail outcomes
+      includeProxyHeaders: true        # optional — include proxy headers in cache key (default: true)
 ```
 
 ### Notes
 - Rules referenced inside an endpoint's `rules` list must have corresponding entries under `rules:`.
 - Endpoint caches expire immediately when any contributing rule cache lapses; 5xx/error outcomes are never cached.
+- **Cache Key Proxy Headers** (`includeProxyHeaders`):
+  - When `true` (default): Proxy headers in backend requests are included in the cache key hash
+  - When `false`: Proxy headers are excluded from cache key computation
+  - **Security Warning**: Setting `includeProxyHeaders: false` can cause cache correctness issues if backends use client IP, geo-location, or proxy metadata for decision-making
+  - Excluded headers: `x-forwarded-for`, `x-real-ip`, `true-client-ip`, `cf-connecting-ip`, `forwarded`, and other proxy/CDN headers
+  - Use `includeProxyHeaders: false` **only** when certain backends don't rely on proxy headers for responses
+  - When in doubt, leave as `true` (default) to prevent data leakage or access control bypass
 - The `auth` block is an ordered array of **match groups**. Each match group contains:
   - `match`: Array of credential matchers that ALL must succeed (AND logic within group)
   - `forwardAs`: Array of credential outputs to emit (optional; omit for pass-through mode)

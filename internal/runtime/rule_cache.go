@@ -58,26 +58,25 @@ func buildRuleCacheKey(
 // Session-specific headers (correlation, tracing, proxy, timing) are excluded from the hash
 // to enable caching across requests with different session metadata.
 // Returns empty string if descriptor has no URL (indicating no backend configured).
-func buildBackendHash(descriptor cache.BackendDescriptor, correlationHeader string) string {
+func buildBackendHash(descriptor cache.BackendDescriptor, correlationHeader string, includeProxyHeaders *bool) string {
 	if descriptor.URL == "" {
 		return ""
 	}
 
+	// Determine if proxy headers should be included in cache key
+	// Default (nil) = true (safe: include proxy headers in cache key)
+	// Explicit false = exclude proxy headers (opt-out for better cache hit rates)
+	shouldIncludeProxyHeaders := true
+	if includeProxyHeaders != nil {
+		shouldIncludeProxyHeaders = *includeProxyHeaders
+	}
+
 	// Build list of headers to exclude from cache key
 	// These are session-specific headers that should not affect cache decisions
-	excludeHeaders := []string{
-		// Forward proxy headers (RFC 7239 and X-Forwarded-* conventions)
-		// These contain client IP, proxy chain, and routing metadata unique per request
-		"forwarded",
-		"x-forwarded-for",
-		"x-forwarded-host",
-		"x-forwarded-proto",
-		"x-forwarded-port",
-		"x-forwarded-prefix",
-		"x-real-ip",
-		"x-original-forwarded-for",
-		"true-client-ip",
+	excludeHeaders := []string{}
 
+	// Always exclude distributed tracing and timing headers
+	excludeHeaders = append(excludeHeaders,
 		// Distributed tracing headers (W3C Trace Context, Zipkin B3, cloud providers)
 		// These track request propagation through distributed systems
 		"traceparent",
@@ -95,13 +94,33 @@ func buildBackendHash(descriptor cache.BackendDescriptor, correlationHeader stri
 		// These contain request start times and performance metrics
 		"x-request-start",
 		"x-timer",
+	)
 
-		// CDN and edge metadata
-		// These contain CDN-specific routing and identification data
-		"cf-ray",
-		"cf-connecting-ip",
-		"cf-ipcountry",
-		"cf-visitor",
+	// Conditionally exclude proxy headers based on configuration
+	// SECURITY WARNING: Excluding proxy headers can cause cache correctness issues
+	// if backends use client IP, geo-location, or proxy metadata for decision-making.
+	// Only set includeProxyHeaders=false if you are certain backends don't rely on these.
+	if !shouldIncludeProxyHeaders {
+		excludeHeaders = append(excludeHeaders,
+			// Forward proxy headers (RFC 7239 and X-Forwarded-* conventions)
+			// These contain client IP, proxy chain, and routing metadata unique per request
+			"forwarded",
+			"x-forwarded-for",
+			"x-forwarded-host",
+			"x-forwarded-proto",
+			"x-forwarded-port",
+			"x-forwarded-prefix",
+			"x-real-ip",
+			"x-original-forwarded-for",
+			"true-client-ip",
+
+			// CDN and edge metadata
+			// These contain CDN-specific routing and identification data
+			"cf-ray",
+			"cf-connecting-ip",
+			"cf-ipcountry",
+			"cf-visitor",
+		)
 	}
 
 	// Add correlation header if configured

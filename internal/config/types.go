@@ -269,7 +269,8 @@ type RuleVariableSpec struct {
 type RuleCacheConfig struct {
 	FollowCacheControl bool               `koanf:"followCacheControl"`
 	TTL                RuleCacheTTLConfig `koanf:"ttl"`
-	Strict             *bool              `koanf:"strict"` // nil = true (default)
+	Strict             *bool              `koanf:"strict"`             // nil = true (default)
+	IncludeProxyHeaders *bool             `koanf:"includeProxyHeaders"` // nil = true (safe default)
 }
 
 type RuleCacheTTLConfig struct {
