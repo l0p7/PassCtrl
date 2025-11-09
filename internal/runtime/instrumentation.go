@@ -62,6 +62,7 @@ func (p *Pipeline) instrumentAgents(endpoint string, agents []pipeline.Agent) []
 			continue
 		}
 		logger := p.logger.With(
+			slog.String("component", "runtime"),
 			slog.String("agent", ag.Name()),
 			slog.String("endpoint", endpoint),
 		)
