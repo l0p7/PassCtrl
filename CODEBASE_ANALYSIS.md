@@ -793,10 +793,13 @@ if err := validateRuleExpressions(cfg, env); err != nil {
    - Replaced deprecated `templatesAllowEnv`/`templatesAllowedEnv` with `server.variables.environment`
    - Updated all `{{ env "..." }}` calls to `{{ .variables.environment.* }}`
 
-7. **Make HTTP timeout configurable**
-   - Add `server.backend.timeout` config option
-   - Remove hardcoded 10-second timeout
-   - Document default and reasonable ranges
+7. ~~**Make HTTP timeout configurable**~~ ✅ **FIXED** (2025-11-09)
+   - Added `server.backend.timeout` configuration option (format: Go duration string)
+   - Default: "10s" (10 seconds) if not specified or invalid
+   - Reasonable range: 1s to 60s documented in config type
+   - Replaced hardcoded timeout in two locations (default endpoint + configured endpoints)
+   - Includes validation with warning logs for invalid/negative values
+   - Files modified: `internal/config/types.go`, `internal/runtime/runtime.go`, `cmd/main.go`
 
 8. **Add integration tests for variables**
    - Create end-to-end tests verifying CEL access to `variables.environment.*`

@@ -31,8 +31,9 @@ import (
 )
 
 const (
-	defaultCacheTTL       = 30 * time.Second
-	defaultCacheNamespace = "passctrl:decision:v1"
+	defaultCacheTTL        = 30 * time.Second
+	defaultCacheNamespace  = "passctrl:decision:v1"
+	defaultBackendTimeout  = 10 * time.Second
 )
 
 type PipelineOptions struct {
@@ -41,6 +42,7 @@ type PipelineOptions struct {
 	CacheEpoch         int
 	CacheKeySalt       string
 	CacheNamespace     string
+	BackendTimeout     time.Duration
 	Endpoints          map[string]config.EndpointConfig
 	Rules              map[string]config.RuleConfig
 	RuleSources        []string
@@ -59,6 +61,7 @@ type Pipeline struct {
 	cacheEpoch        int
 	cacheSalt         []byte
 	cacheNamespace    string
+	backendTimeout    time.Duration
 	correlationHeader string
 	metrics           metrics.Recorder
 	loadedEnvironment map[string]string
@@ -98,6 +101,10 @@ func NewPipeline(logger *slog.Logger, opts PipelineOptions) *Pipeline {
 	if namespace == "" {
 		namespace = defaultCacheNamespace
 	}
+	backendTimeout := opts.BackendTimeout
+	if backendTimeout <= 0 {
+		backendTimeout = defaultBackendTimeout
+	}
 	decisionCache := opts.Cache
 	if decisionCache == nil {
 		decisionCache = cache.NewMemory(ttl)
@@ -110,6 +117,7 @@ func NewPipeline(logger *slog.Logger, opts PipelineOptions) *Pipeline {
 		cacheEpoch:        epoch,
 		cacheSalt:         []byte(opts.CacheKeySalt),
 		cacheNamespace:    namespace,
+		backendTimeout:    backendTimeout,
 		correlationHeader: strings.TrimSpace(opts.CorrelationHeader),
 		metrics:           opts.Metrics,
 		loadedEnvironment: opts.LoadedEnvironment,
@@ -662,7 +670,7 @@ func (p *Pipeline) installFallbackEndpoint() {
 	}
 
 	// Create backend interaction agent with HTTP client
-	backendAgent := newBackendInteractionAgent(&http.Client{Timeout: 10 * time.Second}, backendInteractionLogger)
+	backendAgent := newBackendInteractionAgent(&http.Client{Timeout: p.backendTimeout}, backendInteractionLogger)
 
 	agents := []pipeline.Agent{
 		&serverAgent{},
@@ -767,7 +775,7 @@ func (p *Pipeline) buildEndpointRuntime(name string, cfg config.EndpointConfig, 
 
 	// Create backend interaction agent with HTTP client
 	backendAgent := newBackendInteractionAgent(
-		&http.Client{Timeout: 10 * time.Second},
+		&http.Client{Timeout: p.backendTimeout},
 		p.logger.With(slog.String("agent", "backend_interaction"), slog.String("endpoint", trimmed)),
 	)
 
