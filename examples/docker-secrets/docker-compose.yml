@@ -1,0 +1,45 @@
+# Docker Compose example demonstrating Docker secrets integration with PassCtrl
+#
+# This example shows how to:
+# 1. Define secrets in Docker Compose
+# 2. Mount secrets to /run/secrets/ inside the container
+# 3. Configure PassCtrl to load secrets at startup
+# 4. Use secrets in CEL expressions and Go templates
+#
+# Usage:
+#   1. Create secret files: echo "supersecret" > secrets/db_password.txt
+#   2. Start: docker-compose up
+#   3. Test: curl -H "Authorization: Bearer test" http://localhost:8080/api/auth
+#
+# For Kubernetes: Use Secret objects mounted as volumes at /run/secrets/
+
+services:
+  passctrl:
+    build: ../..
+    image: passctrl:local
+    container_name: passctrl-secrets-demo
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - TZ=UTC
+      - PASSCTRL_SERVER__LOGGING__LEVEL=debug
+      - PASSCTRL_TEST_TIER=premium  # Environment variable for testing
+    secrets:
+      # Docker secrets mounted to /run/secrets/ inside container
+      - db_password
+      - api_key
+      - webhook_secret
+    volumes:
+      - ./config.yaml:/config/config.yaml:ro
+    command: ["-config", "/config/config.yaml"]
+
+# Define secrets (Docker Compose 3.1+)
+# In production, use Docker Swarm secrets or Kubernetes Secrets
+secrets:
+  db_password:
+    file: ./secrets/db_password.txt
+  api_key:
+    file: ./secrets/api_key.txt
+  webhook_secret:
+    file: ./secrets/webhook_secret.txt

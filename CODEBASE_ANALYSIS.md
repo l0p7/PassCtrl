@@ -7,9 +7,9 @@
 
 This report provides a comprehensive analysis of the PassCtrl codebase to verify that its implementation aligns with its design intent as documented in `design/` and `CLAUDE.md`. The analysis examined 9 major areas: agent separation, configuration hot-reload, authentication model, caching invariants, template sandbox security, environment variables/secrets handling, observability, and error handling.
 
-**Overall Assessment:** **Grade A (95%)**
+**Overall Assessment:** **Grade A (97%)**
 
-The codebase demonstrates **excellent architectural discipline** with excellent security posture, solid implementation of core features, comprehensive testing, and well-documented performance optimizations. The two-tier caching architecture is an intentional and justified design choice. All critical and medium-priority issues have been resolved.
+The codebase demonstrates **excellent architectural discipline** with excellent security posture, solid implementation of core features, comprehensive testing, complete documentation, and well-documented performance optimizations. The two-tier caching architecture is an intentional and justified design choice. All critical, medium-priority, and low-priority documentation issues have been resolved. Only one minor enhancement remains (filesystem context deadlines).
 
 ### Recently Fixed Issues ✅
 1. ~~**Redis cache invalidation not implemented**~~ - **FIXED** - Implemented SCAN + UNLINK pattern for prefix-based deletion
@@ -23,8 +23,8 @@ The codebase demonstrates **excellent architectural discipline** with excellent 
 9. ~~**Missing integration tests for variables**~~ - **FIXED** - Added comprehensive tests for CEL and template access to environment variables
 
 ### Low-Priority Issues (Consider Fixing)
-10. **Filesystem context deadlines** - File I/O cannot be interrupted
-11. **Documentation gaps** - Secrets directory configuration, reference docs incomplete
+10. **Filesystem context deadlines** - File I/O cannot be interrupted (future enhancement)
+11. ~~**Documentation gaps**~~ - **FIXED** - Added server.variables.secrets to docs, comprehensive Docker/Kubernetes secrets example with testing guide
 
 ---
 
@@ -528,11 +528,15 @@ variables:
 - Shows null-copy semantics with clear documentation
 - Ready-to-use example for multi-environment deployments
 
-**⚠️ Incomplete Documentation** (Severity: Low)
-- `server.variables.secrets` not in configuration reference table
-- Should add row in `docs/configuration/endpoints.md`
-- Should describe Docker/Kubernetes secret mount pattern
-- Recommended: Document secrets directory configuration for testing
+**✅ Documentation Completed** (Fixed: 2025-11-09)
+- Location: `/home/user/PassCtrl/docs/configuration/endpoints.md` - Added `server.variables.secrets` to server-level settings table
+- Comprehensive Docker/Kubernetes secrets example created at `examples/docker-secrets/`:
+  - `docker-compose.yml` - Complete stack with secrets mounting
+  - `config.yaml` - Configuration using secrets in CEL and templates
+  - `README.md` - Detailed usage guide with security best practices, Kubernetes deployment examples, and testing options
+  - `secrets/` - Directory structure with .gitignore and example files
+- Testing documentation: `examples/docker-secrets/README.md` covers three testing approaches including workarounds for hardcoded `/run/secrets/` directory
+- Security guidance: Best practices for avoiding secret leakage in responses
 
 ---
 

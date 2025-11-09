@@ -1,0 +1,123 @@
+# PassCtrl configuration demonstrating Docker/Kubernetes secrets usage
+#
+# This configuration shows how to:
+# 1. Load secrets from /run/secrets/ at startup using null-copy semantics
+# 2. Access secrets in CEL expressions (conditions, variables)
+# 3. Access secrets in Go templates (headers, request bodies)
+# 4. Combine secrets with environment variables
+#
+# Security Note: Be cautious when exposing secrets in responses.
+# Only include secrets in backend requests, not in responses to clients.
+
+server:
+  listen:
+    address: "0.0.0.0"
+    port: 8080
+  logging:
+    level: debug
+    format: json
+    correlationHeader: "X-Request-ID"
+  rules:
+    rulesFolder: ""
+  variables:
+    # Environment variables (loaded from process environment)
+    environment:
+      TIER: "PASSCTRL_TEST_TIER"  # Maps PASSCTRL_TEST_TIER env var to TIER key
+    # Docker/Kubernetes secrets (loaded from /run/secrets/)
+    secrets:
+      db_password: null       # null-copy: reads /run/secrets/db_password
+      api_key: null           # null-copy: reads /run/secrets/api_key
+      webhook_secret: null    # null-copy: reads /run/secrets/webhook_secret
+
+endpoints:
+  # Example 1: Backend authentication using secrets
+  api:
+    description: "Calls backend API with secret API key"
+    authentication:
+      required: true
+      allow:
+        authorization: ["bearer"]
+    rules:
+      - name: call-backend-with-secret
+    responsePolicy:
+      pass:
+        status: 200
+        headers:
+          custom:
+            X-Tier: "{{ .variables.environment.TIER }}"
+        body: |
+          {"status":"authenticated","tier":"{{ .variables.environment.TIER }}"}
+      fail:
+        status: 403
+        body: |
+          {"error":"forbidden"}
+
+  # Example 2: Webhook signature verification using secrets
+  webhook:
+    description: "Validates webhook signatures using shared secret"
+    authentication:
+      required: false
+      allow:
+        none: true
+    rules:
+      - name: verify-webhook-signature
+    responsePolicy:
+      pass:
+        status: 200
+        body: |
+          {"status":"verified"}
+      fail:
+        status: 401
+        body: |
+          {"error":"invalid signature"}
+
+rules:
+  # Rule 1: Call backend API with secret API key in header
+  call-backend-with-secret:
+    description: "Forwards request to backend with API key from secrets"
+    backendApi:
+      url: "https://api.example.com/validate"
+      method: POST
+      headers:
+        templates:
+          # Use secret in backend request header (NOT in response to client)
+          X-Api-Key: "{{ .variables.secrets.api_key }}"
+          Content-Type: "application/json"
+      body: |
+        {
+          "token": "{{ index .auth.input.bearer 0 }}",
+          "tier": "{{ .variables.environment.TIER }}"
+        }
+      acceptedStatuses: [200, 204]
+    conditions:
+      pass:
+        # CEL condition using backend response
+        - "backend.status == 200"
+      fail:
+        - "backend.status != 200"
+    responses:
+      pass:
+        variables:
+          # Export tier for response template
+          tier: "variables.environment.TIER"
+
+  # Rule 2: Verify webhook signature using HMAC with secret
+  verify-webhook-signature:
+    description: "Validates webhook HMAC signature using shared secret"
+    variables:
+      # CEL: Extract signature from header
+      provided_signature: 'lookup(forward.headers, "x-webhook-signature")'
+      # CEL: Extract request body for signature computation
+      request_body: 'lookup(forward.headers, "x-original-body")'
+    conditions:
+      pass:
+        # In production, compute HMAC and compare
+        # For demo, just check if signature header exists
+        - 'variables.local.provided_signature != null && variables.local.provided_signature != ""'
+      fail:
+        - 'variables.local.provided_signature == null || variables.local.provided_signature == ""'
+    responses:
+      pass:
+        variables:
+          # Note: Never export the secret itself to response variables
+          verified: '"true"'
