@@ -7,14 +7,12 @@
 
 This report provides a comprehensive analysis of the PassCtrl codebase to verify that its implementation aligns with its design intent as documented in `design/` and `CLAUDE.md`. The analysis examined 9 major areas: agent separation, configuration hot-reload, authentication model, caching invariants, template sandbox security, environment variables/secrets handling, observability, and error handling.
 
-**Overall Assessment:** **Grade A- (90%)**
+**Overall Assessment:** **Grade A (93%)**
 
-The codebase demonstrates **excellent architectural discipline** with excellent security posture, solid implementation of core features, and well-documented performance optimizations. The two-tier caching architecture is an intentional and justified design choice. Only one critical gap remains:
-
-### Critical Issues (Must Fix)
-1. **Redis cache invalidation not implemented** - Config reloads don't purge Redis cache entries
+The codebase demonstrates **excellent architectural discipline** with excellent security posture, solid implementation of core features, and well-documented performance optimizations. The two-tier caching architecture is an intentional and justified design choice. All critical issues have been resolved.
 
 ### Recently Fixed Issues ✅
+1. ~~**Redis cache invalidation not implemented**~~ - **FIXED** - Implemented SCAN + UNLINK pattern for prefix-based deletion
 2. ~~**Credential stripping incomplete**~~ - **FIXED** - Custom headers/query parameters now properly stripped from backend requests
 3. ~~**Dual caching architecture**~~ - **DOCUMENTED** - Two-tier caching is intentional performance optimization, now fully documented
 4. ~~**Missing agent logging**~~ - **FIXED** - Backend Interaction Agent now logs requests, responses, and pagination
@@ -112,7 +110,7 @@ Should serve as the model for other agents.
 
 ### 2. Configuration Hot-Reload Implementation
 
-**Grade: B (Working but critical Redis gap)**
+**Grade: A (Excellent - all gaps resolved)**
 
 #### Properly Implemented ✅
 
@@ -145,36 +143,33 @@ Should serve as the model for other agents.
 - ✅ Server config errors: Terminate process with non-zero exit (loader.go:108-110, main.go:75-77)
 - ✅ Rule config errors: Disable rule, log warning, continue running (rules_loader.go:73-83)
 
-#### Critical Gap ❌
+#### ✅ Redis Cache Invalidation - FIXED (2025-11-09)
 
-**🔴 Redis Cache Invalidation Not Implemented**
+**Location:** `/home/user/PassCtrl/internal/runtime/cache/redis.go:126-197`
 
-**Location:** `/home/user/PassCtrl/internal/runtime/cache/redis.go:126-128`
+**Implementation:** Implemented `DeletePrefix()` using SCAN + UNLINK pattern for safe, non-blocking prefix-based cache invalidation.
 
-```go
-func (c *redisCache) DeletePrefix(context.Context, string) error {
-    return nil  // NO IMPLEMENTATION!
-}
-```
+**Key Features:**
+- Uses cursor-based SCAN with MATCH pattern (non-blocking, production-safe)
+- Batch size of 100 keys per SCAN iteration for efficiency
+- Deletes keys in batches of 50 using UNLINK (async deletion, Redis 4.0+)
+- Falls back to DEL if UNLINK not supported
+- Honors context cancellation for interruptibility
+- Returns detailed error messages on failure
 
-**Impact:**
-- When using Redis/Valkey backend, config reloads **do not invalidate cached decisions**
-- Stale cached authorization decisions persist until natural TTL expiration
-- Violates documented hot-reload contract in CLAUDE.md:27
+**Test Coverage:**
+- Added `TestRedisCacheDeletePrefix` - Verifies selective deletion of prefixed keys
+- Added `TestRedisCacheInvalidateOnReload` - Verifies ReloadInvalidator interface implementation
+- Tests use miniredis for deterministic testing without external dependencies
 
-**Memory cache works correctly:**
-- `DeletePrefix()` properly iterates and deletes matching keys (memory.go:51-63)
+**Cache Invalidation Flow:**
+1. Config reload increments cache epoch (runtime.go:703)
+2. Calls `DeletePrefix()` with old epoch prefix (e.g., `passctrl:decision:v1:1:`)
+3. SCAN iterates through all matching keys
+4. UNLINK deletes keys asynchronously without blocking Redis
+5. New requests use new epoch prefix, avoiding stale cache hits
 
-**Expected behavior** (from runtime.go:703-707):
-```go
-prefix := fmt.Sprintf("%s:%d:", p.cacheNamespace, p.cacheEpoch)
-if err := p.cache.DeletePrefix(ctx, prefix); err != nil {
-    p.logger.Warn("cache purge failed", slog.Any("error", err))
-    return
-}
-```
-
-**Recommendation:** Implement Redis prefix deletion using SCAN + DEL pattern or Redis key pattern matching.
+**Status:** Config reloads now properly invalidate Redis cache entries for both memory and Redis backends.
 
 ---
 
@@ -760,10 +755,13 @@ if err := validateRuleExpressions(cfg, env); err != nil {
 
 ### Priority 0: Critical (Security/Correctness) - Fix Immediately
 
-1. **Implement Redis cache invalidation on config reload**
-   - File: `/home/user/PassCtrl/internal/runtime/cache/redis.go:126-128`
-   - Implement `DeletePrefix()` using SCAN + DEL or key pattern matching
-   - Test with actual Redis instance
+1. ~~**Implement Redis cache invalidation on config reload**~~ ✅ **FIXED** (2025-11-09)
+   - File: `/home/user/PassCtrl/internal/runtime/cache/redis.go:126-197`
+   - Implemented `DeletePrefix()` using SCAN + UNLINK pattern (with DEL fallback)
+   - Uses cursor-based iteration for production safety (non-blocking)
+   - Batch deletion (50 keys per command) for efficiency
+   - Comprehensive test coverage added (2 test cases using miniredis)
+   - Honors context cancellation for interruptibility
 
 2. ~~**Implement credential stripping for custom headers/query parameters**~~ ✅ **FIXED**
    - File: `/home/user/PassCtrl/internal/runtime/rule_execution_agent.go:456-550`
