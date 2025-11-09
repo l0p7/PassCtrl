@@ -6,25 +6,48 @@
   links:
     - title: "Deploy the PassCtrl server"
       url: "/guides/deploy/"
+
 - key: stage-2
   short_title: "Stage 2"
-  title: "Stage 2 - Configure Endpoints"
+  title: "Stage 2 - Server Configuration"
+  overview_url: "/configuration/server/"
+  summary: "Configure server-wide settings including listen address, logging, caching, environment variables, and secrets."
+  links:
+    - title: "Server configuration reference"
+      url: "/configuration/server/"
+
+- key: stage-3
+  short_title: "Stage 3"
+  title: "Stage 3 - Endpoint Configuration"
   overview_url: "/configuration/endpoints/"
-  summary: "Establish server-level settings, map endpoints, and understand how request curation impacts upstream services."
+  summary: "Define endpoints with authentication policies, forward request policies, rule chains, and response defaults."
   links:
     - title: "Endpoint configuration reference"
       url: "/configuration/endpoints/"
-- key: stage-3
-  short_title: "Stage 3"
-  title: "Stage 3 - Author Rule Chains"
+
+- key: stage-4
+  short_title: "Stage 4"
+  title: "Stage 4 - Rule Configuration"
   overview_url: "/configuration/rules/"
-  summary: "Design rule execution, backend calls, and response policies that determine upstream traffic and caller outcomes."
+  summary: "Author rules that capture credentials, call backends, evaluate conditions, and shape responses."
   links:
     - title: "Rule configuration reference"
       url: "/configuration/rules/"
-- key: stage-4
-  short_title: "Stage 4"
-  title: "Stage 4 - Follow the Flow"
+    - title: "CEL expressions guide"
+      url: "/guides/cel-expressions/"
+
+- key: stage-5
+  short_title: "Stage 5"
+  title: "Stage 5 - Advanced Examples"
+  overview_url: "/configuration/advanced/"
+  summary: "Complete configurations for complex scenarios including multi-environment setups, secrets management, and caching strategies."
+  links:
+    - title: "Advanced configuration examples"
+      url: "/configuration/advanced/"
+
+- key: stage-6
+  short_title: "Stage 6"
+  title: "Stage 6 - Request Flow Diagrams"
   overview_url: "/flows/decision-pipeline/"
   summary: "Review end-to-end request diagrams and worked examples to validate configuration intent and outcomes."
   links:
