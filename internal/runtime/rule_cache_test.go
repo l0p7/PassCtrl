@@ -33,7 +33,7 @@ func TestPerRuleCaching_CacheHitSkipsBackend(t *testing.T) {
 
 	memCache := cache.NewMemory(5 * time.Minute)
 	backendAgent := newBackendInteractionAgent(&http.Client{}, nil)
-	agent := newRuleExecutionAgent(backendAgent, nil, templates.NewRenderer(nil), memCache, time.Hour, nil, "")
+	agent := newRuleExecutionAgent(backendAgent, nil, templates.NewRenderer(nil), memCache, time.Hour, 0, nil, "")
 
 	defs, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{
 		{
@@ -87,7 +87,7 @@ func TestPerRuleCaching_CacheMissExecutesBackend(t *testing.T) {
 
 	memCache := cache.NewMemory(5 * time.Minute)
 	backendAgent := newBackendInteractionAgent(&http.Client{}, nil)
-	agent := newRuleExecutionAgent(backendAgent, nil, templates.NewRenderer(nil), memCache, time.Hour, nil, "")
+	agent := newRuleExecutionAgent(backendAgent, nil, templates.NewRenderer(nil), memCache, time.Hour, 0, nil, "")
 
 	defs, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{
 		{
@@ -134,7 +134,7 @@ func TestPerRuleCaching_ExportedVariablesCachedAndRestored(t *testing.T) {
 	memCache := cache.NewMemory(5 * time.Minute)
 	renderer := templates.NewRenderer(nil)
 	backendAgent := newBackendInteractionAgent(&http.Client{}, nil)
-	agent := newRuleExecutionAgent(backendAgent, nil, renderer, memCache, time.Hour, nil, "")
+	agent := newRuleExecutionAgent(backendAgent, nil, renderer, memCache, time.Hour, 0, nil, "")
 
 	defs, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{
 		{
@@ -203,7 +203,7 @@ func TestPerRuleCaching_StrictMode_UpstreamChangesInvalidate(t *testing.T) {
 
 	memCache := cache.NewMemory(5 * time.Minute)
 	backendAgent := newBackendInteractionAgent(&http.Client{}, nil)
-	agent := newRuleExecutionAgent(backendAgent, nil, templates.NewRenderer(nil), memCache, time.Hour, nil, "")
+	agent := newRuleExecutionAgent(backendAgent, nil, templates.NewRenderer(nil), memCache, time.Hour, 0, nil, "")
 
 	strictTrue := true
 	defs, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{
@@ -259,7 +259,7 @@ func TestPerRuleCaching_LooseMode_UpstreamChangesDontInvalidate(t *testing.T) {
 
 	memCache := cache.NewMemory(5 * time.Minute)
 	backendAgent := newBackendInteractionAgent(&http.Client{}, nil)
-	agent := newRuleExecutionAgent(backendAgent, nil, templates.NewRenderer(nil), memCache, time.Hour, nil, "")
+	agent := newRuleExecutionAgent(backendAgent, nil, templates.NewRenderer(nil), memCache, time.Hour, 0, nil, "")
 
 	strictFalse := false
 	defs, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{
@@ -308,7 +308,7 @@ func TestPerRuleCaching_LooseMode_UpstreamChangesDontInvalidate(t *testing.T) {
 func TestPerRuleCaching_OnlyRulesWithBackendAreCached(t *testing.T) {
 	memCache := cache.NewMemory(5 * time.Minute)
 	backendAgent := newBackendInteractionAgent(nil, nil)
-	agent := newRuleExecutionAgent(backendAgent, nil, templates.NewRenderer(nil), memCache, time.Hour, nil, "")
+	agent := newRuleExecutionAgent(backendAgent, nil, templates.NewRenderer(nil), memCache, time.Hour, 0, nil, "")
 
 	defs, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{
 		{
@@ -345,7 +345,7 @@ func TestPerRuleCaching_DifferentBackendRequestsGenerateDifferentHashes(t *testi
 	memCache := cache.NewMemory(5 * time.Minute)
 	renderer := templates.NewRenderer(nil)
 	backendAgent := newBackendInteractionAgent(&http.Client{}, nil)
-	agent := newRuleExecutionAgent(backendAgent, nil, renderer, memCache, time.Hour, nil, "")
+	agent := newRuleExecutionAgent(backendAgent, nil, renderer, memCache, time.Hour, 0, nil, "")
 
 	defs, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{
 		{
@@ -395,7 +395,7 @@ func TestPerRuleCaching_TTLRespected(t *testing.T) {
 
 	memCache := cache.NewMemory(5 * time.Minute)
 	backendAgent := newBackendInteractionAgent(&http.Client{}, nil)
-	agent := newRuleExecutionAgent(backendAgent, nil, templates.NewRenderer(nil), memCache, time.Hour, nil, "")
+	agent := newRuleExecutionAgent(backendAgent, nil, templates.NewRenderer(nil), memCache, time.Hour, 0, nil, "")
 
 	defs, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{
 		{
@@ -455,7 +455,7 @@ func TestPerRuleCaching_FailOutcomeCached(t *testing.T) {
 
 	memCache := cache.NewMemory(5 * time.Minute)
 	backendAgent := newBackendInteractionAgent(&http.Client{}, nil)
-	agent := newRuleExecutionAgent(backendAgent, nil, templates.NewRenderer(nil), memCache, time.Hour, nil, "")
+	agent := newRuleExecutionAgent(backendAgent, nil, templates.NewRenderer(nil), memCache, time.Hour, 0, nil, "")
 
 	defs, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{
 		{
@@ -507,7 +507,7 @@ func TestPerRuleCaching_ErrorOutcomeNeverCached(t *testing.T) {
 
 	memCache := cache.NewMemory(5 * time.Minute)
 	backendAgent := newBackendInteractionAgent(&http.Client{}, nil)
-	agent := newRuleExecutionAgent(backendAgent, nil, templates.NewRenderer(nil), memCache, time.Hour, nil, "")
+	agent := newRuleExecutionAgent(backendAgent, nil, templates.NewRenderer(nil), memCache, time.Hour, 0, nil, "")
 
 	defs, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{
 		{
@@ -563,7 +563,7 @@ func TestPerRuleCaching_IncludeProxyHeaders_DefaultTrue(t *testing.T) {
 
 	memCache := cache.NewMemory(5 * time.Minute)
 	backendAgent := newBackendInteractionAgent(&http.Client{}, nil)
-	agent := newRuleExecutionAgent(backendAgent, nil, templates.NewRenderer(nil), memCache, time.Hour, nil, "")
+	agent := newRuleExecutionAgent(backendAgent, nil, templates.NewRenderer(nil), memCache, time.Hour, 0, nil, "")
 
 	// Test demonstrates that by default (IncludeProxyHeaders=nil → true), proxy headers IN THE BACKEND
 	// REQUEST are included in cache key. When we send different X-Forwarded-For values in the backend
@@ -657,7 +657,7 @@ func TestPerRuleCaching_IncludeProxyHeaders_ExplicitFalse(t *testing.T) {
 
 	memCache := cache.NewMemory(5 * time.Minute)
 	backendAgent := newBackendInteractionAgent(&http.Client{}, nil)
-	agent := newRuleExecutionAgent(backendAgent, nil, templates.NewRenderer(nil), memCache, time.Hour, nil, "")
+	agent := newRuleExecutionAgent(backendAgent, nil, templates.NewRenderer(nil), memCache, time.Hour, 0, nil, "")
 
 	// Explicitly set IncludeProxyHeaders=false
 	includeProxyHeadersFalse := false

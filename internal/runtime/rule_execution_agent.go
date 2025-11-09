@@ -61,11 +61,12 @@ type ruleExecutionAgent struct {
 	ruleEvaluator     *expr.HybridEvaluator
 	cacheBackend      cache.DecisionCache // Per-rule caching backend
 	serverMaxTTL      time.Duration       // Server-level TTL ceiling
+	endpointTTL       time.Duration       // Endpoint-level TTL ceiling
 	metrics           metrics.Recorder    // Metrics recorder for cache operations
 	correlationHeader string              // Correlation header to exclude from cache keys
 }
 
-func newRuleExecutionAgent(backendAgent *backendInteractionAgent, logger *slog.Logger, renderer *templates.Renderer, cacheBackend cache.DecisionCache, serverMaxTTL time.Duration, metricsRecorder metrics.Recorder, correlationHeader string) *ruleExecutionAgent {
+func newRuleExecutionAgent(backendAgent *backendInteractionAgent, logger *slog.Logger, renderer *templates.Renderer, cacheBackend cache.DecisionCache, serverMaxTTL time.Duration, endpointTTL time.Duration, metricsRecorder metrics.Recorder, correlationHeader string) *ruleExecutionAgent {
 	// Create hybrid evaluator for rule local variables
 	ruleEvaluator, err := expr.NewRuleHybridEvaluator(renderer)
 	if err != nil {
@@ -81,6 +82,7 @@ func newRuleExecutionAgent(backendAgent *backendInteractionAgent, logger *slog.L
 		ruleEvaluator:     ruleEvaluator,
 		cacheBackend:      cacheBackend,
 		serverMaxTTL:      serverMaxTTL,
+		endpointTTL:       endpointTTL,
 		metrics:           metricsRecorder,
 		correlationHeader: correlationHeader,
 	}
@@ -404,8 +406,17 @@ func (a *ruleExecutionAgent) storeRuleCache(ctx context.Context, def rulechain.D
 	upstreamHash := buildUpstreamVarsHash(strict, state)
 	cacheKey := buildRuleCacheKey(baseKey, def.Name, backendHash, upstreamHash)
 
-	// Calculate effective TTL
-	endpointTTL := cache.RuleCacheTTLConfig{} // TODO: Get from endpoint config
+	// Calculate effective TTL with endpoint ceiling
+	// Convert endpoint TTL duration to string for both Pass and Fail outcomes
+	var endpointTTLStr string
+	if a.endpointTTL > 0 {
+		endpointTTLStr = a.endpointTTL.String()
+	}
+	endpointTTLConfig := cache.RuleCacheTTLConfig{
+		Pass:  endpointTTLStr, // Endpoint ceiling for pass outcomes
+		Fail:  endpointTTLStr, // Endpoint ceiling for fail outcomes
+		Error: "",             // Errors never cached
+	}
 	ruleConfig := cache.RuleCacheConfig{
 		FollowCacheControl: def.Cache.FollowCacheControl,
 		TTL: cache.RuleCacheTTLConfig{
@@ -415,7 +426,7 @@ func (a *ruleExecutionAgent) storeRuleCache(ctx context.Context, def rulechain.D
 		},
 		Strict: def.Cache.Strict,
 	}
-	ttl := cache.CalculateEffectiveTTL(outcome, a.serverMaxTTL, endpointTTL, ruleConfig, state.Backend.Headers)
+	ttl := cache.CalculateEffectiveTTL(outcome, a.serverMaxTTL, endpointTTLConfig, ruleConfig, state.Backend.Headers)
 
 	// Store in cache
 	storeStart := time.Now()

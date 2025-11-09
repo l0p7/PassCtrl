@@ -29,7 +29,7 @@ func TestRuleExecutionAgentBackendDefaultFailWhenNotAccepted(t *testing.T) {
 	def := compileBackendOnlyRule(t, targetURL, []int{http.StatusOK})
 
 	backendAgent := newBackendInteractionAgent(mockClient, nil)
-	agent := newRuleExecutionAgent(backendAgent, nil, nil, nil, 0, nil, "")
+	agent := newRuleExecutionAgent(backendAgent, nil, nil, nil, 0, 0, nil, "")
 	state := pipeline.NewState(httptest.NewRequest(http.MethodGet, "http://unit.test/request", nil), "endpoint", "cache-key", "")
 
 	outcome, reason, _ := agent.evaluateRule(context.Background(), def, state)
@@ -52,7 +52,7 @@ func TestRuleExecutionAgentBackendDefaultPassWhenAccepted(t *testing.T) {
 	def := compileBackendOnlyRule(t, targetURL, []int{http.StatusOK})
 
 	backendAgent := newBackendInteractionAgent(mockClient, nil)
-	agent := newRuleExecutionAgent(backendAgent, nil, nil, nil, 0, nil, "")
+	agent := newRuleExecutionAgent(backendAgent, nil, nil, nil, 0, 0, nil, "")
 	state := pipeline.NewState(httptest.NewRequest(http.MethodGet, "http://unit.test/request", nil), "endpoint", "cache-key", "")
 
 	outcome, reason, _ := agent.evaluateRule(context.Background(), def, state)
@@ -77,7 +77,7 @@ func TestRuleExecutionAgentAuthForwardsBearer(t *testing.T) {
 	}}, targetURL, []int{http.StatusOK})
 
 	backendAgent := newBackendInteractionAgent(client, nil)
-	agent := newRuleExecutionAgent(backendAgent, nil, nil, nil, 0, nil, "")
+	agent := newRuleExecutionAgent(backendAgent, nil, nil, nil, 0, 0, nil, "")
 	state := pipeline.NewState(httptest.NewRequest(http.MethodGet, "http://unit.test/request", nil), "endpoint", "cache-key", "")
 	state.Admission.Credentials = []pipeline.AdmissionCredential{{
 		Type:   "bearer",
@@ -118,7 +118,7 @@ func TestRuleExecutionAgentAuthForwardAsHeaderTemplate(t *testing.T) {
 	}, targetURL, []int{http.StatusOK})
 
 	backendAgent := newBackendInteractionAgent(client, nil)
-	agent := newRuleExecutionAgent(backendAgent, nil, templates.NewRenderer(nil), nil, 0, nil, "")
+	agent := newRuleExecutionAgent(backendAgent, nil, templates.NewRenderer(nil), nil, 0, 0, nil, "")
 	state := pipeline.NewState(httptest.NewRequest(http.MethodGet, "http://unit.test/request", nil), "endpoint", "cache-key", "")
 	state.Admission.Credentials = []pipeline.AdmissionCredential{{
 		Type:   "header",
@@ -144,7 +144,7 @@ func TestRuleExecutionAgentAuthFailsWhenNoMatch(t *testing.T) {
 	}}, targetURL, []int{http.StatusOK})
 
 	backendAgent := newBackendInteractionAgent(client, nil)
-	agent := newRuleExecutionAgent(backendAgent, nil, nil, nil, 0, nil, "")
+	agent := newRuleExecutionAgent(backendAgent, nil, nil, nil, 0, 0, nil, "")
 	state := pipeline.NewState(httptest.NewRequest(http.MethodGet, "http://unit.test/request", nil), "endpoint", "cache-key", "")
 	state.Admission.Credentials = []pipeline.AdmissionCredential{{
 		Type:  "header",
@@ -189,7 +189,7 @@ func TestRuleExecutionAgentLocalVariables(t *testing.T) {
 		})
 
 	backendAgent := newBackendInteractionAgent(mockClient, nil)
-	agent := newRuleExecutionAgent(backendAgent, nil, renderer, nil, 0, nil, "")
+	agent := newRuleExecutionAgent(backendAgent, nil, renderer, nil, 0, 0, nil, "")
 	req := httptest.NewRequest(http.MethodGet, "http://unit.test/request", nil)
 	state := pipeline.NewState(req, "endpoint", "cache-key", "")
 	state.Admission.Authenticated = true
@@ -230,7 +230,7 @@ func TestRuleExecutionAgentAppliesPassResponse(t *testing.T) {
 	def := defs[0]
 
 	backendAgent := newBackendInteractionAgent(nil, nil)
-	agent := newRuleExecutionAgent(backendAgent, nil, renderer, nil, 0, nil, "")
+	agent := newRuleExecutionAgent(backendAgent, nil, renderer, nil, 0, 0, nil, "")
 	req := httptest.NewRequest(http.MethodGet, "http://unit.test/request", nil)
 	state := pipeline.NewState(req, "endpoint", "cache-key", "")
 	state.Admission.Authenticated = true
@@ -266,7 +266,7 @@ func TestRuleExecutionAgentAppliesFailResponse(t *testing.T) {
 	def := defs[0]
 
 	backendAgent := newBackendInteractionAgent(nil, nil)
-	agent := newRuleExecutionAgent(backendAgent, nil, renderer, nil, 0, nil, "")
+	agent := newRuleExecutionAgent(backendAgent, nil, renderer, nil, 0, 0, nil, "")
 	req := httptest.NewRequest(http.MethodGet, "http://unit.test/request", nil)
 	state := pipeline.NewState(req, "endpoint", "cache-key", "")
 	state.Admission.Authenticated = true
@@ -303,7 +303,7 @@ func TestRuleExecutionAgentAggregatesPassVariables(t *testing.T) {
 	require.Len(t, defs, 2)
 
 	backendAgent := newBackendInteractionAgent(nil, nil)
-	agent := newRuleExecutionAgent(backendAgent, nil, renderer, nil, 0, nil, "")
+	agent := newRuleExecutionAgent(backendAgent, nil, renderer, nil, 0, 0, nil, "")
 	req := httptest.NewRequest(http.MethodGet, "http://unit.test/request", nil)
 	state := pipeline.NewState(req, "endpoint", "cache-key", "")
 	state.Admission.Authenticated = true
@@ -338,7 +338,7 @@ func TestRuleExecutionAgentAppliesErrorResponse(t *testing.T) {
 	def := defs[0]
 
 	backendAgent := newBackendInteractionAgent(nil, nil)
-	agent := newRuleExecutionAgent(backendAgent, nil, renderer, nil, 0, nil, "")
+	agent := newRuleExecutionAgent(backendAgent, nil, renderer, nil, 0, 0, nil, "")
 	req := httptest.NewRequest(http.MethodGet, "http://unit.test/request", nil)
 	state := pipeline.NewState(req, "endpoint", "cache-key", "")
 	state.Admission.Authenticated = true
@@ -409,7 +409,7 @@ func TestRuleExecutionAgentExportedVariables(t *testing.T) {
 			return newBackendResponse(200, `{"userId":"123","email":"TEST@EXAMPLE.COM","tier":"premium"}`, headers), nil
 		})
 	backendAgent := newBackendInteractionAgent(mockClient, nil)
-	agent := newRuleExecutionAgent(backendAgent, nil, renderer, nil, 0, nil, "")
+	agent := newRuleExecutionAgent(backendAgent, nil, renderer, nil, 0, 0, nil, "")
 
 	def, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{
 		{
@@ -478,7 +478,7 @@ func TestRuleExecutionAgentExportedVariablesOnFail(t *testing.T) {
 			return newBackendResponse(403, `{"error":"forbidden"}`, headers), nil
 		})
 	backendAgent := newBackendInteractionAgent(mockClient, nil)
-	agent := newRuleExecutionAgent(backendAgent, nil, renderer, nil, 0, nil, "")
+	agent := newRuleExecutionAgent(backendAgent, nil, renderer, nil, 0, 0, nil, "")
 
 	def, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{
 		{
@@ -575,7 +575,7 @@ func TestCredentialStripping_CustomHeaderStripped(t *testing.T) {
 	require.Len(t, defs, 1)
 
 	backendAgent := newBackendInteractionAgent(client, nil)
-	agent := newRuleExecutionAgent(backendAgent, nil, renderer, nil, 0, nil, "")
+	agent := newRuleExecutionAgent(backendAgent, nil, renderer, nil, 0, 0, nil, "")
 	req := httptest.NewRequest(http.MethodGet, "http://unit.test/request", nil)
 	req.Header.Set("X-Api-Token", "secret-token")
 	req.Header.Set("X-Custom", "value")
@@ -634,7 +634,7 @@ func TestCredentialStripping_QueryParamStripped(t *testing.T) {
 	require.Len(t, defs, 1)
 
 	backendAgent := newBackendInteractionAgent(client, nil)
-	agent := newRuleExecutionAgent(backendAgent, nil, renderer, nil, 0, nil, "")
+	agent := newRuleExecutionAgent(backendAgent, nil, renderer, nil, 0, 0, nil, "")
 	req := httptest.NewRequest(http.MethodGet, "http://unit.test/request?api_key=token-from-query&limit=100", nil)
 
 	state := pipeline.NewState(req, "endpoint", "cache-key", "")
@@ -704,7 +704,7 @@ func TestCredentialStripping_MultipleMatchGroups(t *testing.T) {
 	require.Len(t, defs, 1)
 
 	backendAgent := newBackendInteractionAgent(client, nil)
-	agent := newRuleExecutionAgent(backendAgent, nil, renderer, nil, 0, nil, "")
+	agent := newRuleExecutionAgent(backendAgent, nil, renderer, nil, 0, 0, nil, "")
 	req := httptest.NewRequest(http.MethodGet, "http://unit.test/request", nil)
 	req.Header.Set("X-Token", "matched-token")
 
@@ -768,7 +768,7 @@ func TestCredentialStripping_PassThroughMode(t *testing.T) {
 	require.Len(t, defs, 1)
 
 	backendAgent := newBackendInteractionAgent(client, nil)
-	agent := newRuleExecutionAgent(backendAgent, nil, renderer, nil, 0, nil, "")
+	agent := newRuleExecutionAgent(backendAgent, nil, renderer, nil, 0, 0, nil, "")
 	req := httptest.NewRequest(http.MethodGet, "http://unit.test/request", nil)
 	req.Header.Set("X-Secret", "secret-value")
 	req.Header.Set("Authorization", "Bearer token")
@@ -823,7 +823,7 @@ func TestCredentialStripping_NoAuthDirectives(t *testing.T) {
 	require.Len(t, defs, 1)
 
 	backendAgent := newBackendInteractionAgent(client, nil)
-	agent := newRuleExecutionAgent(backendAgent, nil, renderer, nil, 0, nil, "")
+	agent := newRuleExecutionAgent(backendAgent, nil, renderer, nil, 0, 0, nil, "")
 	req := httptest.NewRequest(http.MethodGet, "http://unit.test/request", nil)
 	req.Header.Set("X-Api-Token", "token-value")
 

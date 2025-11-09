@@ -364,10 +364,15 @@ The fix implements explicit credential stripping in `renderBackendRequest` (rule
 **⚠️ Redis DeletePrefix Not Implemented** (also noted in hot-reload section)
 - Already documented above under hot-reload
 
-**⚠️ Per-Rule Cache Missing Endpoint TTL Ceiling**
-- Location: `/home/user/PassCtrl/internal/runtime/rule_execution_agent.go:407`
-- Endpoint TTL config not wired to per-rule caching (only server ceiling)
-- Severity: Low - Endpoint-level caching still works correctly
+**✅ ~~Per-Rule Cache Missing Endpoint TTL Ceiling~~** - **FIXED** (2025-11-09)
+- Location: `/home/user/PassCtrl/internal/runtime/rule_execution_agent.go:409-429`
+- Fixed: Endpoint TTL now properly wired to per-rule caching
+- Changes:
+  - Added `endpointTTL` field to `ruleExecutionAgent` struct
+  - Parse `cfg.Cache.ResultTTL` in `buildEndpointRuntime` (runtime.go:774-787)
+  - Pass endpoint TTL to `newRuleExecutionAgent` constructor
+  - Use endpoint TTL as ceiling in `CalculateEffectiveTTL` call
+- Both pass and fail outcomes now respect endpoint TTL ceiling
 
 ---
 

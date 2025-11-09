@@ -669,7 +669,7 @@ func (p *Pipeline) installFallbackEndpoint() {
 		admission.New(trusted, false, defaultAuthConfig),
 		fwdPolicy,
 		rulechain.NewAgent(rulechain.DefaultDefinitions(p.templateRenderer)),
-		newRuleExecutionAgent(backendAgent, ruleExecutionLogger, p.templateRenderer, p.cache, p.cacheTTL, p.metrics, p.correlationHeader),
+		newRuleExecutionAgent(backendAgent, ruleExecutionLogger, p.templateRenderer, p.cache, p.cacheTTL, 0, p.metrics, p.correlationHeader),
 		responsepolicy.NewWithConfig(responsepolicy.Config{Endpoint: "default", Renderer: p.templateRenderer}),
 	}
 	runtime := &endpointRuntime{
@@ -771,9 +771,24 @@ func (p *Pipeline) buildEndpointRuntime(name string, cfg config.EndpointConfig, 
 		p.logger.With(slog.String("agent", "backend_interaction"), slog.String("endpoint", trimmed)),
 	)
 
+	// Parse endpoint TTL ceiling for per-rule caching
+	var endpointTTL time.Duration
+	if cfg.Cache.ResultTTL != "" {
+		parsed, err := time.ParseDuration(cfg.Cache.ResultTTL)
+		if err != nil {
+			p.logger.Warn("invalid endpoint cache.resultTTL, using 0 (no ceiling)",
+				slog.String("endpoint", trimmed),
+				slog.String("resultTTL", cfg.Cache.ResultTTL),
+				slog.Any("error", err))
+			endpointTTL = 0
+		} else {
+			endpointTTL = parsed
+		}
+	}
+
 	agents = append(agents,
 		rulechain.NewAgent(ruleDefs),
-		newRuleExecutionAgent(backendAgent, p.logger.With(slog.String("agent", "rule_execution"), slog.String("endpoint", trimmed)), p.templateRenderer, p.cache, p.cacheTTL, p.metrics, p.correlationHeader),
+		newRuleExecutionAgent(backendAgent, p.logger.With(slog.String("agent", "rule_execution"), slog.String("endpoint", trimmed)), p.templateRenderer, p.cache, p.cacheTTL, endpointTTL, p.metrics, p.correlationHeader),
 		responsepolicy.NewWithConfig(responsepolicy.Config{
 			Endpoint: trimmed,
 			Renderer: p.templateRenderer,
