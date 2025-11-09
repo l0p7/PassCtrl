@@ -237,7 +237,8 @@ func (a *ruleExecutionAgent) evaluateRule(ctx context.Context, def rulechain.Def
 
 	if def.Backend.IsConfigured() {
 		// Render backend request templates before invocation (enables cache key generation)
-		rendered, err := a.renderBackendRequest(def.Backend, selection, state)
+		// Pass all auth directives for credential stripping (fail-closed security)
+		rendered, err := a.renderBackendRequest(def.Backend, selection, def.Auth, state)
 		if err != nil {
 			state.Backend.Error = err.Error()
 			reason := a.ruleMessage(def.ErrorTemplate, def.ErrorMessage, fmt.Sprintf("backend render failed: %v", err), state)
@@ -453,11 +454,63 @@ func (a *ruleExecutionAgent) storeRuleCache(ctx context.Context, def rulechain.D
 	}
 }
 
+// collectCredentialSources extracts all header and query parameter names used as credentials
+// across ALL auth directives (not just the matched one). This supports the fail-closed security
+// model where all credential sources are stripped before applying forwards.
+func collectCredentialSources(allAuthDirectives []rulechain.AuthDirective) (map[string]bool, map[string]bool) {
+	stripHeaders := make(map[string]bool)
+	stripQuery := make(map[string]bool)
+
+	for _, directive := range allAuthDirectives {
+		for _, matcher := range directive.Matchers {
+			switch matcher.Type {
+			case "header":
+				// Headers use lowercase matching (per admission agent normalization)
+				stripHeaders[matcher.MatchName] = true
+			case "query":
+				// Query parameters are case-sensitive
+				stripQuery[matcher.Name] = true
+			case "bearer", "basic":
+				// Authorization header is already protected by config validation
+				// (backendApi.headers cannot contain "authorization")
+				// No explicit stripping needed here
+			case "none":
+				// No credentials to strip
+			}
+		}
+	}
+
+	return stripHeaders, stripQuery
+}
+
+// stripCredentialSources creates a copy of the source map with specified keys removed.
+// Keys in stripKeys are lowercase for headers (case-insensitive matching),
+// case-sensitive for query parameters.
+func stripCredentialSources(source map[string]string, stripKeys map[string]bool) map[string]string {
+	if len(stripKeys) == 0 {
+		return source // No stripping needed
+	}
+
+	result := make(map[string]string, len(source))
+	for key, value := range source {
+		// Check both original key and lowercase key (headers are normalized to lowercase)
+		lowerKey := strings.ToLower(key)
+		if !stripKeys[key] && !stripKeys[lowerKey] {
+			result[key] = value
+		}
+	}
+
+	return result
+}
+
 // renderBackendRequest renders all template components of a backend request before execution.
 // This separation allows cache key generation before invoking the backend.
+// It implements explicit credential stripping: all credential sources from ALL auth directives
+// are stripped from the request before applying forwards (fail-closed security).
 func (a *ruleExecutionAgent) renderBackendRequest(
 	backend rulechain.BackendDefinition,
 	authSel *ruleAuthSelection,
+	allAuthDirectives []rulechain.AuthDirective,
 	state *pipeline.State,
 ) (renderedBackendRequest, error) {
 	// Determine method
@@ -495,8 +548,15 @@ func (a *ruleExecutionAgent) renderBackendRequest(
 		body = backend.Body
 	}
 
-	// Select headers
-	headers := backend.SelectHeaders(state.Request.Headers, state)
+	// Collect credential sources from ALL auth directives (not just matched one)
+	stripHeaders, stripQuery := collectCredentialSources(allAuthDirectives)
+
+	// Create stripped versions of headers and query parameters
+	strippedHeaders := stripCredentialSources(state.Request.Headers, stripHeaders)
+	strippedQuery := stripCredentialSources(state.Request.Query, stripQuery)
+
+	// Select headers from stripped request (null-copy semantics)
+	headers := backend.SelectHeaders(strippedHeaders, state)
 
 	// Add proxy headers from Forward state when enabled
 	if backend.ForwardProxyHeaders {
@@ -514,8 +574,8 @@ func (a *ruleExecutionAgent) renderBackendRequest(
 		}
 	}
 
-	// Select query parameters
-	query := backend.SelectQuery(state.Request.Query, state)
+	// Select query parameters from stripped request (null-copy semantics)
+	query := backend.SelectQuery(strippedQuery, state)
 
 	// Apply auth selection (multiple forwards)
 	if authSel != nil {

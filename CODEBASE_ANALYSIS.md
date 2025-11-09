@@ -13,7 +13,7 @@ The codebase demonstrates **strong architectural discipline** with excellent sec
 
 ### Critical Issues (Must Fix)
 1. **Redis cache invalidation not implemented** - Config reloads don't purge Redis cache entries
-2. **Credential stripping incomplete** - Custom headers/query parameters not stripped from backend requests
+2. ~~**Credential stripping incomplete**~~ - **FIXED** - Custom headers/query parameters now properly stripped from backend requests
 3. **Dual caching architecture** - Split responsibilities between Rule Execution Agent and Result Caching Agent
 
 ### High-Priority Issues (Should Fix)
@@ -209,9 +209,9 @@ if err := p.cache.DeletePrefix(ctx, prefix); err != nil {
 - ✅ JSON parsing and number normalization for CEL
 - ✅ Error handling without policy decisions
 
-#### Critical Gap ❌
+#### ~~Critical Gap~~ ✅ FIXED
 
-**🔴 Credential Stripping Not Fully Implemented**
+**✅ Credential Stripping Implemented** (Fixed: 2025-11-09)
 
 **Design specification** (from CLAUDE.md:191, system-agents.md:106-107, decision-model.md:39-40):
 > **Explicit Stripping**: All credential sources stripped before applying forwards (fail-closed security)
@@ -246,18 +246,29 @@ backendApi:
 
 **Location of issue:** `/home/user/PassCtrl/internal/runtime/rule_execution_agent.go:456-540` (`renderBackendRequest`)
 
-**Security implications:**
-1. Custom header/query credentials may leak to backends when using null-copy semantics
-2. Inconsistent behavior: Authorization is protected, but other credential types are not
-3. Fail-closed security model not fully implemented
+**Security implications (RESOLVED):**
+1. ~~Custom header/query credentials may leak to backends when using null-copy semantics~~ ✅ FIXED
+2. ~~Inconsistent behavior: Authorization is protected, but other credential types are not~~ ✅ FIXED
+3. ~~Fail-closed security model not fully implemented~~ ✅ FIXED
 
-**Recommendation:** Implement credential stripping in `renderBackendRequest` before calling `SelectHeaders`/`SelectQuery`:
-- Extract all credential sources from ALL auth match groups
-- Create "stripped" version of `state.Request.Headers` and `state.Request.Query`
-- Pass stripped versions to `SelectHeaders`/`SelectQuery`
-- Then apply `forwardAs` outputs
+**Implementation Details:**
 
-**Missing tests:** No tests verify credential stripping behavior in `rule_execution_agent_test.go`.
+The fix implements explicit credential stripping in `renderBackendRequest` (rule_execution_agent.go:456-550):
+
+1. **collectCredentialSources()** - Extracts all header and query parameter names used as credentials across ALL auth directives (not just the matched one)
+2. **stripCredentialSources()** - Creates a copy of headers/query with credential sources removed
+3. **Modified renderBackendRequest()** - Now accepts `allAuthDirectives` parameter, strips credentials before applying null-copy semantics, then applies forwards
+
+**Test Coverage:** Five comprehensive tests added (rule_execution_agent_test.go:535-842):
+- `TestCredentialStripping_CustomHeaderStripped` - Verifies custom header credentials are stripped
+- `TestCredentialStripping_QueryParamStripped` - Verifies query parameter credentials are stripped
+- `TestCredentialStripping_MultipleMatchGroups` - Verifies ALL auth groups' credentials are stripped (not just matched)
+- `TestCredentialStripping_PassThroughMode` - Verifies stripping works even without forwardAs
+- `TestCredentialStripping_NoAuthDirectives` - Verifies no stripping when no auth configured
+
+**Files Modified:**
+- `internal/runtime/rule_execution_agent.go` - Implementation
+- `internal/runtime/rule_execution_agent_test.go` - Test coverage
 
 ---
 
@@ -721,11 +732,10 @@ if err := validateRuleExpressions(cfg, env); err != nil {
    - Implement `DeletePrefix()` using SCAN + DEL or key pattern matching
    - Test with actual Redis instance
 
-2. **Implement credential stripping for custom headers/query parameters**
-   - File: `/home/user/PassCtrl/internal/runtime/rule_execution_agent.go:456-540`
-   - Extract all credential sources from auth match groups
-   - Strip from request before applying null-copy semantics
-   - Add comprehensive test coverage
+2. ~~**Implement credential stripping for custom headers/query parameters**~~ ✅ **FIXED**
+   - File: `/home/user/PassCtrl/internal/runtime/rule_execution_agent.go:456-550`
+   - Fixed: Credentials from ALL auth directives now stripped before backend requests
+   - Comprehensive test coverage added (5 test cases)
 
 ### Priority 1: High (Architecture) - Fix Soon
 

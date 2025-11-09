@@ -531,3 +531,312 @@ func TestRuleExecutionAgentExportedVariablesOnFail(t *testing.T) {
 	require.Equal(t, int64(403), state.Variables.Rules["test-rule"]["error_code"])
 	require.Equal(t, "FORBIDDEN", state.Variables.Rules["test-rule"]["error_msg"])
 }
+
+// TestCredentialStripping verifies that custom headers used as credentials
+// are stripped from backend requests when using null-copy semantics.
+func TestCredentialStripping_CustomHeaderStripped(t *testing.T) {
+	const targetURL = "https://backend.test/api"
+	client := runtimemocks.NewMockHTTPDoer(t)
+	client.EXPECT().
+		Do(mock.AnythingOfType("*http.Request")).
+		RunAndReturn(func(req *http.Request) (*http.Response, error) {
+			// X-Api-Token should be stripped (not present)
+			require.Empty(t, req.Header.Get("X-Api-Token"), "credential header should be stripped")
+			// Authorization should be present (forwarded)
+			require.Equal(t, "Bearer secret-token", req.Header.Get("Authorization"))
+			// Other headers should pass through
+			require.Equal(t, "value", req.Header.Get("X-Custom"))
+			return newBackendResponse(http.StatusOK, `{}`, map[string]string{}), nil
+		})
+
+	renderer := templates.NewRenderer(nil)
+	defs, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{{
+		Name: "credential-strip-test",
+		Auth: []rulechain.AuthDirectiveSpec{{
+			Match: []rulechain.AuthMatcherSpec{{
+				Type: "header",
+				Name: "X-Api-Token",
+			}},
+			ForwardAs: []rulechain.AuthForwardSpec{{
+				Type:  "bearer",
+				Token: "{{ index .auth.input.header \"x-api-token\" }}",
+			}},
+		}},
+		Backend: rulechain.BackendDefinitionSpec{
+			URL:      targetURL,
+			Accepted: []int{http.StatusOK},
+			Headers: map[string]*string{
+				"x-api-token": nil, // null-copy: should be stripped
+				"x-custom":    stringPtr("value"),
+			},
+		},
+	}}, renderer)
+	require.NoError(t, err)
+	require.Len(t, defs, 1)
+
+	backendAgent := newBackendInteractionAgent(client, nil)
+	agent := newRuleExecutionAgent(backendAgent, nil, renderer, nil, 0, nil, "")
+	req := httptest.NewRequest(http.MethodGet, "http://unit.test/request", nil)
+	req.Header.Set("X-Api-Token", "secret-token")
+	req.Header.Set("X-Custom", "value")
+
+	state := pipeline.NewState(req, "endpoint", "cache-key", "")
+	state.Admission.Credentials = []pipeline.AdmissionCredential{{
+		Type:  "header",
+		Name:  "X-Api-Token",
+		Value: "secret-token",
+	}}
+
+	outcome, _, _ := agent.evaluateRule(context.Background(), defs[0], state)
+	require.Equal(t, "pass", outcome)
+}
+
+// TestCredentialStripping_QueryParamStripped verifies that query parameters
+// used as credentials are stripped from backend requests.
+func TestCredentialStripping_QueryParamStripped(t *testing.T) {
+	const targetURL = "https://backend.test/api"
+	client := runtimemocks.NewMockHTTPDoer(t)
+	client.EXPECT().
+		Do(mock.AnythingOfType("*http.Request")).
+		RunAndReturn(func(req *http.Request) (*http.Response, error) {
+			// api_key query param should be stripped
+			require.Empty(t, req.URL.Query().Get("api_key"), "credential query param should be stripped")
+			// Authorization header should be present (forwarded)
+			require.Equal(t, "Bearer token-from-query", req.Header.Get("Authorization"))
+			// Other query params should pass through
+			require.Equal(t, "100", req.URL.Query().Get("limit"))
+			return newBackendResponse(http.StatusOK, `{}`, map[string]string{}), nil
+		})
+
+	renderer := templates.NewRenderer(nil)
+	defs, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{{
+		Name: "query-strip-test",
+		Auth: []rulechain.AuthDirectiveSpec{{
+			Match: []rulechain.AuthMatcherSpec{{
+				Type: "query",
+				Name: "api_key",
+			}},
+			ForwardAs: []rulechain.AuthForwardSpec{{
+				Type:  "bearer",
+				Token: "{{ index .auth.input.query \"api_key\" }}",
+			}},
+		}},
+		Backend: rulechain.BackendDefinitionSpec{
+			URL:      targetURL,
+			Accepted: []int{http.StatusOK},
+			Query: map[string]*string{
+				"api_key": nil, // null-copy: should be stripped
+				"limit":   stringPtr("100"),
+			},
+		},
+	}}, renderer)
+	require.NoError(t, err)
+	require.Len(t, defs, 1)
+
+	backendAgent := newBackendInteractionAgent(client, nil)
+	agent := newRuleExecutionAgent(backendAgent, nil, renderer, nil, 0, nil, "")
+	req := httptest.NewRequest(http.MethodGet, "http://unit.test/request?api_key=token-from-query&limit=100", nil)
+
+	state := pipeline.NewState(req, "endpoint", "cache-key", "")
+	state.Admission.Credentials = []pipeline.AdmissionCredential{{
+		Type:  "query",
+		Name:  "api_key",
+		Value: "token-from-query",
+	}}
+	state.Request.Query = map[string]string{
+		"api_key": "token-from-query",
+		"limit":   "100",
+	}
+
+	outcome, _, _ := agent.evaluateRule(context.Background(), defs[0], state)
+	require.Equal(t, "pass", outcome)
+}
+
+// TestCredentialStripping_MultipleMatchGroups verifies that credentials from
+// ALL auth match groups are stripped, not just the matched one.
+func TestCredentialStripping_MultipleMatchGroups(t *testing.T) {
+	const targetURL = "https://backend.test/api"
+	client := runtimemocks.NewMockHTTPDoer(t)
+	client.EXPECT().
+		Do(mock.AnythingOfType("*http.Request")).
+		RunAndReturn(func(req *http.Request) (*http.Response, error) {
+			// Both X-Api-Key and X-Token should be stripped (from different match groups)
+			require.Empty(t, req.Header.Get("X-Api-Key"), "credential header from non-matched group should be stripped")
+			require.Empty(t, req.Header.Get("X-Token"), "credential header from matched group should be stripped")
+			// Authorization should be present (forwarded from matched group)
+			require.Equal(t, "Bearer matched-token", req.Header.Get("Authorization"))
+			return newBackendResponse(http.StatusOK, `{}`, map[string]string{}), nil
+		})
+
+	renderer := templates.NewRenderer(nil)
+	defs, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{{
+		Name: "multi-group-test",
+		Auth: []rulechain.AuthDirectiveSpec{
+			{
+				// First group - won't match (no X-Api-Key header)
+				Match: []rulechain.AuthMatcherSpec{{
+					Type: "header",
+					Name: "X-Api-Key",
+				}},
+			},
+			{
+				// Second group - will match
+				Match: []rulechain.AuthMatcherSpec{{
+					Type: "header",
+					Name: "X-Token",
+				}},
+				ForwardAs: []rulechain.AuthForwardSpec{{
+					Type:  "bearer",
+					Token: "{{ index .auth.input.header \"x-token\" }}",
+				}},
+			},
+		},
+		Backend: rulechain.BackendDefinitionSpec{
+			URL:      targetURL,
+			Accepted: []int{http.StatusOK},
+			Headers: map[string]*string{
+				"x-api-key": nil, // null-copy: should be stripped (from non-matched group)
+				"x-token":   nil, // null-copy: should be stripped (from matched group)
+			},
+		},
+	}}, renderer)
+	require.NoError(t, err)
+	require.Len(t, defs, 1)
+
+	backendAgent := newBackendInteractionAgent(client, nil)
+	agent := newRuleExecutionAgent(backendAgent, nil, renderer, nil, 0, nil, "")
+	req := httptest.NewRequest(http.MethodGet, "http://unit.test/request", nil)
+	req.Header.Set("X-Token", "matched-token")
+
+	state := pipeline.NewState(req, "endpoint", "cache-key", "")
+	state.Request.Headers = map[string]string{
+		"x-token": "matched-token",
+	}
+	state.Admission.Credentials = []pipeline.AdmissionCredential{{
+		Type:  "header",
+		Name:  "X-Token",
+		Value: "matched-token",
+	}}
+
+	outcome, _, _ := agent.evaluateRule(context.Background(), defs[0], state)
+	require.Equal(t, "pass", outcome)
+}
+
+// TestCredentialStripping_PassThroughMode verifies that even in pass-through mode
+// (no forwardAs), credentials are still stripped from null-copy headers.
+func TestCredentialStripping_PassThroughMode(t *testing.T) {
+	const targetURL = "https://backend.test/api"
+	client := runtimemocks.NewMockHTTPDoer(t)
+	client.EXPECT().
+		Do(mock.AnythingOfType("*http.Request")).
+		RunAndReturn(func(req *http.Request) (*http.Response, error) {
+			// X-Secret should be stripped (used as credential)
+			require.Empty(t, req.Header.Get("X-Secret"), "credential header should be stripped even in pass-through mode")
+			// Authorization should be present (pass-through forward)
+			require.NotEmpty(t, req.Header.Get("Authorization"))
+			return newBackendResponse(http.StatusOK, `{}`, map[string]string{}), nil
+		})
+
+	renderer := templates.NewRenderer(nil)
+	defs, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{{
+		Name: "pass-through-test",
+		Auth: []rulechain.AuthDirectiveSpec{
+			{
+				// Match on custom header
+				Match: []rulechain.AuthMatcherSpec{{
+					Type: "header",
+					Name: "X-Secret",
+				}},
+				// No forwardAs - triggers pass-through mode
+			},
+			{
+				// Also match bearer for pass-through
+				Match: []rulechain.AuthMatcherSpec{{
+					Type: "bearer",
+				}},
+			},
+		},
+		Backend: rulechain.BackendDefinitionSpec{
+			URL:      targetURL,
+			Accepted: []int{http.StatusOK},
+			Headers: map[string]*string{
+				"x-secret": nil, // null-copy: should be stripped
+			},
+		},
+	}}, renderer)
+	require.NoError(t, err)
+	require.Len(t, defs, 1)
+
+	backendAgent := newBackendInteractionAgent(client, nil)
+	agent := newRuleExecutionAgent(backendAgent, nil, renderer, nil, 0, nil, "")
+	req := httptest.NewRequest(http.MethodGet, "http://unit.test/request", nil)
+	req.Header.Set("X-Secret", "secret-value")
+	req.Header.Set("Authorization", "Bearer token")
+
+	state := pipeline.NewState(req, "endpoint", "cache-key", "")
+	state.Request.Headers = map[string]string{
+		"x-secret":      "secret-value",
+		"authorization": "Bearer token",
+	}
+	state.Admission.Credentials = []pipeline.AdmissionCredential{
+		{
+			Type:  "header",
+			Name:  "X-Secret",
+			Value: "secret-value",
+		},
+		{
+			Type:  "bearer",
+			Token: "token",
+		},
+	}
+
+	outcome, _, _ := agent.evaluateRule(context.Background(), defs[0], state)
+	require.Equal(t, "pass", outcome)
+}
+
+// TestCredentialStripping_NoAuthDirectives verifies that when there are no auth
+// directives, headers pass through normally (no stripping).
+func TestCredentialStripping_NoAuthDirectives(t *testing.T) {
+	const targetURL = "https://backend.test/api"
+	client := runtimemocks.NewMockHTTPDoer(t)
+	client.EXPECT().
+		Do(mock.AnythingOfType("*http.Request")).
+		RunAndReturn(func(req *http.Request) (*http.Response, error) {
+			// X-Api-Token should NOT be stripped (no auth directives)
+			require.Equal(t, "token-value", req.Header.Get("X-Api-Token"))
+			return newBackendResponse(http.StatusOK, `{}`, map[string]string{}), nil
+		})
+
+	renderer := templates.NewRenderer(nil)
+	defs, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{{
+		Name: "no-auth-test",
+		// No auth directives
+		Backend: rulechain.BackendDefinitionSpec{
+			URL:      targetURL,
+			Accepted: []int{http.StatusOK},
+			Headers: map[string]*string{
+				"x-api-token": nil, // null-copy: should pass through
+			},
+		},
+	}}, renderer)
+	require.NoError(t, err)
+	require.Len(t, defs, 1)
+
+	backendAgent := newBackendInteractionAgent(client, nil)
+	agent := newRuleExecutionAgent(backendAgent, nil, renderer, nil, 0, nil, "")
+	req := httptest.NewRequest(http.MethodGet, "http://unit.test/request", nil)
+	req.Header.Set("X-Api-Token", "token-value")
+
+	state := pipeline.NewState(req, "endpoint", "cache-key", "")
+	state.Request.Headers = map[string]string{
+		"x-api-token": "token-value",
+	}
+
+	outcome, _, _ := agent.evaluateRule(context.Background(), defs[0], state)
+	require.Equal(t, "pass", outcome)
+}
+
+// Helper function for string pointers
+func stringPtr(s string) *string {
+	return &s
+}
