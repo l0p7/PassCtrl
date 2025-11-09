@@ -165,10 +165,7 @@ func (c *redisCache) DeletePrefix(ctx context.Context, prefix string) error {
 		keys := scanResult.Elements
 		if len(keys) > 0 {
 			for i := 0; i < len(keys); i += delSize {
-				end := i + delSize
-				if end > len(keys) {
-					end = len(keys)
-				}
+				end := min(i+delSize, len(keys))
 				batch := keys[i:end]
 
 				// Use UNLINK for non-blocking deletion

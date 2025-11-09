@@ -127,8 +127,8 @@ func applyTTLCeilings(ttl time.Duration, serverMaxTTL time.Duration, endpointTTL
 
 	// Apply endpoint ceiling
 	endpointCeiling := endpointTTL.GetTTL(outcome)
-	if endpointCeiling > 0 && endpointCeiling < result {
-		result = endpointCeiling
+	if endpointCeiling > 0 {
+		result = min(result, endpointCeiling)
 	}
 
 	// Apply server ceiling
