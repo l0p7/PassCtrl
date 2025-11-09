@@ -40,8 +40,8 @@ func TestNewPipelineState(t *testing.T) {
 	state := newTestPipelineState(req)
 
 	require.Equal(t, "auth:bearer-token|test|/v1/auth", state.CacheKey())
-	require.Equal(t, http.MethodPost, state.Raw.Method)
-	require.Equal(t, "bearer-token", state.Raw.Headers["authorization"])
+	require.Equal(t, http.MethodPost, state.Request.Method)
+	require.Equal(t, "bearer-token", state.Request.Headers["authorization"])
 	require.NotNil(t, state.Response.Headers)
 	require.NotNil(t, state.Forward.Headers)
 	require.NotNil(t, state.Forward.Query)
@@ -271,7 +271,7 @@ func TestRuleChainAgentExecute(t *testing.T) {
 func TestRuleExecutionAgentExecute(t *testing.T) {
 	newAgent := func(client httpDoer) *ruleExecutionAgent {
 		backendAgent := newBackendInteractionAgent(client, nil)
-		return newRuleExecutionAgent(backendAgent, nil, nil, nil, 0, nil)
+		return newRuleExecutionAgent(backendAgent, nil, nil, nil, 0, nil, "")
 	}
 
 	t.Run("skip on cache", func(t *testing.T) {
@@ -472,7 +472,7 @@ func TestRuleExecutionAgentExecute(t *testing.T) {
 		require.NoError(t, err)
 
 		state := &pipeline.State{
-			Raw: pipeline.RawState{
+			Request: pipeline.RequestState{
 				Query: map[string]string{"allow": "true"},
 			},
 			Forward: pipeline.ForwardState{
@@ -494,13 +494,12 @@ func TestRuleExecutionAgentExecute(t *testing.T) {
 
 	t.Run("renders backend body from templates", func(t *testing.T) {
 		dir := t.TempDir()
-		sandbox, err := templates.NewSandbox(dir, true, []string{"TOKEN"})
+		sandbox, err := templates.NewSandbox(dir)
 		require.NoError(t, err)
-		t.Setenv("TOKEN", "secret")
 		renderer := templates.NewRenderer(sandbox)
 
 		path := filepath.Join(dir, "body.txt")
-		require.NoError(t, os.WriteFile(path, []byte("file-{{ env \"TOKEN\" }}"), 0o600))
+		require.NoError(t, os.WriteFile(path, []byte("file-{{ .endpoint }}"), 0o600))
 
 		inlineURL := "https://backend.test/inline"
 		fileURL := "https://backend.test/file"
@@ -534,7 +533,7 @@ func TestRuleExecutionAgentExecute(t *testing.T) {
 		defs, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{
 			{
 				Name:       "inline",
-				Backend:    rulechain.BackendDefinitionSpec{URL: inlineURL, Method: http.MethodPost, Body: "inline-{{ env \"TOKEN\" }}"},
+				Backend:    rulechain.BackendDefinitionSpec{URL: inlineURL, Method: http.MethodPost, Body: "inline-{{ .endpoint }}"},
 				Conditions: rulechain.ConditionSpec{Pass: []string{"true"}},
 			},
 			{
@@ -545,19 +544,19 @@ func TestRuleExecutionAgentExecute(t *testing.T) {
 		}, renderer)
 		require.NoError(t, err)
 
-		state := &pipeline.State{}
+		state := &pipeline.State{Endpoint: "test-endpoint"}
 		state.Rule.ShouldExecute = true
 		state.SetPlan(rulechain.ExecutionPlan{Rules: defs})
 
 		backendAgent := newBackendInteractionAgent(mockClient, nil)
-		res := newRuleExecutionAgent(backendAgent, nil, renderer, nil, 0, nil).Execute(context.Background(), nil, state)
+		res := newRuleExecutionAgent(backendAgent, nil, renderer, nil, 0, nil, "").Execute(context.Background(), nil, state)
 		require.Equal(t, "pass", res.Status)
 		require.Equal(t, "pass", state.Rule.Outcome)
 		require.Len(t, state.Rule.History, 2)
 		require.True(t, state.Backend.Requested)
 		require.True(t, state.Backend.Accepted)
-		require.Contains(t, inlineBodies, "inline-secret")
-		require.Contains(t, fileBodies, "file-secret")
+		require.Contains(t, inlineBodies, "inline-test-endpoint")
+		require.Contains(t, fileBodies, "file-test-endpoint")
 	})
 
 	t.Run("follows link header pagination", func(t *testing.T) {
@@ -611,7 +610,7 @@ func TestRuleExecutionAgentExecute(t *testing.T) {
 		require.NoError(t, err)
 
 		state := &pipeline.State{
-			Raw: pipeline.RawState{
+			Request: pipeline.RequestState{
 				Query: map[string]string{"allow": "true"},
 			},
 			Admission: pipeline.AdmissionState{
@@ -635,9 +634,8 @@ func TestRuleExecutionAgentExecute(t *testing.T) {
 	t.Run("renders template reason with sandbox context", func(t *testing.T) {
 		agent := newAgent(nil)
 		dir := t.TempDir()
-		sandbox, err := templates.NewSandbox(dir, true, []string{"ALLOWED"})
+		sandbox, err := templates.NewSandbox(dir)
 		require.NoError(t, err)
-		t.Setenv("ALLOWED", "visible")
 		renderer := templates.NewRenderer(sandbox)
 
 		defs, err := rulechain.CompileDefinitions([]rulechain.DefinitionSpec{{
@@ -645,17 +643,17 @@ func TestRuleExecutionAgentExecute(t *testing.T) {
 			Conditions: rulechain.ConditionSpec{
 				Pass: []string{`forward.headers["authorization"] == "token"`},
 			},
-			PassMessage: "{{ env \"ALLOWED\" }}:{{ index .forward.Headers \"authorization\" }}",
+			PassMessage: "endpoint={{ .endpoint }}:{{ index .forward.Headers \"authorization\" }}",
 		}}, renderer)
 		require.NoError(t, err)
 
-		state := &pipeline.State{Forward: pipeline.ForwardState{Headers: map[string]string{"authorization": "token"}}}
+		state := &pipeline.State{Endpoint: "test", Forward: pipeline.ForwardState{Headers: map[string]string{"authorization": "token"}}}
 		state.Rule.ShouldExecute = true
 		state.SetPlan(rulechain.ExecutionPlan{Rules: defs})
 
 		res := agent.Execute(context.Background(), nil, state)
 		require.Equal(t, "pass", res.Status)
-		require.Equal(t, "visible:token", state.Rule.Reason)
+		require.Equal(t, "endpoint=test:token", state.Rule.Reason)
 	})
 }
 

@@ -112,7 +112,7 @@ Configuration uses YAML/TOML/JSON loaded via `koanf` with precedence: `env > fil
 - `server.rules.rulesFolder` - Directory watched for hot-reload (default: `./rules`)
 
 Configuration spans three layers:
-- **Server** - Listen address/port, logging (json/text), rules sources, template sandbox controls (`templatesFolder`, `templatesAllowEnv`)
+- **Server** - Listen address/port, logging (json/text), rules sources, template sandbox (`templatesFolder`), environment variables (`server.variables.environment`)
 - **Endpoints** - Authentication posture, trusted proxy IPs, forward request/response policies, rule chain ordering, cache hints
 - **Rules** - Credential intake via **match groups** (compound admission with AND/OR logic, value-based matching with regex, multi-format credential emission), backend orchestration with CEL-based conditions (`whenAll`/`failWhen`/`errorWhen`), scoped variable exports, response shaping
 
@@ -196,6 +196,11 @@ First non-pass result short-circuits the chain.
 - Drop entries on 5xx or error outcomes
 - Honor separate `passTTL`/`failTTL` from rule config
 - Respect `followCacheControl` when backends send cache headers
+- **Proxy Header Inclusion** (`includeProxyHeaders`):
+  - Default `true`: Proxy headers in backend requests are included in cache key hash
+  - When `false`: Proxy headers excluded from cache key for better cache hit rates
+  - **Security Warning**: Setting to `false` can cause cache correctness issues if backends use client IP/geo-location for decisions
+  - Only set to `false` when certain backends don't rely on proxy headers
 
 ### Testing Conventions
 - Use `testify/require` for fatal setup checks, `testify/assert` for non-fatal validations
@@ -243,7 +248,21 @@ Run locally with cached directories to avoid permission issues (see commands abo
 Templates must:
 - Resolve paths relative to `server.templates.templatesFolder`
 - Reject path traversal attempts outside the folder
-- Only access environment variables when `templatesAllowEnv: true` and variable is in `templatesAllowedEnv` allowlist
+
+### Environment Variables
+Environment variables configured in `server.variables.environment`:
+- Use null-copy semantics: `key: null` = read env var `key`, `key: "ENV_VAR"` = read `ENV_VAR` as `key`
+- Loaded at startup with fail-fast validation (missing vars cause startup failure)
+- Exposed as `variables.environment.*` in both CEL and templates
+- Deprecated template functions `env` and `expandenv` return empty strings
+
+### Secrets (Docker/Kubernetes)
+File-based secrets configured in `server.variables.secrets`:
+- Use null-copy semantics: `key: null` = read `/run/secrets/key`, `key: "filename"` = read `/run/secrets/filename` as `key`
+- Loaded at startup with fail-fast validation (missing files cause startup failure)
+- Exposed as `variables.secrets.*` in both CEL and templates
+- Trailing newlines/carriage returns automatically trimmed (Docker adds these)
+- Ideal for Docker/Kubernetes secret mounts
 
 ### Observability
 Every agent emits structured logs with consistent fields:

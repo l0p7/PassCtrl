@@ -142,7 +142,7 @@ func (a *Agent) Execute(_ context.Context, r *http.Request, state *pipeline.Stat
 
 		if valuePtr == nil {
 			// Null-copy from raw request
-			if rawValue, ok := state.Raw.Headers[lowerName]; ok {
+			if rawValue, ok := state.Request.Headers[lowerName]; ok {
 				headers[lowerName] = rawValue
 			}
 		} else {

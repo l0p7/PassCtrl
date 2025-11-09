@@ -127,7 +127,7 @@ func TestAgentExecute(t *testing.T) {
 
 func TestAgentExecuteWithConfigAppliesOverrides(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "http://example.com/demo", http.NoBody)
-	req.Header.Set("X-Keep", "value") // Will be captured in state.Raw.Headers
+	req.Header.Set("X-Keep", "value") // Will be captured in state.Request.Headers
 	state := pipeline.NewState(req, "endpoint-a", "cache-key", "corr-id")
 	state.Rule.Outcome = "pass"
 

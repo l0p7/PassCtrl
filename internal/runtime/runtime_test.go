@@ -54,12 +54,12 @@ func TestPipelineEndpointSelectionAndRules(t *testing.T) {
 		Rules: map[string]config.RuleConfig{
 			"allow-rule": {
 				Conditions: config.RuleConditionConfig{
-					Pass: []string{`raw.query["allow"] == "true"`},
+					Pass: []string{`request.query["allow"] == "true"`},
 				},
 			},
 			"deny-rule": {
 				Conditions: config.RuleConditionConfig{
-					Fail: []string{`raw.query["deny"] == "true"`},
+					Fail: []string{`request.query["deny"] == "true"`},
 				},
 			},
 		},
@@ -185,7 +185,7 @@ func TestPipelineLogsIncludeCorrelationID(t *testing.T) {
 		Rules: map[string]config.RuleConfig{
 			"allow-rule": {
 				Conditions: config.RuleConditionConfig{
-					Pass: []string{`raw.query["allow"] == "true"`},
+					Pass: []string{`request.query["allow"] == "true"`},
 				},
 			},
 		},
@@ -238,7 +238,7 @@ func TestPipelineRecordsMetrics(t *testing.T) {
 		Rules: map[string]config.RuleConfig{
 			"allow-rule": {
 				Conditions: config.RuleConditionConfig{
-					Pass: []string{`raw.query["allow"] == "true"`},
+					Pass: []string{`request.query["allow"] == "true"`},
 				},
 			},
 		},
@@ -271,7 +271,7 @@ func TestPipelineSingleEndpointDefaults(t *testing.T) {
 		Rules: map[string]config.RuleConfig{
 			"solo-rule": {
 				Conditions: config.RuleConditionConfig{
-					Pass: []string{`raw.query["allow"] == "true"`},
+					Pass: []string{`request.query["allow"] == "true"`},
 				},
 			},
 		},
@@ -441,7 +441,7 @@ func TestAuthResponseIsMinimal(t *testing.T) {
 			},
 		},
 		Rules: map[string]config.RuleConfig{
-			"solo-rule": {Conditions: config.RuleConditionConfig{Pass: []string{`raw.query["allow"] == "true"`}}},
+			"solo-rule": {Conditions: config.RuleConditionConfig{Pass: []string{`request.query["allow"] == "true"`}}},
 		},
 		CorrelationHeader: "X-Request-ID",
 	}
@@ -470,7 +470,7 @@ func TestAuthResponseIsMinimal(t *testing.T) {
 			},
 		},
 		Rules: map[string]config.RuleConfig{
-			"solo-rule": {Conditions: config.RuleConditionConfig{Fail: []string{`raw.query["deny"] == "true"`}}},
+			"solo-rule": {Conditions: config.RuleConditionConfig{Fail: []string{`request.query["deny"] == "true"`}}},
 		},
 		CorrelationHeader: "X-Request-ID",
 	}

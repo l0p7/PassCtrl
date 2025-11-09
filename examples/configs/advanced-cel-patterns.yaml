@@ -1,0 +1,567 @@
+# Advanced CEL Expression Patterns
+#
+# This example demonstrates sophisticated CEL expression patterns for complex
+# authentication and authorization scenarios. Each rule showcases different
+# CEL capabilities and best practices.
+#
+# Topics covered:
+# - Complex backend response parsing (nested JSON, arrays)
+# - Safe field access with has() macro
+# - String pattern matching and validation
+# - Multi-rule variable composition
+# - Timestamp and numeric operations
+# - Array filtering and membership checks
+# - Error classification patterns
+#
+# See docs/guides/cel-expressions.md for detailed explanations
+
+server:
+  listen:
+    address: "0.0.0.0"
+    port: 8080
+  logging:
+    level: debug
+    format: json
+  rules:
+    rulesFolder: ""
+    rulesFile: ""
+  templates:
+    templatesFolder: "./templates"
+    templatesAllowEnv: false
+
+endpoints:
+  # Example 1: Complex response parsing with nested structures
+  user-profile-api:
+    description: "Parse complex nested API responses with arrays and metadata"
+    authentication:
+      required: true
+      allow:
+        authorization: ["bearer"]
+    rules:
+      - name: parse-user-profile
+      - name: validate-permissions
+    responsePolicy:
+      pass:
+        status: 200
+        headers:
+          X-User-ID: "{{ .response.user_id }}"
+          X-User-Tier: "{{ .response.tier }}"
+          X-Permissions: "{{ .response.permission_count }}"
+      fail:
+        status: 403
+      error:
+        status: 502
+
+  # Example 2: Multi-rule variable composition
+  admin-verification:
+    description: "Multi-stage validation with variable passing between rules"
+    authentication:
+      required: true
+      allow:
+        authorization: ["bearer"]
+    rules:
+      - name: check-user-role
+      - name: check-admin-quota
+      - name: verify-admin-permissions
+    responsePolicy:
+      pass:
+        status: 200
+        headers:
+          X-Admin-Level: "{{ .response.admin_level }}"
+          X-Quota-Remaining: "{{ .response.quota_remaining }}"
+      fail:
+        status: 403
+        body: |
+          {
+            "error": "insufficient privileges",
+            "required_level": "{{ .response.required_level }}",
+            "current_level": "{{ .response.current_level }}"
+          }
+
+  # Example 3: Advanced string validation and pattern matching
+  api-key-validation:
+    description: "Validate API keys with complex pattern matching and format checks"
+    authentication:
+      required: true
+      allow:
+        header: ["X-API-Key"]
+    rules:
+      - name: validate-api-key-format
+      - name: introspect-api-key
+    responsePolicy:
+      pass:
+        status: 200
+      fail:
+        status: 401
+        headers:
+          X-Error-Code: "{{ .response.error_code }}"
+
+  # Example 4: Timestamp and expiration handling
+  session-validation:
+    description: "Validate sessions with expiration checks and time-based logic"
+    authentication:
+      required: true
+      allow:
+        authorization: ["bearer"]
+    rules:
+      - name: validate-session-token
+      - name: check-session-expiry
+    responsePolicy:
+      pass:
+        status: 200
+        headers:
+          X-Session-TTL: "{{ .response.ttl_seconds }}"
+      fail:
+        status: 401
+        body: |
+          {
+            "error": "session expired",
+            "expired_at": "{{ .response.expired_at }}"
+          }
+
+rules:
+  # Rule 1: Parse complex nested JSON with arrays
+  parse-user-profile:
+    description: "Parse nested user profile with safe field access patterns"
+    auth:
+      - match:
+          - type: bearer
+        forwardAs:
+          - type: bearer
+            token: "{{ .auth.input.bearer.token }}"
+
+    backendApi:
+      url: "https://profile.api.example.com/v2/users/me"
+      method: GET
+      headers:
+        accept: "application/json"
+      acceptedStatuses: [200, 206]
+
+    conditions:
+      pass:
+        # Safe navigation through nested structure
+        - has(backend.body.data) && has(backend.body.data.user)
+
+        # Verify user is active and verified
+        - has(backend.body.data.user.status) &&
+          backend.body.data.user.status == "active"
+        - has(backend.body.data.user.verified) &&
+          backend.body.data.user.verified == true
+
+        # Check subscription tier exists and is valid
+        - has(backend.body.data.subscription) &&
+          has(backend.body.data.subscription.tier)
+        - backend.body.data.subscription.tier in ["premium", "enterprise", "pro"]
+
+        # Validate roles array
+        - has(backend.body.data.user.roles) &&
+          size(backend.body.data.user.roles) > 0
+        - backend.body.data.user.roles.exists(r, r in ["user", "member", "admin"])
+
+        # Verify metadata
+        - has(backend.body.metadata) &&
+          has(backend.body.metadata.version) &&
+          backend.body.metadata.version == "2.0"
+
+      fail:
+        # Explicit failure cases
+        - backend.body.data.user.status == "suspended"
+        - backend.body.data.user.verified == false
+        - backend.body.data.subscription.tier == "free"
+        - size(backend.body.data.user.roles) == 0
+
+      error:
+        # Server errors and malformed responses
+        - backend.status >= 500
+        - backend.status == 0
+        - !has(backend.body.data)
+
+    variables:
+      user_id: backend.body.data.user.id
+      email: backend.body.data.user.email
+      tier: backend.body.data.subscription.tier
+      roles: backend.body.data.user.roles
+      created_at: backend.body.data.user.created_at
+
+    responses:
+      pass:
+        variables:
+          user_id: variables.user_id
+          tier: variables.tier
+          roles: variables.roles
+
+    cache:
+      passTTL: "5m"
+      failTTL: "1m"
+
+  # Rule 2: Validate permissions array with exists() macro
+  validate-permissions:
+    description: "Check permissions array using CEL array macros"
+
+    conditions:
+      pass:
+        # Access previous rule's variables using direct indexing
+        - "parse-user-profile" in variables.rule
+        - has(variables.rule["parse-user-profile"].roles)
+
+        # Check if user has admin or editor role
+        - variables.rule["parse-user-profile"].roles.exists(r,
+            r == "admin" || r == "editor" || r == "moderator")
+
+        # Verify tier level
+        - variables.rule["parse-user-profile"].tier in ["premium", "enterprise", "pro"]
+
+      fail:
+        # Only viewers or free tier
+        - variables.rule["parse-user-profile"].roles.all(r, r == "viewer")
+        - variables.rule["parse-user-profile"].tier == "free"
+
+    responses:
+      pass:
+        variables:
+          permission_count: size(variables.rule["parse-user-profile"].roles)
+
+    cache:
+      passTTL: "0s"
+
+  # Rule 3: Multi-stage admin verification with role checks
+  check-user-role:
+    description: "First stage: validate user role from backend"
+    auth:
+      - match:
+          - type: bearer
+
+    backendApi:
+      url: "https://roles.api.example.com/check"
+      method: POST
+      headers:
+        content-type: "application/json"
+      body: |
+        {
+          "token": "{{ .auth.input.bearer.token }}"
+        }
+      acceptedStatuses: [200]
+
+    conditions:
+      pass:
+        # Verify role structure
+        - has(backend.body.role) && has(backend.body.level)
+
+        # Check role is admin or superuser
+        - backend.body.role in ["admin", "superuser", "owner"]
+
+        # Verify role level is sufficient (1-10 scale)
+        - has(backend.body.level) && type(backend.body.level) == int
+        - backend.body.level >= 7
+
+        # Check role hasn't been revoked
+        - has(backend.body.revoked) && backend.body.revoked == false
+
+      fail:
+        - backend.body.role in ["viewer", "guest", "user"]
+        - backend.body.level < 7
+        - backend.body.revoked == true
+
+    variables:
+      role: backend.body.role
+      role_level: backend.body.level
+      granted_at: backend.body.granted_at
+
+    responses:
+      pass:
+        variables:
+          role: variables.role
+          role_level: variables.role_level
+
+    cache:
+      passTTL: "10m"
+      failTTL: "30s"
+
+  # Rule 4: Check admin quota with numeric operations
+  check-admin-quota:
+    description: "Second stage: verify admin has remaining quota"
+
+    backendApi:
+      url: "https://quota.api.example.com/check"
+      method: GET
+      acceptedStatuses: [200]
+
+    conditions:
+      pass:
+        # Access role from previous rule
+        - "check-user-role" in variables.rule
+        - variables.rule["check-user-role"].role in ["admin", "superuser", "owner"]
+
+        # Check quota fields exist
+        - has(backend.body.quota) &&
+          has(backend.body.quota.used) &&
+          has(backend.body.quota.limit)
+
+        # Verify quota remaining (limit - used > 10%)
+        - backend.body.quota.limit - backend.body.quota.used >
+          backend.body.quota.limit * 0.1
+
+        # Check usage percentage is under 90%
+        - double(backend.body.quota.used) / double(backend.body.quota.limit) < 0.9
+
+      fail:
+        # Quota exhausted
+        - backend.body.quota.used >= backend.body.quota.limit
+        - backend.body.quota.limit - backend.body.quota.used == 0
+
+    variables:
+      quota_remaining: backend.body.quota.limit - backend.body.quota.used
+      quota_percent: double(backend.body.quota.used) / double(backend.body.quota.limit) * 100.0
+
+    responses:
+      pass:
+        variables:
+          quota_remaining: variables.quota_remaining
+      fail:
+        variables:
+          required_level: "admin"
+          current_level: "{{ .rules.check-user-role.variables.role }}"
+
+    cache:
+      passTTL: "2m"
+
+  # Rule 5: Verify specific admin permissions
+  verify-admin-permissions:
+    description: "Third stage: verify admin has specific permissions"
+
+    conditions:
+      pass:
+        # Verify previous rules completed successfully
+        - "check-user-role" in variables.rule
+        - "check-admin-quota" in variables.rule
+
+        # Role level must be high enough
+        - variables.rule["check-user-role"].role_level >= 8
+
+        # Must have quota remaining
+        - variables.rule["check-admin-quota"].quota_remaining > 100
+
+      fail:
+        - variables.rule["check-user-role"].role_level < 8
+        - variables.rule["check-admin-quota"].quota_remaining <= 100
+
+    responses:
+      pass:
+        variables:
+          admin_level: variables.rule["check-user-role"].role_level
+
+    cache:
+      passTTL: "0s"
+
+  # Rule 6: Advanced API key format validation
+  validate-api-key-format:
+    description: "Validate API key format with regex and string operations"
+    auth:
+      - match:
+          - type: header
+            name: X-API-Key
+        forwardAs:
+          - type: header
+            name: X-API-Key
+            value: "{{ index .auth.input.header \"x-api-key\" }}"
+
+    conditions:
+      pass:
+        # Extract API key from auth context
+        - has(auth.input.header["x-api-key"])
+
+        # Check key format: must start with prefix
+        - auth.input.header["x-api-key"].startsWith("pk_live_") ||
+          auth.input.header["x-api-key"].startsWith("pk_test_")
+
+        # Validate key length (prefix + 32 char hash)
+        - size(auth.input.header["x-api-key"]) >= 40
+
+        # Validate key contains only allowed characters
+        - auth.input.header["x-api-key"].matches("^pk_(live|test)_[A-Za-z0-9]{32,}$")
+
+      fail:
+        # Invalid format
+        - !auth.input.header["x-api-key"].startsWith("pk_")
+        - size(auth.input.header["x-api-key"]) < 40
+        - !auth.input.header["x-api-key"].matches("^pk_(live|test)_[A-Za-z0-9]{32,}$")
+
+    responses:
+      fail:
+        variables:
+          error_code: "INVALID_API_KEY_FORMAT"
+
+    cache:
+      passTTL: "0s"
+      failTTL: "1h"  # Cache format validation failures
+
+  # Rule 7: Introspect API key with backend
+  introspect-api-key:
+    description: "Call backend to validate API key metadata"
+
+    backendApi:
+      url: "https://keys.api.example.com/introspect"
+      method: POST
+      headers:
+        content-type: "application/json"
+      body: |
+        {
+          "key": "{{ index .auth.input.header \"x-api-key\" }}"
+        }
+      acceptedStatuses: [200]
+
+    conditions:
+      pass:
+        # Key is active
+        - has(backend.body.active) && backend.body.active == true
+
+        # Key environment matches prefix
+        - (auth.input.header["x-api-key"].startsWith("pk_live_") &&
+           backend.body.environment == "production") ||
+          (auth.input.header["x-api-key"].startsWith("pk_test_") &&
+           backend.body.environment == "test")
+
+        # Check scopes array
+        - has(backend.body.scopes) && size(backend.body.scopes) > 0
+        - backend.body.scopes.exists(s, s in ["read", "write", "admin"])
+
+      fail:
+        - backend.body.active == false
+        - backend.body.revoked == true
+        - size(backend.body.scopes) == 0
+
+      error:
+        - backend.status >= 500
+        - has(backend.body.error)
+
+    responses:
+      fail:
+        variables:
+          error_code: "API_KEY_INACTIVE"
+
+    cache:
+      passTTL: "15m"
+      failTTL: "5m"
+
+  # Rule 8: Session token with timestamp validation
+  validate-session-token:
+    description: "Validate session token and parse timestamps"
+    auth:
+      - match:
+          - type: bearer
+
+    backendApi:
+      url: "https://sessions.api.example.com/validate"
+      method: POST
+      headers:
+        content-type: "application/json"
+      body: |
+        {
+          "session_token": "{{ .auth.input.bearer.token }}"
+        }
+      acceptedStatuses: [200]
+
+    conditions:
+      pass:
+        # Session is active
+        - has(backend.body.active) && backend.body.active == true
+
+        # Check expiration timestamp exists
+        - has(backend.body.expires_at) && type(backend.body.expires_at) == int
+
+        # Session must not be expired (Unix timestamp comparison)
+        # Assuming expires_at is a Unix timestamp (seconds since epoch)
+        - backend.body.expires_at > 1735689600  # Example: after 2025-01-01
+
+        # Check issued timestamp
+        - has(backend.body.issued_at) && backend.body.issued_at < backend.body.expires_at
+
+        # Session duration should be reasonable (not more than 24 hours = 86400 seconds)
+        - backend.body.expires_at - backend.body.issued_at <= 86400
+
+      fail:
+        - backend.body.active == false
+        - backend.body.expires_at <= 1735689600
+        - backend.body.revoked == true
+
+    variables:
+      session_id: backend.body.session_id
+      user_id: backend.body.user_id
+      expires_at: backend.body.expires_at
+      issued_at: backend.body.issued_at
+
+    responses:
+      pass:
+        variables:
+          session_id: variables.session_id
+          user_id: variables.user_id
+
+    cache:
+      passTTL: "5m"
+      failTTL: "30s"
+
+  # Rule 9: Check session expiry with calculations
+  check-session-expiry:
+    description: "Verify session has sufficient time remaining"
+
+    conditions:
+      pass:
+        # Access session data from previous rule
+        - "validate-session-token" in variables.rule
+        - has(variables.rule["validate-session-token"].expires_at)
+
+        # Calculate time until expiry
+        # expires_at - current_timestamp > 300 (5 minutes)
+        # Note: In production, you'd use timestamp("now") or similar
+        # Here we use a hardcoded comparison for demonstration
+        - variables.rule["validate-session-token"].expires_at - 1735689600 > 300
+
+      fail:
+        # Session expires soon
+        - variables.rule["validate-session-token"].expires_at - 1735689600 <= 300
+
+    variables:
+      ttl_seconds: variables.rule["validate-session-token"].expires_at - 1735689600
+
+    responses:
+      pass:
+        variables:
+          ttl_seconds: variables.ttl_seconds
+      fail:
+        variables:
+          expired_at: variables.rule["validate-session-token"].expires_at
+
+    cache:
+      passTTL: "0s"
+
+# Best Practices Demonstrated:
+#
+# 1. Use has() for safe field access
+#    - Always check field existence before accessing nested structures
+#    - Example: has(backend.body.data) && backend.body.data.user.id
+#
+# 2. Use 'in' operator and lookup() for rule variables
+#    - Good: "rule-name" in variables.rule && lookup(variables.rule["rule-name"], "field")
+#    - Bad: lookup(lookup(variables.rule, "rule-name"), "field") (nested lookups)
+#
+# 3. Use array macros (exists, all) for filtering
+#    - backend.body.roles.exists(r, r == "admin")
+#    - backend.body.tags.all(t, t.startsWith("valid_"))
+#
+# 4. Type checking before operations
+#    - type(backend.body.count) == int
+#    - Ensure numeric operations on correct types
+#
+# 5. Short-circuit evaluation for safety
+#    - has(backend.body.data) && backend.body.data.count > 0
+#    - Left side prevents errors on right side
+#
+# 6. Specific error classification
+#    - Network: backend.status == 0
+#    - Server: backend.status >= 500
+#    - Client: backend.status >= 400 && backend.status < 500
+#
+# 7. Keep conditions readable
+#    - Separate complex conditions into multiple lines
+#    - Use meaningful variable names
+#    - Add comments for complex logic

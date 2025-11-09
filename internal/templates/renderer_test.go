@@ -8,30 +8,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRendererInlineEnvAllowlist(t *testing.T) {
+func TestRendererDeprecatedEnvFunctions(t *testing.T) {
 	dir := t.TempDir()
-	sandbox, err := NewSandbox(dir, true, []string{"ALLOWED", "EMPTY"})
+	sandbox, err := NewSandbox(dir)
 	require.NoError(t, err)
-	t.Setenv("ALLOWED", "visible")
-	t.Setenv("EMPTY", "")
-	t.Setenv("DENIED", "hidden")
+	t.Setenv("TEST_VAR", "value")
 
 	renderer := NewRenderer(sandbox)
 
 	tests := []struct {
-		name string
-		env  string
-		want string
+		name     string
+		template string
+		want     string
 	}{
-		{name: "allowed variable", env: "ALLOWED", want: "visible"},
-		{name: "empty variable", env: "EMPTY", want: ""},
-		{name: "denied variable", env: "DENIED", want: ""},
+		{name: "env returns empty string", template: "{{ env \"TEST_VAR\" }}", want: ""},
+		{name: "expandenv returns empty string", template: "{{ expandenv \"$TEST_VAR\" }}", want: ""},
 	}
 
 	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			tmpl, err := renderer.CompileInline("inline", "{{ env \""+tc.env+"\" }}")
+			tmpl, err := renderer.CompileInline("inline", tc.template)
 			require.NoError(t, err)
 			rendered, err := tmpl.Render(map[string]any{})
 			require.NoError(t, err)
@@ -46,7 +43,7 @@ func TestRendererCompileFileHonoursSandbox(t *testing.T) {
 	require.NoError(t, os.MkdirAll(allowedDir, 0o750))
 	allowedFile := filepath.Join(allowedDir, "body.txt")
 	require.NoError(t, os.WriteFile(allowedFile, []byte("hello {{ .name }}"), 0o600))
-	sandbox, err := NewSandbox(allowedDir, false, nil)
+	sandbox, err := NewSandbox(allowedDir)
 	require.NoError(t, err)
 	renderer := NewRenderer(sandbox)
 
@@ -106,7 +103,7 @@ func TestRendererStripsSprigFileHelpers(t *testing.T) {
 
 func TestRendererSandboxAccessorAndTemplateName(t *testing.T) {
 	dir := t.TempDir()
-	sandbox, err := NewSandbox(dir, false, nil)
+	sandbox, err := NewSandbox(dir)
 	require.NoError(t, err)
 	renderer := NewRenderer(sandbox)
 

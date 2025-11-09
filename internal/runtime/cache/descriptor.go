@@ -22,9 +22,19 @@ type BackendDescriptor struct {
 //
 // The hash is computed from a canonical representation:
 // - Headers are sorted by key for determinism
+// - Session-specific headers (correlation, tracing) are excluded from the hash
 // - Format: method|url|header1:value1|header2:value2|body
-func (d BackendDescriptor) Hash() string {
+//
+// Parameters:
+// - excludeHeaders: list of header names (case-insensitive) to exclude from hash
+func (d BackendDescriptor) Hash(excludeHeaders ...string) string {
 	h := fnv.New64a()
+
+	// Build exclusion map for O(1) lookup
+	exclude := make(map[string]bool, len(excludeHeaders))
+	for _, name := range excludeHeaders {
+		exclude[strings.ToLower(name)] = true
+	}
 
 	// Write method
 	_, _ = h.Write([]byte(d.Method))
@@ -34,10 +44,14 @@ func (d BackendDescriptor) Hash() string {
 	_, _ = h.Write([]byte(d.URL))
 	_, _ = h.Write([]byte("|"))
 
-	// Write headers in sorted order for determinism
+	// Write headers in sorted order for determinism, excluding session-specific headers
 	if len(d.Headers) > 0 {
 		keys := make([]string, 0, len(d.Headers))
 		for k := range d.Headers {
+			// Skip excluded headers (correlation, tracing, etc.)
+			if exclude[strings.ToLower(k)] {
+				continue
+			}
 			keys = append(keys, k)
 		}
 		sort.Strings(keys)

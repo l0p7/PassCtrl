@@ -95,7 +95,7 @@ func run(ctx context.Context, envPrefix, configPath string) error {
 
 	var templateSandbox *templates.Sandbox
 	if folder := strings.TrimSpace(cfg.Server.Templates.TemplatesFolder); folder != "" {
-		sandbox, err := templates.NewSandbox(folder, cfg.Server.Templates.TemplatesAllowEnv, cfg.Server.Templates.TemplatesAllowedEnv)
+		sandbox, err := templates.NewSandbox(folder)
 		if err != nil {
 			logger.Warn("template sandbox setup failed", slog.String("templates_folder", folder), slog.Any("error", err))
 		} else {
@@ -118,6 +118,8 @@ func run(ctx context.Context, envPrefix, configPath string) error {
 		TemplateSandbox:    templateSandbox,
 		CorrelationHeader:  cfg.Server.Logging.CorrelationHeader,
 		Metrics:            metricsRecorder,
+		LoadedEnvironment:  cfg.LoadedEnvironment,
+		LoadedSecrets:      cfg.LoadedSecrets,
 	})
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

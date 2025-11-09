@@ -20,9 +20,13 @@ server:
     rulesFile: ""                  # optional — static YAML file loaded once at startup when set
   templates:
     templatesFolder: "./templates" # optional — root directory for template lookups (jail)
-    templatesAllowEnv: false        # optional — gate environment variable access in templates
-    templatesAllowedEnv:
-      - "FORWARDAUTH_CLIENT_ID"    # optional — explicit allowlist of environment variables
+  variables:
+    environment:                   # optional — environment variables loaded at startup
+      timezone: TZ                 # explicit mapping: exposes as variables.environment.timezone
+      HOME: null                   # null-copy: exposes as variables.environment.HOME
+    secrets:                       # optional — Docker secrets from /run/secrets/ loaded at startup
+      db_password: null            # null-copy: reads /run/secrets/db_password
+      api_key: api_token           # reads /run/secrets/api_token, exposes as variables.secrets.api_key
 ```
 
 ### Notes
@@ -58,9 +62,15 @@ server:
   process to terminate with a non-zero exit code so container orchestrators notice the failure.
 - The `templates.templatesFolder` value establishes the root path for response and request templates. All template lookups are resolved
   relative to this directory, and path traversal outside the folder must be rejected to keep template rendering sandboxed.
-- `templates.templatesAllowEnv` toggles whether templates may read environment variables. When enabled, the runtime must restrict access to
-  the explicit allowlist declared in `templates.templatesAllowedEnv`; any variable not listed is denied. This guard prevents leaking
-  sensitive process state while still enabling controlled parameterization.
+- `variables.environment` configures environment variables loaded at startup and exposed as `variables.environment.*` in both CEL expressions
+  and templates. Uses null-copy semantics: `key: null` reads the environment variable named `key`, while `key: "ENV_VAR"` reads `ENV_VAR`
+  and exposes it as `variables.environment.key`. All referenced environment variables must exist at startup or the server will fail to start
+  with a configuration error. This fail-fast approach ensures required environment variables are present before accepting any traffic.
+- `variables.secrets` configures Docker secrets (or any file-based secrets) loaded from `/run/secrets/` at startup and exposed as
+  `variables.secrets.*` in both CEL expressions and templates. Uses null-copy semantics: `key: null` reads `/run/secrets/key`, while
+  `key: "filename"` reads `/run/secrets/filename` and exposes it as `variables.secrets.key`. Trailing newlines and carriage returns are
+  automatically trimmed (Docker adds these to secret files). All referenced secret files must exist and be readable at startup or the server
+  will fail to start. This fail-fast approach is ideal for Docker/Kubernetes deployments where secrets are mounted as files.
 - These server-level settings complement the endpoint and rule configuration described below. The runtime should load the full
   configuration via `koanf` so it can merge environment overrides, watch folders when supported, and provide consistent access to
   configuration values across packages. Configuration precedence follows Docker-friendly expectations: environment variables win
@@ -176,12 +186,12 @@ This ensures that different users never share cache entries, preventing cache po
       developmentMode: false           # optional — strip instead of reject on untrusted peers
     forwardRequestPolicy:              # required — curates what rules/backends may see
       forwardProxyHeaders: false       # optional — expose sanitized X-Forwarded-* downstream
-      headers:                         # optional — null-copy semantics: null = copy from raw, value = static/template
-        x-request-id: null             # copy from raw request (null-copy)
+      headers:                         # optional — null-copy semantics: null = copy from request, value = static/template
+        x-request-id: null             # copy from request (null-copy)
         x-custom-header: "static"      # static value
-        x-templated: "{{ .raw.headers.authorization }}"  # template value
-      query:                           # optional — null-copy semantics: null = copy from raw, value = static/template
-        page: null                     # copy from raw request (null-copy)
+        x-templated: "{{ .request.headers.authorization }}"  # template value
+      query:                           # optional — null-copy semantics: null = copy from request, value = static/template
+        page: null                     # copy from request (null-copy)
         limit: "100"                   # static value override
     rules:                             # required — ordered evaluation list
       - name: rule-a                   # required per entry — references `rules.rule-a`
@@ -229,7 +239,7 @@ forwardRequestPolicy:
   headers:
     x-request-id: null              # Copy from client request
     x-api-version: "v1"             # Static value
-    x-user-agent: "{{ .raw.headers.user-agent }}"  # Template
+    x-user-agent: "{{ .request.headers.user-agent }}"  # Template
   query:
     page: null                      # Copy from client request
     limit: "100"                    # Override with static value
@@ -258,7 +268,7 @@ responsePolicy:
 - **Empty values**: Empty template results are omitted from output (not sent as empty strings)
 - **Missing keys**: Null-copy of missing header/query param silently omitted (no error)
 - **Security**: Authorization headers in `backendApi.headers` are rejected at config validation — use `auth.forwardAs` instead
-- **Template context**: Access raw request via `.raw.headers` and `.raw.query` in templates
+- **Template context**: Access incoming request via `.request.headers` and `.request.query` in templates
 
 **Migration from allow/strip/custom**:
 - Old `allow: ["x-foo"]` → New `x-foo: null`
@@ -370,11 +380,19 @@ rules:
       followCacheControl: false        # optional — honor backend cache headers
       passTTL: 0s                      # optional — cache duration for pass outcomes
       failTTL: 0s                      # optional — cache duration for fail outcomes
+      includeProxyHeaders: true        # optional — include proxy headers in cache key (default: true)
 ```
 
 ### Notes
 - Rules referenced inside an endpoint's `rules` list must have corresponding entries under `rules:`.
 - Endpoint caches expire immediately when any contributing rule cache lapses; 5xx/error outcomes are never cached.
+- **Cache Key Proxy Headers** (`includeProxyHeaders`):
+  - When `true` (default): Proxy headers in backend requests are included in the cache key hash
+  - When `false`: Proxy headers are excluded from cache key computation
+  - **Security Warning**: Setting `includeProxyHeaders: false` can cause cache correctness issues if backends use client IP, geo-location, or proxy metadata for decision-making
+  - Excluded headers: `x-forwarded-for`, `x-real-ip`, `true-client-ip`, `cf-connecting-ip`, `forwarded`, and other proxy/CDN headers
+  - Use `includeProxyHeaders: false` **only** when certain backends don't rely on proxy headers for responses
+  - When in doubt, leave as `true` (default) to prevent data leakage or access control bypass
 - The `auth` block is an ordered array of **match groups**. Each match group contains:
   - `match`: Array of credential matchers that ALL must succeed (AND logic within group)
   - `forwardAs`: Array of credential outputs to emit (optional; omit for pass-through mode)

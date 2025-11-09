@@ -30,8 +30,7 @@ The `server` block sets deployment-wide behavior. These values load before any e
 | `server.rules.rulesFolder` | Directory watched for endpoint/rule documents. | New or updated rules change which headers/variables get forwarded upstream. | Reloads flush caches, so responses reflect the latest definitions. |
 | `server.rules.rulesFile` | Single configuration file (no hot reload). | Same as rulesFolder but static. | Same as rulesFolder. |
 | `server.templates.templatesFolder` | Root for template lookups. | Determines which template files can influence outbound backend requests. | Controls the templates used to render bodies and headers returned to callers. |
-| `server.templates.templatesAllowEnv` | Boolean gate for environment variable access inside templates. | Exposing env variables may inject secret material into upstream requests. | Template-rendered responses can include environment-driven content when enabled. |
-| `server.templates.templatesAllowedEnv` | Allowlist of environment variables accessible to templates. | Only listed keys can affect backend payloads or headers. | Only listed keys can appear in rendered responses. |
+| `server.variables.environment` | Environment variables loaded at startup and exposed as `variables.environment.*` in CEL and templates. Uses null-copy semantics. | Loaded environment variables can influence backend requests, CEL conditions, and variable exports. | Environment variables can appear in rendered responses when used in templates. |
 | `server.cache.backend` | Cache backend used for endpoint decisions (`memory` or `redis`). | Determines where cached decisions live; shared backends let replicas reuse results without repeating upstream calls. | Enables reuse of pass/fail metadata for callers. |
 | `server.cache.ttlSeconds` | Default TTL applied to cached endpoint results. | Longer TTL reduces upstream traffic when outcomes repeat. | Responses replay cached status, headers, and bodies until expiry. |
 | `server.cache.keySalt` | Optional salt appended to cache keys. | Prevents collisions between environments sharing a cache backend. | None. |
@@ -97,8 +96,8 @@ The forward request policy controls proxy header sanitization. Backend request h
 | `forwardProxyHeaders` | Boolean. When `true`, sanitizes and forwards `X-Forwarded-*` and RFC7239 `Forwarded` headers. | Preserves proxy metadata for upstream backend services. | None, unless response templates refer to forwarded headers. |
 
 **Backend Header/Query Configuration**: Rules define backend request headers and query parameters using **null-copy semantics**:
-- `nil` value — Copy from raw incoming request (e.g., `x-request-id: null`)
-- Non-nil value — Static string or Go template expression (e.g., `x-trace-id: "{{ .raw.headers.x-request-id }}"`)
+- `nil` value — Copy from incoming request (e.g., `x-request-id: null`)
+- Non-nil value — Static string or Go template expression (e.g., `x-trace-id: "{{ .request.headers.x-request-id }}"`)
 - **Missing keys**: Null-copy of missing header/query param is silently omitted (no error)
 - **Empty values**: Empty template results are omitted from output (not sent as empty strings)
 - **Authorization forbidden**: Authorization headers in `backendApi.headers` are rejected at config validation—use `auth.forwardAs` instead

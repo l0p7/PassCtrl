@@ -54,19 +54,14 @@ func NewRenderer(sandbox *Sandbox) *Renderer {
 	for name, fn := range funcs {
 		r.funcs[name] = fn
 	}
+	// env and expandenv are deprecated - environment variables are now available
+	// via .variables.environment in templates. These functions return empty strings
+	// to avoid breaking existing templates.
 	r.funcs["env"] = func(key string) string {
-		if r == nil || r.sandbox == nil {
-			return ""
-		}
-		env := r.sandbox.Environment()
-		return env[key]
+		return ""
 	}
 	r.funcs["expandenv"] = func(input string) string {
-		if r == nil || r.sandbox == nil {
-			return os.Expand(input, func(string) string { return "" })
-		}
-		env := r.sandbox.Environment()
-		return os.Expand(input, func(key string) string { return env[key] })
+		return os.Expand(input, func(string) string { return "" })
 	}
 	return r
 }

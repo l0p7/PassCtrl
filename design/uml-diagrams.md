@@ -33,7 +33,7 @@ flowchart TD
 ```mermaid
 flowchart LR
     A[Start Rule Chain] --> B[Initialize chainContext]
-    B -->|sets chainContext.variables.global from previous cache (if any)| C[Iterate rules by order]
+    B -->|sets chainContext.variables.endpoint from previous cache (if any)| C[Iterate rules by order]
     C --> D{Rule executes}
     D --> E[Capture rule outcome]
     E -->|append to chainContext.history| F{Pass?}

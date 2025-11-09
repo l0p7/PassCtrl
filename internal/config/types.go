@@ -24,15 +24,26 @@ type Config struct {
 	// loader intentionally disabled. Downstream agents can surface these in health
 	// checks without re-parsing raw files.
 	SkippedDefinitions []DefinitionSkip `koanf:"-"`
+
+	// LoadedEnvironment contains the environment variables loaded from server.variables.environment
+	// using null-copy semantics. This is populated at config load time and made available
+	// as variables.environment.* in CEL and templates.
+	LoadedEnvironment map[string]string `koanf:"-"`
+
+	// LoadedSecrets contains the secret file contents loaded from server.variables.secrets
+	// using null-copy semantics. Files are read from /run/secrets/ directory. This is populated
+	// at config load time and made available as variables.secrets.* in CEL and templates.
+	LoadedSecrets map[string]string `koanf:"-"`
 }
 
 // ServerConfig collects the bootstrap knobs owned by the Server Configuration & Lifecycle agent.
 type ServerConfig struct {
-	Listen    ListenConfig      `koanf:"listen"`
-	Logging   LoggingConfig     `koanf:"logging"`
-	Rules     RulesConfig       `koanf:"rules"`
-	Templates TemplatesConfig   `koanf:"templates"`
-	Cache     ServerCacheConfig `koanf:"cache"`
+	Listen    ListenConfig          `koanf:"listen"`
+	Logging   LoggingConfig         `koanf:"logging"`
+	Rules     RulesConfig           `koanf:"rules"`
+	Templates TemplatesConfig       `koanf:"templates"`
+	Cache     ServerCacheConfig     `koanf:"cache"`
+	Variables ServerVariablesConfig `koanf:"variables"`
 }
 
 // ListenConfig instructs the HTTP listener about bind address and port.
@@ -56,9 +67,22 @@ type RulesConfig struct {
 
 // TemplatesConfig captures the template sandbox root.
 type TemplatesConfig struct {
-	TemplatesFolder     string   `koanf:"templatesFolder"`
-	TemplatesAllowEnv   bool     `koanf:"templatesAllowEnv"`
-	TemplatesAllowedEnv []string `koanf:"templatesAllowedEnv"`
+	TemplatesFolder string `koanf:"templatesFolder"`
+}
+
+// ServerVariablesConfig controls server-level variables exposed to all endpoints and rules.
+type ServerVariablesConfig struct {
+	// Environment maps variable names to environment variable names using null-copy semantics:
+	// - key: null → read env var with exact name `key`
+	// - key: "ENV_VAR" → read env var `ENV_VAR`, expose as `variables.environment.key`
+	// Missing env vars cause startup errors.
+	Environment map[string]*string `koanf:"environment"`
+
+	// Secrets maps variable names to secret file names in /run/secrets/ using null-copy semantics:
+	// - key: null → read /run/secrets/key, expose as `variables.secrets.key`
+	// - key: "filename" → read /run/secrets/filename, expose as `variables.secrets.key`
+	// Missing secret files cause startup errors.
+	Secrets map[string]*string `koanf:"secrets"`
 }
 
 type ServerCacheConfig struct {
@@ -243,9 +267,10 @@ type RuleVariableSpec struct {
 }
 
 type RuleCacheConfig struct {
-	FollowCacheControl bool               `koanf:"followCacheControl"`
-	TTL                RuleCacheTTLConfig `koanf:"ttl"`
-	Strict             *bool              `koanf:"strict"` // nil = true (default)
+	FollowCacheControl  bool               `koanf:"followCacheControl"`
+	TTL                 RuleCacheTTLConfig `koanf:"ttl"`
+	Strict              *bool              `koanf:"strict"`              // nil = true (default)
+	IncludeProxyHeaders *bool              `koanf:"includeProxyHeaders"` // nil = true (safe default)
 }
 
 type RuleCacheTTLConfig struct {
@@ -594,8 +619,10 @@ func DefaultConfig() Config {
 				RulesFolder: "./rules",
 			},
 			Templates: TemplatesConfig{
-				TemplatesFolder:   "./templates",
-				TemplatesAllowEnv: false,
+				TemplatesFolder: "./templates",
+			},
+			Variables: ServerVariablesConfig{
+				Environment: make(map[string]*string),
 			},
 			Cache: ServerCacheConfig{
 				Backend:    "memory",

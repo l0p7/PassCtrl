@@ -21,9 +21,10 @@ type CacheTTLSpec struct {
 
 // CacheConfigSpec defines per-rule caching configuration.
 type CacheConfigSpec struct {
-	FollowCacheControl bool         // Parse backend Cache-Control header
-	TTL                CacheTTLSpec // TTLs per outcome
-	Strict             *bool        // Include upstream variables in cache key (default: true)
+	FollowCacheControl  bool         // Parse backend Cache-Control header
+	TTL                 CacheTTLSpec // TTLs per outcome
+	Strict              *bool        // Include upstream variables in cache key (default: true)
+	IncludeProxyHeaders *bool        // Include proxy headers in cache key (default: true)
 }
 
 // DefinitionSpec captures the declarative rule definition loaded from
