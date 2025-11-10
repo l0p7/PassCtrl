@@ -131,8 +131,8 @@ func (c *redisCache) DeletePrefix(ctx context.Context, prefix string) error {
 	// Use SCAN with MATCH to find keys with the given prefix
 	// SCAN is cursor-based and non-blocking, safe for production use
 	const (
-		batchSize = 100  // Number of keys to scan per iteration
-		delSize   = 50   // Number of keys to delete per DEL command
+		batchSize = 100 // Number of keys to scan per iteration
+		delSize   = 50  // Number of keys to delete per DEL command
 	)
 
 	pattern := prefix + "*"
