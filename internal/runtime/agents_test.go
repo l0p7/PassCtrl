@@ -271,7 +271,7 @@ func TestRuleChainAgentExecute(t *testing.T) {
 func TestRuleExecutionAgentExecute(t *testing.T) {
 	newAgent := func(client httpDoer) *ruleExecutionAgent {
 		backendAgent := newBackendInteractionAgent(client, nil)
-		return newRuleExecutionAgent(backendAgent, nil, nil, nil, 0, nil, "")
+		return newRuleExecutionAgent(backendAgent, nil, nil, nil, 0, 0, nil, "")
 	}
 
 	t.Run("skip on cache", func(t *testing.T) {
@@ -549,7 +549,7 @@ func TestRuleExecutionAgentExecute(t *testing.T) {
 		state.SetPlan(rulechain.ExecutionPlan{Rules: defs})
 
 		backendAgent := newBackendInteractionAgent(mockClient, nil)
-		res := newRuleExecutionAgent(backendAgent, nil, renderer, nil, 0, nil, "").Execute(context.Background(), nil, state)
+		res := newRuleExecutionAgent(backendAgent, nil, renderer, nil, 0, 0, nil, "").Execute(context.Background(), nil, state)
 		require.Equal(t, "pass", res.Status)
 		require.Equal(t, "pass", state.Rule.Outcome)
 		require.Len(t, state.Rule.History, 2)

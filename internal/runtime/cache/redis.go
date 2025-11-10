@@ -123,7 +123,73 @@ func (c *redisCache) Store(ctx context.Context, key string, entry Entry) error {
 	return nil
 }
 
-func (c *redisCache) DeletePrefix(context.Context, string) error {
+func (c *redisCache) DeletePrefix(ctx context.Context, prefix string) error {
+	if prefix == "" {
+		return nil
+	}
+
+	// Use SCAN with MATCH to find keys with the given prefix
+	// SCAN is cursor-based and non-blocking, safe for production use
+	const (
+		batchSize = 100 // Number of keys to scan per iteration
+		delSize   = 50  // Number of keys to delete per DEL command
+	)
+
+	pattern := prefix + "*"
+	cursor := uint64(0)
+	totalDeleted := 0
+
+	for {
+		// Check context cancellation
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		// SCAN returns cursor and matching keys
+		cmd := c.client.B().Scan().Cursor(cursor).Match(pattern).Count(int64(batchSize)).Build()
+		resp := c.client.Do(ctx, cmd)
+		if err := resp.Error(); err != nil {
+			return fmt.Errorf("cache: redis scan: %w", err)
+		}
+
+		// Parse scan response: [cursor, [key1, key2, ...]]
+		scanResult, err := resp.AsScanEntry()
+		if err != nil {
+			return fmt.Errorf("cache: redis scan parse: %w", err)
+		}
+
+		// Delete keys in batches using UNLINK (non-blocking) instead of DEL
+		// UNLINK is available in Redis 4.0+ and Valkey, performs async deletion
+		keys := scanResult.Elements
+		if len(keys) > 0 {
+			for i := 0; i < len(keys); i += delSize {
+				end := min(i+delSize, len(keys))
+				batch := keys[i:end]
+
+				// Use UNLINK for non-blocking deletion
+				unlinkCmd := c.client.B().Unlink().Key(batch...).Build()
+				if err := c.client.Do(ctx, unlinkCmd).Error(); err != nil {
+					// Fall back to DEL if UNLINK not supported
+					delCmd := c.client.B().Del().Key(batch...).Build()
+					if err := c.client.Do(ctx, delCmd).Error(); err != nil {
+						return fmt.Errorf("cache: redis delete keys: %w", err)
+					}
+				}
+				totalDeleted += len(batch)
+			}
+		}
+
+		// Update cursor for next iteration
+		cursor = scanResult.Cursor
+
+		// Cursor = 0 means scan is complete
+		if cursor == 0 {
+			break
+		}
+	}
+
 	return nil
 }
 

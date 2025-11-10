@@ -42,11 +42,20 @@ func (a *backendInteractionAgent) Execute(ctx context.Context, rendered rendered
 		return errors.New("backend interaction agent: http client missing")
 	}
 
+	// Build contextual logger with endpoint and correlation ID
+	logger := a.buildLogger(state)
+
 	pagination := backend.Pagination()
 	maxPages := pagination.MaxPages
 	if maxPages <= 0 {
 		maxPages = 1
 	}
+
+	logger.Debug("backend request initiated",
+		slog.String("method", rendered.Method),
+		slog.String("url", rendered.URL),
+		slog.Int("max_pages", maxPages),
+	)
 
 	nextURL := rendered.URL
 	visited := make(map[string]struct{})
@@ -112,6 +121,11 @@ func (a *backendInteractionAgent) Execute(ctx context.Context, rendered rendered
 
 		resp, err := a.client.Do(req)
 		if err != nil {
+			logger.Error("backend request failed",
+				slog.String("url", req.URL.String()),
+				slog.Int("page", page),
+				slog.Any("error", err),
+			)
 			return fmt.Errorf("backend request: %w", err)
 		}
 
@@ -121,6 +135,13 @@ func (a *backendInteractionAgent) Execute(ctx context.Context, rendered rendered
 			Headers:  captureResponseHeaders(resp.Header),
 			Accepted: backend.Accepts(resp.StatusCode),
 		}
+
+		logger.Debug("backend response received",
+			slog.String("url", req.URL.String()),
+			slog.Int("page", page),
+			slog.Int("status", resp.StatusCode),
+			slog.Bool("accepted", pageState.Accepted),
+		)
 
 		bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		closeErr := resp.Body.Close()
@@ -159,6 +180,16 @@ func (a *backendInteractionAgent) Execute(ctx context.Context, rendered rendered
 		if nextURL == "" {
 			break
 		}
+		logger.Debug("pagination continues",
+			slog.Int("page", page),
+			slog.String("next_url", nextURL),
+		)
+	}
+
+	if len(pages) > 1 {
+		logger.Debug("pagination completed",
+			slog.Int("total_pages", len(pages)),
+		)
 	}
 
 	if len(pages) == 0 {
@@ -228,4 +259,28 @@ func normalizeJSONNumbers(value any) any {
 	default:
 		return v
 	}
+}
+
+// buildLogger creates a contextual logger with endpoint and correlation ID from pipeline state.
+func (a *backendInteractionAgent) buildLogger(state *pipeline.State) *slog.Logger {
+	logger := a.logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+
+	logger = logger.With(
+		slog.String("component", "runtime"),
+		slog.String("agent", "backend_interaction"),
+	)
+
+	if state != nil {
+		if state.Endpoint != "" {
+			logger = logger.With(slog.String("endpoint", state.Endpoint))
+		}
+		if state.CorrelationID != "" {
+			logger = logger.With(slog.String("correlation_id", state.CorrelationID))
+		}
+	}
+
+	return logger
 }

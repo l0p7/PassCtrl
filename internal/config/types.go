@@ -42,6 +42,7 @@ type ServerConfig struct {
 	Logging   LoggingConfig         `koanf:"logging"`
 	Rules     RulesConfig           `koanf:"rules"`
 	Templates TemplatesConfig       `koanf:"templates"`
+	Backend   ServerBackendConfig   `koanf:"backend"`
 	Cache     ServerCacheConfig     `koanf:"cache"`
 	Variables ServerVariablesConfig `koanf:"variables"`
 }
@@ -68,6 +69,15 @@ type RulesConfig struct {
 // TemplatesConfig captures the template sandbox root.
 type TemplatesConfig struct {
 	TemplatesFolder string `koanf:"templatesFolder"`
+}
+
+// ServerBackendConfig controls backend HTTP client behavior for all rule backend API calls.
+type ServerBackendConfig struct {
+	// Timeout specifies the maximum duration for backend HTTP requests.
+	// Format: Go duration string (e.g., "10s", "30s", "1m").
+	// Default: "10s" (10 seconds) if not specified or invalid.
+	// Reasonable range: 1s to 60s for most use cases.
+	Timeout string `koanf:"timeout"`
 }
 
 // ServerVariablesConfig controls server-level variables exposed to all endpoints and rules.

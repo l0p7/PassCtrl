@@ -12,10 +12,10 @@ server:
     rulesFile: ""
   templates:
     templatesFolder: "./examples/suites/template-env-bundle/templates"
-    templatesAllowEnv: true
-    templatesAllowedEnv:
-      - "SUPPORT_EMAIL"
-      - "UPSTREAM_BASE_URL"
+  variables:
+    environment:
+      SUPPORT_EMAIL: null  # null-copy: read from environment variable SUPPORT_EMAIL
+      UPSTREAM_BASE_URL: null  # null-copy: read from environment variable UPSTREAM_BASE_URL
 
 endpoints:
   env-aware-gateway:
@@ -31,7 +31,7 @@ endpoints:
     forwardRequestPolicy:
       headers:
         x-request-id: null
-        x-upstream-base: "{{ env \"UPSTREAM_BASE_URL\" }}"
+        x-upstream-base: "{{ .variables.environment.UPSTREAM_BASE_URL }}"
     rules:
       - name: require-authenticated-admission
     responsePolicy:
@@ -47,7 +47,7 @@ endpoints:
         body: |
           {
             "error": "unexpected failure",
-            "support": "{{ env \"SUPPORT_EMAIL\" }}"
+            "support": "{{ .variables.environment.SUPPORT_EMAIL }}"
           }
     cache:
       resultTTL: "0s"
@@ -63,4 +63,4 @@ rules:
     responses:
       fail:
         variables:
-          support_contact: "{{ env \"SUPPORT_EMAIL\" }}"
+          support_contact: "{{ .variables.environment.SUPPORT_EMAIL }}"

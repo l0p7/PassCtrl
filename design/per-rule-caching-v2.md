@@ -2,7 +2,9 @@
 
 ## Overview
 
-PassCtrl implements per-rule caching where each rule with a `backendApi` can be cached independently with configurable TTLs based on outcome (pass/fail/error).
+PassCtrl implements **per-rule caching** (Tier 1 of the two-tier caching architecture) where each rule with a `backendApi` can be cached independently with configurable TTLs based on outcome (pass/fail/error).
+
+**Note**: This document describes **Tier 1: Per-Rule Caching**. PassCtrl also implements **Tier 2: Endpoint-Level Caching** which caches entire rule chain outcomes. See `system-agents.md` Section 9 for the complete two-tier caching architecture and rationale.
 
 ## Cache Key Structure
 

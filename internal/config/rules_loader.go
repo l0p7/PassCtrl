@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -227,12 +229,10 @@ func appendUnique(list []string, value string) []string {
 	if value == "" {
 		return list
 	}
-	for _, existing := range list {
-		if existing == value {
-			return list
-		}
+	if !slices.Contains(list, value) {
+		list = append(list, value)
 	}
-	return append(list, value)
+	return list
 }
 
 func buildRuleBundle(ctx context.Context, inlineEndpoints map[string]EndpointConfig, inlineRules map[string]RuleConfig, rulesCfg RulesConfig) (RuleBundle, error) {
@@ -399,20 +399,12 @@ func cloneEndpointMap(in map[string]EndpointConfig) map[string]EndpointConfig {
 	if len(in) == 0 {
 		return nil
 	}
-	out := make(map[string]EndpointConfig, len(in))
-	for k, v := range in {
-		out[k] = v
-	}
-	return out
+	return maps.Clone(in)
 }
 
 func cloneRuleMap(in map[string]RuleConfig) map[string]RuleConfig {
 	if len(in) == 0 {
 		return nil
 	}
-	out := make(map[string]RuleConfig, len(in))
-	for k, v := range in {
-		out[k] = v
-	}
-	return out
+	return maps.Clone(in)
 }

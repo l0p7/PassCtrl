@@ -1,0 +1,101 @@
+# Example demonstrating environment variable access via both CEL and Go templates
+#
+# This example shows:
+# 1. CEL access in conditions and variable expressions (no {{ }} delimiters)
+# 2. Go template access in headers and response bodies ({{ }} delimiters)
+#
+# Environment variables required:
+#   - ALLOWED_TIER (e.g., "premium", "enterprise")
+#   - API_BASE_URL (e.g., "https://api.example.com")
+#   - SUPPORT_EMAIL (e.g., "support@example.com")
+
+server:
+  listen:
+    address: "0.0.0.0"
+    port: 8080
+  logging:
+    level: debug
+    format: json
+  rules:
+    rulesFolder: ""
+    rulesFile: ""
+  variables:
+    environment:
+      # Null-copy semantics: read env vars with exact names
+      ALLOWED_TIER: null
+      API_BASE_URL: null
+      SUPPORT_EMAIL: null
+
+endpoints:
+  api-gateway:
+    description: "Demonstrates CEL and template access to environment variables"
+    authentication:
+      required: true
+      allow:
+        authorization: ["bearer"]
+    rules:
+      - name: check-tier-with-cel
+      - name: backend-call-with-templates
+    responsePolicy:
+      pass:
+        status: 200
+        headers:
+          # Go template access to exported variables
+          X-Tier: "{{ .response.user_tier }}"
+          X-Allowed-Tier: "{{ .response.allowed_tier }}"
+      fail:
+        status: 403
+        body: |
+          {
+            "error": "access denied",
+            "required_tier": "{{ .response.allowed_tier }}",
+            "support": "{{ .variables.environment.SUPPORT_EMAIL }}"
+          }
+
+rules:
+  check-tier-with-cel:
+    description: "Uses CEL to evaluate conditions with environment variables"
+    backendApi:
+      url: "https://users.internal/api/profile"
+      method: GET
+      acceptedStatuses: [200]
+    variables:
+      # CEL expression for local variable (no {{ }} delimiters)
+      # Accessing environment variable via CEL
+      allowed_tier: variables.environment.ALLOWED_TIER
+    conditions:
+      # CEL condition comparing backend response to environment variable
+      pass:
+        - backend.body.tier == variables.allowed_tier
+      fail:
+        - backend.body.tier != variables.allowed_tier
+    responses:
+      pass:
+        variables:
+          # CEL expression extracting backend data
+          user_tier: backend.body.tier
+          # CEL expression reading environment variable
+          allowed_tier: variables.environment.ALLOWED_TIER
+      fail:
+        variables:
+          # CEL for fail case
+          user_tier: backend.body.tier
+          allowed_tier: variables.environment.ALLOWED_TIER
+
+  backend-call-with-templates:
+    description: "Uses Go templates for headers with environment variables"
+    backendApi:
+      # Go template in URL (hybrid: CEL auto-detects no {{ }}, but this is template)
+      url: "{{ .variables.environment.API_BASE_URL }}/validate"
+      method: POST
+      headers:
+        # Go template access to environment variable
+        X-Api-Base: "{{ .variables.environment.API_BASE_URL }}"
+        X-Support-Contact: "{{ .variables.environment.SUPPORT_EMAIL }}"
+        Content-Type: "application/json"
+      body: |
+        {
+          "user_tier": "{{ index .rules "check-tier-with-cel" "user_tier" }}",
+          "required_tier": "{{ .variables.environment.ALLOWED_TIER }}"
+        }
+      acceptedStatuses: [200, 204]

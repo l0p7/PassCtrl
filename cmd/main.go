@@ -93,6 +93,21 @@ func run(ctx context.Context, envPrefix, configPath string) error {
 	decisionCache := buildCache(cacheLogger, cfg.Server.Cache)
 	cacheTTL := time.Duration(cfg.Server.Cache.TTLSeconds) * time.Second
 
+	// Parse backend timeout with fallback to default (10s)
+	backendTimeout := 10 * time.Second
+	if timeoutStr := strings.TrimSpace(cfg.Server.Backend.Timeout); timeoutStr != "" {
+		if parsed, err := time.ParseDuration(timeoutStr); err != nil {
+			logger.Warn("invalid server.backend.timeout, using default 10s",
+				slog.String("timeout", timeoutStr),
+				slog.Any("error", err))
+		} else if parsed > 0 {
+			backendTimeout = parsed
+		} else {
+			logger.Warn("server.backend.timeout must be positive, using default 10s",
+				slog.String("timeout", timeoutStr))
+		}
+	}
+
 	var templateSandbox *templates.Sandbox
 	if folder := strings.TrimSpace(cfg.Server.Templates.TemplatesFolder); folder != "" {
 		sandbox, err := templates.NewSandbox(folder)
@@ -111,6 +126,7 @@ func run(ctx context.Context, envPrefix, configPath string) error {
 		CacheTTL:           cacheTTL,
 		CacheEpoch:         cfg.Server.Cache.Epoch,
 		CacheKeySalt:       cfg.Server.Cache.KeySalt,
+		BackendTimeout:     backendTimeout,
 		Endpoints:          cfg.Endpoints,
 		Rules:              cfg.Rules,
 		RuleSources:        cfg.RuleSources,
